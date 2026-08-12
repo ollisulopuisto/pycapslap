@@ -47,7 +47,13 @@ export function ModelDownloader({
     checkModels()
 
     const unsubscribe = window.rust.onProgress((event: any) => {
-      if (event.event === 'progress') {
+      // Only react to model-download progress. The progress channel is shared
+      // with transcription/export jobs — those must not move our progress bar.
+      if (
+        event.event === 'progress' &&
+        typeof event.status === 'string' &&
+        event.status.toLowerCase().includes('download')
+      ) {
         setProgress(Math.round(event.progress * 100))
       }
     })

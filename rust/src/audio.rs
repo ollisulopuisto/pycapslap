@@ -48,7 +48,10 @@ pub async fn extract_audio(
         &target_codec
     };
 
-    let mut cmd = TokioCommand::new("ffmpeg");
+    let ffmpeg_path = crate::whisper::find_ffmpeg_binary()
+        .await
+        .map_err(|e| anyhow::anyhow!("FFmpeg not found: {}", e))?;
+    let mut cmd = TokioCommand::new(ffmpeg_path);
     cmd.kill_on_drop(true);
     cmd.arg("-y")
         .arg("-i")

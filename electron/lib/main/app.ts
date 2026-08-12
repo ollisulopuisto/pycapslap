@@ -1,6 +1,7 @@
 import { BrowserWindow, shell, app, protocol, net, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import * as fs from 'node:fs'
+import { Readable } from 'node:stream'
 import { registerWindowIPC } from '@/lib/window/ipcEvents'
 import appIcon from '@/resources/build/icon.png?asset'
 import { pathToFileURL } from 'url'
@@ -44,10 +45,11 @@ export function createAppWindow(): void {
     },
   })
 
-  // Register IPC events only once
+  // Register IPC events only once (handlers resolve the live window from the
+  // event sender, so they keep working even if macOS recreates the window).
   if (!ipcRegistered) {
     registerWindowIPC(mainWindow)
-    registerRustIPC(mainWindow)
+    registerRustIPC()
     ipcRegistered = true
   }
 
@@ -80,8 +82,8 @@ function registerResourcesProtocol() {
         let filePath: string | null = null
 
         if (relativePath.startsWith('local/')) {
-          // Handle absolute path
-          filePath = relativePath.replace('local', '')
+          // Absolute local path: res://local/<absolute path>
+          filePath = relativePath.slice('local/'.length)
           // Decode generic URL encoding if needed (spaces etc)
           filePath = decodeURIComponent(filePath)
           console.log('Loading local file:', filePath)
@@ -106,14 +108,15 @@ function registerResourcesProtocol() {
           return new Response('Resource not found', { status: 404 })
         }
 
-        const response = await net.fetch(pathToFileURL(filePath).toString())
-
         // Check for video extensions to serve with correct content type
+        // and real byte-range support so large files stream instead of being
+        // loaded fully into memory on every request.
         const ext = relativePath.split('.').pop()?.toLowerCase()
         const videoExtensions = ['mp4', 'mov', 'mkv', 'avi', 'webm', 'wmv', 'flv', 'mpeg', 'mpg', 'm4v', '3gp', 'ts']
 
         if (ext && videoExtensions.includes(ext)) {
-          const buffer = await response.arrayBuffer()
+          const stat = fs.statSync(filePath)
+          const size = stat.size
 
           let contentType = 'video/mp4' // Default fallback
           switch (ext) {
@@ -145,17 +148,47 @@ function registerResourcesProtocol() {
             // mp4, m4v stay as video/mp4
           }
 
-          return new Response(buffer, {
+          const baseHeaders: Record<string, string> = {
+            'Content-Type': contentType,
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+          }
+
+          // Honor byte ranges (used by <video> elements for seeking).
+          const rangeHeader = request.headers.get('range')
+          if (rangeHeader) {
+            const match = /bytes=(\d*)-(\d*)/.exec(rangeHeader)
+            if (match && (match[1] || match[2])) {
+              const start = match[1] ? parseInt(match[1], 10) : 0
+              const end = match[2] ? Math.min(parseInt(match[2], 10), size - 1) : size - 1
+
+              if (start <= end && start < size) {
+                const stream = fs.createReadStream(filePath, { start, end })
+                return new Response(Readable.toWeb(stream) as ReadableStream, {
+                  status: 206,
+                  headers: {
+                    ...baseHeaders,
+                    'Content-Length': String(end - start + 1),
+                    'Content-Range': `bytes ${start}-${end}/${size}`,
+                  },
+                })
+              }
+            }
+          }
+
+          // No (or invalid) range header: stream the whole file without
+          // buffering it in memory.
+          const stream = fs.createReadStream(filePath)
+          return new Response(Readable.toWeb(stream) as ReadableStream, {
             status: 200,
             headers: {
-              'Content-Type': contentType,
-              'Content-Length': buffer.byteLength.toString(),
-              'Accept-Ranges': 'bytes',
-              'Access-Control-Allow-Origin': '*',
+              ...baseHeaders,
+              'Content-Length': String(size),
             },
           })
         }
 
+        const response = await net.fetch(pathToFileURL(filePath).toString())
         return response
       } catch (error) {
         console.error('Protocol error:', error)
@@ -165,12 +198,16 @@ function registerResourcesProtocol() {
   }
 }
 
-function registerRustIPC(mainWindow: BrowserWindow) {
-  ipcMain.handle('dialog:openFiles', async (_evt, payload) => {
+function registerRustIPC() {
+  ipcMain.handle('dialog:openFiles', async (evt, payload) => {
     console.log('[MAIN] File dialog requested:', payload)
+    const win = BrowserWindow.fromWebContents(evt.sender)
     const props: any[] = ['openFile', 'multiSelections']
     const filters = payload?.filters ?? undefined
-    const res = await dialog.showOpenDialog(mainWindow, { properties: props, filters })
+    const options = { properties: props, filters }
+    const res = win && !win.isDestroyed()
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
     if (res.canceled || res.filePaths.length === 0) {
       console.log('[MAIN] File dialog cancelled')
       return null
@@ -179,19 +216,23 @@ function registerRustIPC(mainWindow: BrowserWindow) {
     return res.filePaths
   })
 
-  ipcMain.handle('core:call', async (_evt, payload) => {
+  ipcMain.handle('core:call', async (evt, payload) => {
     console.log('[MAIN] Core call:', payload.method, payload.params, payload.requestId)
     if (!core) {
       console.error('[MAIN] Core sidecar not initialized')
       throw new Error('Core sidecar not initialized')
     }
+    const win = BrowserWindow.fromWebContents(evt.sender)
     // Pass requestId if present
     return core.call(
       payload.method,
       payload.params,
       (p) => {
         console.log('[MAIN] Core progress:', p)
-        mainWindow.webContents.send('core:progress', p)
+        // Only forward progress to a live window (window may be recreated on macOS)
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('core:progress', p)
+        }
       },
       payload.requestId
     )

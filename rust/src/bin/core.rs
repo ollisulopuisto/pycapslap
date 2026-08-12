@@ -185,7 +185,7 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             match serde_json::from_value::<core::types::GenerateCaptionsParams>(r.params) {
                 Ok(p) => {
                     tokio::select! {
-                        res = captions::extract_and_transcribe(
+                        res = captions::extract_and_transcribe_with_server(
                             &id,
                             &p.input_video,
                             p.split_by_words,
@@ -193,6 +193,7 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             p.language,
                             p.api_key,
                             p.prompt,
+                            p.whisper_base_url,
                             &mut emit
                         ) => {
                             match res {

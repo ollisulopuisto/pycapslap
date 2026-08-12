@@ -151,6 +151,8 @@ interface Settings {
   outputSize?: string
   cropStrategy?: string
   fontSize: number
+  /** Optional base URL of an OpenAI-compatible Whisper server (e.g. whisper.cpp server on the local network) */
+  whisperServerUrl: string
 }
 
 const defaultSettings: Settings = {
@@ -168,6 +170,7 @@ const defaultSettings: Settings = {
   outputSize: 'original',
   cropStrategy: 'fit',
   fontSize: 65,
+  whisperServerUrl: '',
 }
 
 const templates: Template[] = [
@@ -440,17 +443,24 @@ function SettingsModal({
   isOpen,
   onOpenChange,
   apiKey,
+  whisperServerUrl,
 }: {
-  onSave: (apiKey: string) => void
+  onSave: (apiKey: string, whisperServerUrl: string) => void
   isOpen: boolean
   onOpenChange: (open: boolean) => void
   apiKey: string
+  whisperServerUrl: string
 }) {
   const [apiKeyState, setApiKeyState] = useState(apiKey)
+  const [whisperServerUrlState, setWhisperServerUrlState] = useState(whisperServerUrl)
 
   useEffect(() => {
     setApiKeyState(apiKey)
   }, [apiKey])
+
+  useEffect(() => {
+    setWhisperServerUrlState(whisperServerUrl)
+  }, [whisperServerUrl])
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -489,6 +499,23 @@ function SettingsModal({
               onChange={(e) => setApiKeyState(e.target.value)}
             />
           </div>
+
+          <div className="grid gap-2">
+            <label htmlFor="whisper-server" className="text-sm text-white/40 font-medium">
+              Whisper Server URL
+            </label>
+            <Input
+              id="whisper-server"
+              placeholder="http://192.168.1.50:8000"
+              className="w-full px-4 py-3 border border-border rounded-lg bg-background/50 focus:outline-none hover:border-primary/50 focus:border-primary/70 ring-0 focus-visible:ring-2 focus-visible:ring-primary/20 focus:ring-2 focus:ring-primary/20 text-foreground transition-all duration-200"
+              value={whisperServerUrlState}
+              onChange={(e) => setWhisperServerUrlState(e.target.value)}
+            />
+            <p className="text-xs text-white/30 leading-relaxed">
+              Optional. Point CapSlap at a whisper.cpp server (or any OpenAI-compatible Whisper API)
+              running on another machine, e.g. your Mac Studio: <code className="text-white/50">./server -m ggml-base.bin --port 8000</code>. When set, transcription runs on that machine instead of locally.
+            </p>
+          </div>
         </div>
 
         <DialogFooter className="gap-4">
@@ -500,7 +527,7 @@ function SettingsModal({
           <DialogClose asChild>
             <Button
               onClick={() => {
-                onSave(apiKeyState)
+                onSave(apiKeyState, whisperServerUrlState.trim())
                 onOpenChange(false)
               }}
               className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
@@ -590,52 +617,58 @@ export default function App() {
 
     console.log('Generating previews for timestamp:', timestampMs)
 
-    // Generate preview for each template
-    const newPreviewFrames: Record<string, string> = {}
+    // Generate preview for each template in parallel — sequential runs mean
+    // every settings tweak costs 4 back-to-back ffmpeg jobs.
+    const entries = await Promise.all(
+      templates.map(async (template) => {
+        try {
+          // If this is the currently selected template, use the current settings (overrides)
+          // Otherwise, use the template's defaults
+          const isSelected = template.id === videoSettings.selectedTemplate
+          const position = isSelected ? videoSettings.captionPosition : template.position
+          const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
 
-    // Process sequentially to avoid overwhelming the backend/FFmpeg
-    for (const template of templates) {
-      try {
-        console.log(`Generating preview for template: ${template.id}`)
+          const result = (await (window as any).rust.call('generatePreviewFrame', {
+            inputVideo: videoPath,
+            timestampMs: timestampMs,
+            segments: [firstSegment], // Only pass the first segment for speed
+            targetWidth: 1920, // Preview width
+            // Rust struct expects camelCase
+            fontName: getFontName(videoSettings.selectedFont),
+            textColor: videoSettings.textColor,
+            highlightWordColor: videoSettings.highlightWordColor,
+            outlineColor: videoSettings.outlineColor,
+            fontSize: videoSettings.fontSize,
+            position: position,
+            karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
+            multiline: captionStyle === 'karaoke-multiline',
+            glowEffect: videoSettings.glowEffect,
+            exportFormat:
+              videoSettings.exportFormats && videoSettings.exportFormats.length > 0
+                ? videoSettings.exportFormats[0]
+                : '9:16',
+            outputSize: '1080p',
+            cropStrategy: videoSettings.cropStrategy,
+            fitMode: 'cover', // Added missing param if needed, defaults to cover
+          })) as { imageData: string }
 
-        // If this is the currently selected template, use the current settings (overrides)
-        // Otherwise, use the template's defaults
-        const isSelected = template.id === videoSettings.selectedTemplate
-        const position = isSelected ? videoSettings.captionPosition : template.position
-        const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
-
-        const result = (await (window as any).rust.call('generatePreviewFrame', {
-          inputVideo: videoPath,
-          timestampMs: timestampMs,
-          segments: [firstSegment], // Only pass the first segment for speed
-          targetWidth: 1920, // Preview width
-          // Rust struct expects camelCase
-          fontName: getFontName(videoSettings.selectedFont),
-          textColor: videoSettings.textColor,
-          highlightWordColor: videoSettings.highlightWordColor,
-          outlineColor: videoSettings.outlineColor,
-          fontSize: videoSettings.fontSize,
-          position: position,
-          karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
-          multiline: captionStyle === 'karaoke-multiline',
-          glowEffect: videoSettings.glowEffect,
-          exportFormat:
-            videoSettings.exportFormats && videoSettings.exportFormats.length > 0
-              ? videoSettings.exportFormats[0]
-              : '9:16',
-          outputSize: '1080p',
-          cropStrategy: videoSettings.cropStrategy,
-          fitMode: 'cover', // Added missing param if needed, defaults to cover
-        })) as { imageData: string }
-
-        if (result.imageData) {
-          newPreviewFrames[template.id] = result.imageData
+          if (result && result.imageData) {
+            return { id: template.id, imageData: result.imageData }
+          }
+          return { id: template.id, imageData: null }
+        } catch (e) {
+          console.error(`Failed to generate preview for ${template.id}`, e)
+          return { id: template.id, imageData: null }
         }
-      } catch (e) {
-        console.error(`Failed to generate preview for ${template.id}`, e)
+      })
+    )
+
+    const newPreviewFrames: Record<string, string> = {}
+    for (const entry of entries) {
+      if (entry.imageData) {
+        newPreviewFrames[entry.id] = entry.imageData
       }
     }
-
     setPreviewFrames(newPreviewFrames)
   }
 
@@ -648,6 +681,7 @@ export default function App() {
 
       return () => clearTimeout(timer)
     }
+    return undefined
   }, [
     editorSegments,
     editorVideoPath,
@@ -765,13 +799,21 @@ export default function App() {
     }))
   }
 
-  const handleSaveApiKey = (apiKey: string) => {
-    setApiKey(apiKey.trim())
-    localStorage.setItem('api-key-v1', apiKey.trim())
+  const handleSaveApiKey = (newKey: string, whisperServerUrl: string) => {
+    const key = newKey.trim()
+    setApiKey(key)
+    localStorage.setItem('api-key-v1', key)
 
+    if (whisperServerUrl !== videoSettings.whisperServerUrl) {
+      updateSettings({ whisperServerUrl })
+    }
+
+    // If generation was queued behind the API-key prompt, resume it with the
+    // freshly saved values. We pass them explicitly because React state from
+    // setApiKey isn't visible inside handleGenerate's current closure.
     if (shouldGenerateAfterApiKey) {
       setShouldGenerateAfterApiKey(false)
-      handleGenerate()
+      handleGenerate(key, whisperServerUrl.trim() || videoSettings.whisperServerUrl.trim())
     }
   }
 
@@ -844,7 +886,7 @@ export default function App() {
     }
   }
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (apiKeyOverride?: string, whisperServerUrlOverride?: string) => {
     if (!selectedVideos.length) {
       toast.error('Please select a video first')
       return
@@ -853,6 +895,9 @@ export default function App() {
     // Prepare ID and paths early for checking/loading
     const requestId = crypto.randomUUID()
     const video = selectedVideos[0]
+
+    const activeApiKey = (apiKeyOverride ?? apiKey).trim() || ''
+    const activeWhisperServerUrl = (whisperServerUrlOverride ?? videoSettings.whisperServerUrl).trim() || ''
 
     try {
       // Check for existing captions
@@ -874,7 +919,9 @@ export default function App() {
       // Continue to generation if load fails
     }
 
-    if (!apiKey && videoSettings.selectedModel === 'whisper-1') {
+    // A remote Whisper server doesn't need an OpenAI API key, so only prompt
+    // for the key when using the OpenAI model with no server configured.
+    if (!activeApiKey && videoSettings.selectedModel === 'whisper-1' && !activeWhisperServerUrl) {
       setShouldGenerateAfterApiKey(true)
       setIsApiKeySettingsOpen(true)
       return
@@ -914,7 +961,8 @@ export default function App() {
           position: videoSettings.captionPosition,
           outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
-          apiKey: apiKey,
+          apiKey: activeApiKey,
+          whisperBaseUrl: activeWhisperServerUrl || undefined,
           fontSize: videoSettings.fontSize,
         },
         requestId
@@ -1063,6 +1111,7 @@ export default function App() {
                 isOpen={isApiKeySettingsOpen}
                 onOpenChange={setIsApiKeySettingsOpen}
                 apiKey={apiKey}
+                whisperServerUrl={videoSettings.whisperServerUrl}
               />
             </div>
             <p className="text-sm text-muted-foreground truncate">Lightning-fast AI captions</p>
@@ -1558,7 +1607,7 @@ export default function App() {
 
               <div className="flex items-center justify-center w-full py-6 border-t border-border/50 absolute bottom-0 bg-background/80 backdrop-blur-xs z-10 px-8">
                 <Button
-                  onClick={handleGenerate}
+                  onClick={() => handleGenerate()}
                   disabled={!selectedVideos.length || !videoSettings.exportFormats?.length || isGenerating}
                   size="lg"
                   className="max-w-2xl w-full py-4 text-lg font-medium bg-primary text-primary-foreground disabled:opacity-50 disabled:scale-100 transition-all duration-300"

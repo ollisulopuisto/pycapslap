@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import { useState } from 'react'
 import { Button } from '@/app/components/ui/button'
 import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
@@ -56,20 +56,13 @@ interface CaptionEditorProps {
   isBurnedPreview?: boolean
 }
 
-interface PreviewCue {
-  startMs: number
-  endMs: number
-  lines: { words: { text: string; isHighlighted: boolean }[] }[]
-  yPct: number
-}
-
 export function CaptionEditor({
   initialSegments,
   onBurn,
   onCancel,
   onRefreshPreview,
-  videoPath, // Kept to satisfy props, but unused? Actually used in videoUrl but videoUrl is unused.
-  settings,
+  videoPath: _videoPath, // Kept to satisfy props
+  settings: _settings,
   previewFrame,
 }: CaptionEditorProps) {
   const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
@@ -77,7 +70,6 @@ export function CaptionEditor({
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const activeSegmentRef = useRef<HTMLDivElement>(null)
 
   const handleRefresh = async () => {
     if (onRefreshPreview) {

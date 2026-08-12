@@ -80,6 +80,7 @@ export class Sidecar {
         console.error('[SIDECAR] Process error:', err)
         console.error('[SIDECAR] Binary path was:', binPath)
         console.error('[SIDECAR] Possible paths tried:', possiblePaths)
+        this.failAllPending(new Error(`Core sidecar process error: ${err.message}`))
       })
     } catch (err) {
       console.error('[SIDECAR] Failed to spawn process:', err)
@@ -90,6 +91,10 @@ export class Sidecar {
 
     this.proc.on('exit', (code, signal) => {
       console.log('[SIDECAR] Process exited with code:', code, 'signal:', signal)
+      // Reject all in-flight requests so the renderer never hangs on a dead sidecar.
+      this.failAllPending(
+        new Error(`Core sidecar process exited unexpectedly (code: ${code}, signal: ${signal})`)
+      )
     })
 
     this.rl.on('line', (line) => {
@@ -178,29 +183,37 @@ export class Sidecar {
     return error
   }
 
-  private async writeWithLock(data: string): Promise<void> {
-    // Chain this write after the previous one completes
-    this.writeLock = this.writeLock
-      .then(async () => {
-        return new Promise<void>((resolve, reject) => {
-          if (!this.proc || !this.proc.stdin) {
-            reject(new Error('Sidecar process not available'))
-            return
-          }
+  private failAllPending(error: Error) {
+    for (const [id, p] of this.pending) {
+      console.error('[SIDECAR] Rejecting pending request:', id, error.message)
+      p.reject(error)
+      this.pending.delete(id)
+    }
+  }
 
-          console.log('[SIDECAR] Writing to process:', data.trim())
-          this.proc.stdin.write(data, 'utf8', (err) => {
-            if (err) {
-              console.error('[SIDECAR] Write error:', err)
-              reject(err)
-            } else {
-              console.log('[SIDECAR] Write successful')
-              // Small delay to ensure the write is fully flushed before next write
-              setTimeout(resolve, 5)
+  private async writeWithLock(data: string): Promise<void> {
+    // Chain this write after the previous one completes to keep the RPC
+    // stream ordered.
+    this.writeLock = this.writeLock
+      .then(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            if (!this.proc || !this.proc.stdin) {
+              reject(new Error('Sidecar process not available'))
+              return
             }
+
+            console.log('[SIDECAR] Writing to process:', data.trim())
+            this.proc.stdin.write(data, 'utf8', (err) => {
+              if (err) {
+                console.error('[SIDECAR] Write error:', err)
+                reject(err)
+              } else {
+                resolve()
+              }
+            })
           })
-        })
-      })
+      )
       .catch((err) => {
         console.error('[SIDECAR] Write lock chain error:', err)
         throw err

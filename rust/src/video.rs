@@ -7,16 +7,23 @@ use tokio::process::Command as TokioCommand;
 
 /// Get FFmpeg binary path synchronously (for use in sync functions)
 pub fn get_ffmpeg_path_sync() -> String {
+    // Helper that respects architecture on macOS: if a candidate exists but
+    // can't run on this machine (e.g. x86_64 binary on arm64 without Rosetta),
+    // skip it and try the next candidate.
+    fn usable(path: &std::path::Path) -> bool {
+        path.exists() && crate::whisper::binary_runnable(path)
+    }
+
     // Try to use cached path or default to "ffmpeg"
     // In sync context, we can't use the full async detection
     if let Ok(ffmpeg_path) = std::env::var("FFMPEG_PATH") {
         eprintln!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
         let path = std::path::Path::new(&ffmpeg_path);
-        if path.exists() {
+        if usable(path) {
             return ffmpeg_path;
         } else {
             eprintln!(
-                "DEBUG: FFMPEG_PATH points to non-existent file, falling back to auto-detection"
+                "DEBUG: FFMPEG_PATH points to non-existent or unrunnable file, falling back to auto-detection"
             );
         }
     }
@@ -31,7 +38,7 @@ pub fn get_ffmpeg_path_sync() -> String {
         "ffmpeg"
     });
 
-    if bundled_rust.exists() {
+    if usable(&bundled_rust) {
         eprintln!(
             "DEBUG: Found bundled ffmpeg at rust/bin: {:?}",
             bundled_rust
@@ -47,7 +54,7 @@ pub fn get_ffmpeg_path_sync() -> String {
             } else {
                 "bin/ffmpeg"
             });
-            if bundled.exists() {
+            if usable(&bundled) {
                 eprintln!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
                 return bundled.to_string_lossy().to_string();
             }
@@ -63,7 +70,14 @@ pub fn get_ffmpeg_path_sync() -> String {
     ];
 
     for path in paths {
-        if std::path::Path::new(path).exists() || which::which(path).is_ok() {
+        if let Ok(which_path) = which::which(path) {
+            if usable(&which_path) {
+                eprintln!("DEBUG: Found ffmpeg at {}", which_path.display());
+                return which_path.to_string_lossy().to_string();
+            }
+        }
+        let p = std::path::Path::new(path);
+        if p.is_file() && usable(p) {
             eprintln!("DEBUG: Found ffmpeg at {}", path);
             return path.to_string();
         }

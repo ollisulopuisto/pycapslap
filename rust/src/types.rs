@@ -29,6 +29,8 @@ pub struct TranscribeSegmentsParams {
     pub api_key: Option<String>,    // OpenAI API key
     pub prompt: Option<String>,     // Context prompt to improve accuracy
     pub video_file: Option<String>, // Original video file path (for JSON output location)
+    #[serde(default)]
+    pub whisper_base_url: Option<String>, // Optional OpenAI-compatible Whisper server base URL (e.g. a whisper.cpp server on another machine)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -133,6 +135,8 @@ pub struct GenerateCaptionsParams {
     pub output_size: Option<String>, // Target output size (e.g., "1080p", "original")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crop_strategy: Option<String>, // "start", "center", "end", "fit" (letterbox)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub whisper_base_url: Option<String>, // Optional OpenAI-compatible Whisper server base URL
 }
 
 #[derive(Serialize, Deserialize, Debug)]

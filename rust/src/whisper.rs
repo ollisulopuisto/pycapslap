@@ -6,7 +6,7 @@ use crate::types::{
 use crate::video::{is_ffmpeg_whisper_available, is_whisper_cpp_available};
 use blake3;
 use regex::Regex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command as TokioCommand;
@@ -76,12 +76,16 @@ pub async fn transcribe_with_whisper_cpp(
         }
     };
     let mut cmd = TokioCommand::new(&whisper_binary);
+    // Make sure we don't leak orphaned whisper.cpp processes if the
+    // transcription request gets cancelled mid-run.
+    cmd.kill_on_drop(true);
     // DTW disabled - causes timestamp issues for some audio files
 
     cmd.arg("-m")
         .arg(&model_path)
         .arg("--output-json-full") // Full JSON output
-        .arg("--no-prints") // Suppress progress output
+        // NOTE: no --no-prints — we rely on whisper.cpp's stderr "progress = N%"
+        // lines to report transcription progress back to the UI.
         .arg("--word-thold")
         .arg("0.01") // Better word boundary detection
         .arg("--max-len")
@@ -99,10 +103,53 @@ pub async fn transcribe_with_whisper_cpp(
 
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let output = cmd.output().await?;
+    let mut child = cmd.spawn()?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Collect stdout on a background task (whisper.cpp writes the transcript
+    // there, which can exceed the pipe buffer for long files) while we read
+    // stderr for progress.
+    let stdout_stream = child.stdout.take();
+    let stdout_task = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        if let Some(mut stream) = stdout_stream {
+            let mut buf = Vec::new();
+            let _ = stream.read_to_end(&mut buf).await;
+            return String::from_utf8_lossy(&buf).into_owned();
+        }
+        String::new()
+    });
+
+    // Stream whisper.cpp's stderr so we can report real transcription
+    // progress instead of leaving the UI at 0% for minutes.
+    let mut stderr_all = String::new();
+    if let Some(stderr) = child.stderr.take() {
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            // whisper.cpp prints lines like:
+            //   whisper_print_progress_callback: progress = 42%
+            if let Some(idx) = line.find("progress = ") {
+                let rest = &line[idx + "progress = ".len()..];
+                if let Some(pct_part) = rest.split('%').next() {
+                    if let Ok(pct) = pct_part.trim().trim_start_matches('=').trim().parse::<f32>()
+                    {
+                        emit(RpcEvent::Progress {
+                            id: id.into(),
+                            status: format!("Transcribing... {:.0}%", pct),
+                            progress: (pct / 100.0).min(0.95),
+                        });
+                    }
+                }
+            }
+            stderr_all.push_str(&line);
+            stderr_all.push('\n');
+        }
+    }
+
+    let status = child.wait().await?;
+    let stdout = stdout_task.await.unwrap_or_default();
+
+    let stderr = stderr_all.clone();
     emit(RpcEvent::Log {
         id: id.into(),
         message: format!(
@@ -118,11 +165,11 @@ pub async fn transcribe_with_whisper_cpp(
         ),
     });
 
-    if !output.status.success() {
+    if !status.success() {
         return Err(anyhow::anyhow!(
             "whisper.cpp failed with status {}: {}",
-            output.status,
-            stderr
+            status,
+            stderr.chars().take(2000).collect::<String>()
         ));
     }
 
@@ -174,7 +221,7 @@ pub async fn transcribe_with_whisper_cpp(
         id: id.into(),
         message: format!(
             "whisper.cpp JSON preview: {}",
-            &json_content.chars().take(1000).collect::<String>()
+            json_content.chars().take(1000).collect::<String>()
         ),
     });
 
@@ -262,6 +309,62 @@ async fn ensure_whisper_model(model: &str) -> anyhow::Result<(String, String)> {
     ))
 }
 
+/// Returns true if an executable at `path` can run on the current machine.
+///
+/// On macOS this rejects Mach-O binaries built for the other CPU
+/// architecture — e.g. an x86_64 ffmpeg bundled into the app on an arm64 Mac
+/// that does not have Rosetta. This makes the binary search fall through to a
+/// runnable build (system ffmpeg, correct-arch bundle, etc.) instead of
+/// failing with "Bad CPU type in executable".
+pub fn binary_runnable(path: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Read;
+
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+
+        // Mach-O header prefix: magic (4 bytes) + cputype (4 bytes).
+        let mut hdr = [0u8; 8];
+        if file.read_exact(&mut hdr).is_err() {
+            // Not a readable binary (script, dir, etc.) — let it run/fail naturally.
+            return true;
+        }
+
+        let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
+        // Fat/universal binaries contain all architectures.
+        if matches!(
+            magic,
+            0xcafe_babe | 0xbeba_feca | 0xcafe_babf | 0xbfba_feca
+        ) {
+            return true;
+        }
+        // Anything that isn't a thin Mach-O is accepted as-is.
+        if !matches!(magic, 0xfeed_facf | 0xcefa_edfe) {
+            return true;
+        }
+
+        let cputype = u32::from_le_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]);
+        const CPU_TYPE_ARM64: u32 = 0x0100_000c;
+        const CPU_TYPE_X86_64: u32 = 0x0100_0007;
+
+        if cputype == CPU_TYPE_ARM64 {
+            return cfg!(target_arch = "aarch64");
+        }
+        if cputype == CPU_TYPE_X86_64 {
+            return cfg!(target_arch = "x86_64");
+        }
+        true
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        true
+    }
+}
+
 /// Find whisper.cpp binary across different locations and platforms
 pub async fn find_whisper_binary() -> anyhow::Result<String> {
     // Priority order:
@@ -274,7 +377,7 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
         if let Some(exe_dir) = exe_path.parent() {
             let bundled_paths = get_bundled_whisper_paths(exe_dir);
             for path in bundled_paths {
-                if path.exists() {
+                if path.exists() && binary_runnable(&path) {
                     return Ok(path.to_string_lossy().to_string());
                 }
             }
@@ -284,7 +387,7 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
     // Try project directory (for development)
     let project_paths = get_project_whisper_paths();
     for path in project_paths {
-        if path.exists() {
+        if path.exists() && binary_runnable(&path) {
             return Ok(path.to_string_lossy().to_string());
         }
     }
@@ -293,7 +396,9 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
     let system_paths = get_system_whisper_paths();
     for path in system_paths {
         if let Ok(which_path) = which::which(&path) {
-            return Ok(which_path.to_string_lossy().to_string());
+            if binary_runnable(&which_path) {
+                return Ok(which_path.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -422,7 +527,8 @@ pub async fn find_ffmpeg_binary() -> anyhow::Result<String> {
 
     // Allow override via environment
     if let Ok(path) = std::env::var("FFMPEG_PATH") {
-        if std::path::Path::new(&path).exists() {
+        let p = std::path::Path::new(&path);
+        if p.exists() && binary_runnable(p) {
             return Ok(path);
         }
     }
@@ -432,7 +538,7 @@ pub async fn find_ffmpeg_binary() -> anyhow::Result<String> {
         if let Some(exe_dir) = exe_path.parent() {
             let bundled_paths = get_bundled_ffmpeg_paths(exe_dir);
             for path in bundled_paths {
-                if path.exists() {
+                if path.exists() && binary_runnable(&path) {
                     return Ok(path.to_string_lossy().to_string());
                 }
             }
@@ -442,7 +548,7 @@ pub async fn find_ffmpeg_binary() -> anyhow::Result<String> {
     // Try project directory (for development)
     let project_paths = get_project_ffmpeg_paths();
     for path in project_paths {
-        if path.exists() {
+        if path.exists() && binary_runnable(&path) {
             return Ok(path.to_string_lossy().to_string());
         }
     }
@@ -451,7 +557,9 @@ pub async fn find_ffmpeg_binary() -> anyhow::Result<String> {
     let system_paths = get_system_ffmpeg_paths();
     for path in system_paths {
         if let Ok(which_path) = which::which(&path) {
-            return Ok(which_path.to_string_lossy().to_string());
+            if binary_runnable(&which_path) {
+                return Ok(which_path.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -467,7 +575,8 @@ pub async fn find_ffprobe_binary() -> anyhow::Result<String> {
 
     // Allow override via environment
     if let Ok(path) = std::env::var("FFPROBE_PATH") {
-        if std::path::Path::new(&path).exists() {
+        let p = std::path::Path::new(&path);
+        if p.exists() && binary_runnable(p) {
             return Ok(path);
         }
     }
@@ -477,7 +586,7 @@ pub async fn find_ffprobe_binary() -> anyhow::Result<String> {
         if let Some(exe_dir) = exe_path.parent() {
             let bundled_paths = get_bundled_ffprobe_paths(exe_dir);
             for path in bundled_paths {
-                if path.exists() {
+                if path.exists() && binary_runnable(&path) {
                     return Ok(path.to_string_lossy().to_string());
                 }
             }
@@ -487,7 +596,7 @@ pub async fn find_ffprobe_binary() -> anyhow::Result<String> {
     // Try project directory (for development)
     let project_paths = get_project_ffprobe_paths();
     for path in project_paths {
-        if path.exists() {
+        if path.exists() && binary_runnable(&path) {
             return Ok(path.to_string_lossy().to_string());
         }
     }
@@ -496,7 +605,9 @@ pub async fn find_ffprobe_binary() -> anyhow::Result<String> {
     let system_paths = get_system_ffprobe_paths();
     for path in system_paths {
         if let Ok(which_path) = which::which(&path) {
-            return Ok(which_path.to_string_lossy().to_string());
+            if binary_runnable(&which_path) {
+                return Ok(which_path.to_string_lossy().to_string());
+            }
         }
     }
 
@@ -1313,6 +1424,62 @@ pub async fn transcribe_segments_with_temp(
     // Check if user explicitly selected OpenAI API (whisper-1)
     let use_openai_directly = p.model.as_ref().map(|m| m == "whisper-1").unwrap_or(false);
 
+    // If a remote Whisper server URL is configured, use it. This lets the app
+    // use a Whisper model installed on another machine (e.g. a whisper.cpp
+    // server on the local network) instead of downloading models here.
+    if let Some(base_url) = p
+        .whisper_base_url
+        .as_deref()
+        .map(|u| u.trim())
+        .filter(|u| !u.is_empty())
+    {
+        emit(RpcEvent::Log {
+            id: id.into(),
+            message: format!("Using remote Whisper server at: {}", base_url),
+        });
+
+        match transcribe_with_remote_server(
+            id,
+            &p.audio,
+            base_url,
+            p.api_key.as_deref(),
+            p.language.as_deref(),
+            p.prompt.as_deref(),
+            p.split_by_words,
+            &mut emit,
+        )
+        .await
+        {
+            Ok(whisper_response) => {
+                emit(RpcEvent::Log {
+                    id: id.into(),
+                    message: "Remote Whisper server transcription successful".into(),
+                });
+
+                let segments = whisper_to_caption_segments(&whisper_response, p.split_by_words);
+
+                // Save to cache
+                if let Err(e) =
+                    save_cached_whisper_response(&p.audio, &p, &whisper_response).await
+                {
+                    emit(RpcEvent::Log {
+                        id: id.into(),
+                        message: format!("Failed to cache remote transcription: {}", e),
+                    });
+                }
+
+                return create_transcription_result(id, &segments, &whisper_response, &p, temp_dir)
+                    .await;
+            }
+            Err(e) => {
+                emit(RpcEvent::Log {
+                    id: id.into(),
+                    message: format!("Remote Whisper server failed: {}", e),
+                });
+            }
+        }
+    }
+
     // Try local whisper.cpp first if available (unless whisper-1 is explicitly selected)
     if !use_openai_directly && USE_LOCAL_WHISPER && is_whisper_cpp_available().await {
         emit(RpcEvent::Log {
@@ -1503,6 +1670,105 @@ pub async fn transcribe_segments_with_temp(
     }
 
     create_transcription_result(id, &segments, &whisper_response, &p, temp_dir).await
+}
+
+/// Transcribe audio using a remote, OpenAI-compatible Whisper server
+/// (e.g. a whisper.cpp `server` binary or faster-whisper-server running on
+/// another machine on your network). This lets the app offload transcription
+/// to a machine that already has a Whisper model installed, instead of
+/// downloading a model here.
+#[allow(clippy::too_many_arguments)]
+pub async fn transcribe_with_remote_server(
+    id: &str,
+    audio_path: &str,
+    base_url: &str,
+    api_key: Option<&str>,
+    language: Option<&str>,
+    prompt: Option<&str>,
+    split_by_words: bool,
+    mut emit: impl FnMut(RpcEvent),
+) -> anyhow::Result<WhisperResponse> {
+    use mime_guess::MimeGuess;
+    use reqwest::multipart;
+
+    emit(RpcEvent::Log {
+        id: id.into(),
+        message: format!("Remote Whisper server base URL: {}", base_url),
+    });
+
+    let bytes = fs::read(audio_path).await?;
+    let filename = std::path::Path::new(audio_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mime = MimeGuess::from_path(audio_path).first_or_octet_stream();
+
+    let mut form = multipart::Form::new()
+        .text("model", "whisper-1".to_string())
+        .part(
+            "file",
+            multipart::Part::bytes(bytes)
+                .file_name(filename)
+                .mime_str(mime.as_ref())
+                .unwrap(),
+        )
+        .text("response_format", "verbose_json".to_string());
+
+    if let Some(lang) = language {
+        form = form.text("language", lang.to_string());
+    }
+    if let Some(prompt) = prompt {
+        form = form.text("prompt", prompt.to_string());
+    }
+    if split_by_words {
+        form = form.text("timestamp_granularities[]", "word".to_string());
+    } else {
+        form = form.text("timestamp_granularities[]", "segment".to_string());
+    }
+
+    let url = format!("{}/v1/audio/transcriptions", base_url.trim_end_matches('/'));
+
+    emit(RpcEvent::Log {
+        id: id.into(),
+        message: format!("Sending audio to: {}", url),
+    });
+
+    let client = reqwest::Client::builder()
+        .user_agent("core/1.0.0")
+        .timeout(std::time::Duration::from_secs(900)) // Long transcription jobs over the network
+        .build()?;
+
+    let mut request = client.post(&url).multipart(form);
+    if let Some(key) = api_key.filter(|k| !k.trim().is_empty()) {
+        request = request.header("Authorization", format!("Bearer {}", key));
+    }
+
+    let resp = request.send().await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "Remote Whisper server error {}: {}",
+            status,
+            body
+        ));
+    }
+
+    let whisper_response: WhisperResponse = resp.json().await?;
+
+    emit(RpcEvent::Log {
+        id: id.into(),
+        message: format!(
+            "Remote transcription completed. Duration: {:.2}s, Segments: {}, Words: {}",
+            whisper_response.duration.unwrap_or(0.0),
+            whisper_response.segments.as_ref().map(|s| s.len()).unwrap_or(0),
+            whisper_response.words.as_ref().map(|w| w.len()).unwrap_or(0)
+        ),
+    });
+
+    Ok(whisper_response)
 }
 
 fn is_digits(s: &str) -> bool {
@@ -1748,62 +2014,72 @@ pub fn whisper_to_caption_segments(
     }
 
     if let Some(segments) = &response.segments {
-        // use segment-level timing, but try to populate words if available
-        segments
-            .iter()
-            .filter_map(|seg| {
-                let start_ms = (seg.start * 1000.0) as u64;
-                let end_ms = (seg.end * 1000.0) as u64;
+        // Use segment-level timing, but try to populate words if available.
+        // Words are emitted in timestamp order by whisper, so we walk the
+        // word list once with a running pointer instead of rescanning all
+        // words for every segment (previously O(segments * words)).
+        let all_words = response.words.clone().unwrap_or_default();
+        let mut wi = 0usize;
+        let mut out = Vec::with_capacity(segments.len());
 
-                // skip segments that are beyond the actual audio duration
-                if let Some(max_ms) = max_duration_ms {
-                    if start_ms > max_ms {
-                        return None;
-                    }
+        for seg in segments {
+            let start_ms = (seg.start * 1000.0) as u64;
+            let end_ms = (seg.end * 1000.0) as u64;
+
+            // skip segments that are beyond the actual audio duration
+            if let Some(max_ms) = max_duration_ms {
+                if start_ms > max_ms {
+                    continue;
                 }
+            }
 
-                let final_end_ms = if let Some(max_ms) = max_duration_ms {
-                    end_ms.min(max_ms)
-                } else {
-                    end_ms
-                };
+            let final_end_ms = if let Some(max_ms) = max_duration_ms {
+                end_ms.min(max_ms)
+            } else {
+                end_ms
+            };
 
-                // skip segments with very short duration (less than 50ms) - reduced threshold for debugging
-                let duration_ms = final_end_ms.saturating_sub(start_ms);
-                if duration_ms < 50 {
-                    return None;
+            // skip segments with very short duration (less than 50ms)
+            let duration_ms = final_end_ms.saturating_sub(start_ms);
+            if duration_ms < 50 {
+                continue;
+            }
+
+            // Advance our pointer past words that end well before this segment.
+            if !all_words.is_empty() {
+                let window_start = start_ms.saturating_sub(100);
+                while wi < all_words.len() && ((all_words[wi].end * 1000.0) as u64) < window_start {
+                    wi += 1;
                 }
+            }
 
-                // If we have word-level data globally, try to assign words to this segment
-                let segment_words = if let Some(all_words) = &response.words {
-                    all_words
-                        .iter()
-                        .filter(|w| {
-                            let w_start_ms = (w.start * 1000.0) as u64;
-                            let w_end_ms = (w.end * 1000.0) as u64;
-                            // Include words that mostly overlap with the segment or are contained within it
-                            // Simple containment check:
-                            w_start_ms >= start_ms && w_end_ms <= final_end_ms + 100
-                            // +100ms tolerance
-                        })
-                        .map(|w| WordSpan {
-                            start_ms: (w.start * 1000.0) as u64,
-                            end_ms: (w.end * 1000.0) as u64,
-                            text: w.word.clone(),
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+            let mut segment_words = Vec::new();
+            let window_end = final_end_ms + 100; // +100ms tolerance
+            let mut j = wi;
+            while j < all_words.len() {
+                let w = &all_words[j];
+                let w_start_ms = (w.start * 1000.0) as u64;
+                if w_start_ms > window_end {
+                    break; // words are ordered by start: no more matches
+                }
+                let w_end_ms = (w.end * 1000.0) as u64;
+                segment_words.push(WordSpan {
+                    start_ms: w_start_ms,
+                    end_ms: w_end_ms,
+                    text: w.word.clone(),
+                });
+                j += 1;
+            }
 
-                Some(CaptionSegment {
-                    start_ms,
-                    end_ms: final_end_ms,
-                    text: seg.text.clone(),
-                    words: segment_words,
-                })
-            })
-            .collect()
+            out.push(CaptionSegment {
+                start_ms,
+                end_ms: final_end_ms,
+                text: seg.text.clone(),
+                words: segment_words,
+            });
+        }
+
+        out
     } else {
         // fallback: create single segment from full text
         let duration = response.duration.unwrap_or(60.0) * 1000.0;
@@ -1825,7 +2101,7 @@ pub async fn get_cached_whisper_response(
     audio_path: &str,
     params: &TranscribeSegmentsParams,
 ) -> anyhow::Result<Option<WhisperResponse>> {
-    let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params)?;
+    let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params).await?;
     let index = load_cache_index().await?;
 
     for entry in &index.entries {
@@ -1846,7 +2122,7 @@ pub async fn save_cached_whisper_response(
     params: &TranscribeSegmentsParams,
     response: &WhisperResponse,
 ) -> anyhow::Result<()> {
-    let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params)?;
+    let (audio_hash, params_hash) = compute_segments_cache_key(audio_path, params).await?;
     let mut index = load_cache_index().await?;
     let cache_dir = get_cache_dir()?;
     let timestamp = std::time::SystemTime::now()
@@ -1893,13 +2169,26 @@ pub async fn save_cached_whisper_response(
     Ok(())
 }
 
-pub fn compute_segments_cache_key(
+pub async fn compute_segments_cache_key(
     audio_path: &str,
     params: &TranscribeSegmentsParams,
 ) -> anyhow::Result<(String, String)> {
-    // hash audio file content
-    let audio_bytes = std::fs::read(audio_path)?;
-    let audio_hash = blake3::hash(&audio_bytes).to_hex().to_string();
+    use tokio::io::AsyncReadExt;
+
+    // Stream the audio file through the hash instead of loading it all into
+    // memory — a multi-hundred-MB file must never be buffered on every
+    // transcribe call, and a synchronous read would block the async runtime.
+    let mut file = fs::File::open(audio_path).await?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 256 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let audio_hash = hasher.finalize().to_hex().to_string();
 
     // hash relevant parameters (excluding video_file as it doesn't affect transcription)
     let params_for_hash = serde_json::json!({

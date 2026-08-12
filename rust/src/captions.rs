@@ -19,6 +19,15 @@ enum InternalUpdate {
     Event(RpcEvent),
 }
 
+/// Best-effort removal of a per-job temp directory. Temp dirs are only
+/// needed while a job runs; if we never clean them up, /tmp fills up with
+/// extracted audio and JSON files after every transcription/export.
+fn cleanup_temp_dir(dir: &std::path::Path) {
+    if let Err(e) = fs::remove_dir_all(dir) {
+        eprintln!("DEBUG: failed to clean temp dir {:?}: {}", dir, e);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_and_transcribe(
     id: &str,
@@ -30,36 +39,69 @@ pub async fn extract_and_transcribe(
     prompt: Option<String>,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
+    extract_and_transcribe_with_server(
+        id,
+        input_video,
+        split_by_words,
+        model,
+        language,
+        api_key,
+        prompt,
+        None,
+        &mut emit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn extract_and_transcribe_with_server(
+    id: &str,
+    input_video: &str,
+    split_by_words: bool,
+    model: Option<String>,
+    language: Option<String>,
+    api_key: Option<String>,
+    prompt: Option<String>,
+    whisper_base_url: Option<String>,
+    mut emit: impl FnMut(RpcEvent),
+) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         return Err(anyhow!("Failed to create temp directory: {}", e));
     }
 
-    let probe_result = probe(id, input_video, &mut emit).await?;
+    let result = async {
+        let probe_result = probe(id, input_video, &mut emit).await?;
 
-    let audio_filename = format!("audio_{}.mp3", id);
-    let temp_audio_path = temp_dir.join(&audio_filename);
-    let audio_params = ExtractAudioParams {
-        input: input_video.to_string(),
-        codec: Some("mp3".to_string()),
-        out: Some(temp_audio_path.to_string_lossy().to_string()),
-    };
-    let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
+        let audio_filename = format!("audio_{}.mp3", id);
+        let temp_audio_path = temp_dir.join(&audio_filename);
+        let audio_params = ExtractAudioParams {
+            input: input_video.to_string(),
+            codec: Some("mp3".to_string()),
+            out: Some(temp_audio_path.to_string_lossy().to_string()),
+        };
+        let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
 
-    let transcribe_params = TranscribeSegmentsParams {
-        audio: audio_result.audio.clone(),
-        model,
-        language,
-        split_by_words,
-        api_key,
-        prompt,
-        video_file: Some(input_video.to_string()),
-    };
-    let transcription =
-        whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit)
-            .await?;
+        let transcribe_params = TranscribeSegmentsParams {
+            audio: audio_result.audio.clone(),
+            model,
+            language,
+            split_by_words,
+            api_key,
+            prompt,
+            video_file: Some(input_video.to_string()),
+            whisper_base_url,
+        };
+        let transcription =
+            whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit)
+                .await?;
 
-    Ok((probe_result, audio_result.audio, transcription))
+        Ok::<_, anyhow::Error>((probe_result, audio_result.audio, transcription))
+    }
+    .await;
+
+    cleanup_temp_dir(&temp_dir);
+    result
 }
 
 pub async fn burn_captions_with_segments(
@@ -72,30 +114,36 @@ pub async fn burn_captions_with_segments(
         return Err(anyhow!("Failed to create temp directory: {}", e));
     }
 
-    // We need to re-probe to get video dimensions
-    let probe_result = probe(id, &params.input_video, &mut emit).await?;
+    let result = async {
+        // We need to re-probe to get video dimensions
+        let probe_result = probe(id, &params.input_video, &mut emit).await?;
 
-    optimized_multi_format_encode(
-        id,
-        &params.input_video,
-        &params.segments,
-        &params.export_formats,
-        &probe_result,
-        &temp_dir,
-        params.font_name,
-        params.font_size,
-        params.text_color,
-        params.highlight_word_color,
-        params.outline_color,
-        params.glow_effect,
-        params.karaoke,
-        params.multiline,
-        params.position,
-        params.output_size,
-        params.crop_strategy,
-        &mut emit,
-    )
-    .await
+        optimized_multi_format_encode(
+            id,
+            &params.input_video,
+            &params.segments,
+            &params.export_formats,
+            &probe_result,
+            &temp_dir,
+            params.font_name,
+            params.font_size,
+            params.text_color,
+            params.highlight_word_color,
+            params.outline_color,
+            params.glow_effect,
+            params.karaoke,
+            params.multiline,
+            params.position,
+            params.output_size,
+            params.crop_strategy,
+            &mut emit,
+        )
+        .await
+    }
+    .await;
+
+    cleanup_temp_dir(&temp_dir);
+    result
 }
 
 pub async fn generate_captions(
@@ -112,46 +160,54 @@ pub async fn generate_captions_single_pass(
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<GenerateCaptionsResult> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
-    let (probe_result, audio_file, transcription) = extract_and_transcribe(
-        id,
-        &params.input_video,
-        params.split_by_words,
-        params.model,
-        params.language,
-        params.api_key,
-        params.prompt,
-        &mut emit,
-    )
-    .await?;
 
-    let captioned_videos = optimized_multi_format_encode(
-        id,
-        &params.input_video,
-        &transcription.segments,
-        &params.export_formats,
-        &probe_result,
-        &temp_dir,
-        params.font_name,
-        params.font_size,
-        params.text_color,
-        params.highlight_word_color,
-        params.outline_color,
-        params.glow_effect,
-        params.karaoke,
-        params.multiline,
-        params.position,
-        params.output_size,
-        params.crop_strategy,
-        &mut emit,
-    )
-    .await?;
+    let result = async {
+        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_server(
+            id,
+            &params.input_video,
+            params.split_by_words,
+            params.model,
+            params.language,
+            params.api_key,
+            params.prompt,
+            params.whisper_base_url,
+            &mut emit,
+        )
+        .await?;
 
-    Ok(GenerateCaptionsResult {
-        probe_result,
-        audio_file,
-        transcription,
-        captioned_videos,
-    })
+        let captioned_videos = optimized_multi_format_encode(
+            id,
+            &params.input_video,
+            &transcription.segments,
+            &params.export_formats,
+            &probe_result,
+            &temp_dir,
+            params.font_name,
+            params.font_size,
+            params.text_color,
+            params.highlight_word_color,
+            params.outline_color,
+            params.glow_effect,
+            params.karaoke,
+            params.multiline,
+            params.position,
+            params.output_size,
+            params.crop_strategy,
+            &mut emit,
+        )
+        .await?;
+
+        Ok::<_, anyhow::Error>(GenerateCaptionsResult {
+            probe_result,
+            audio_file,
+            transcription,
+            captioned_videos,
+        })
+    }
+    .await;
+
+    cleanup_temp_dir(&temp_dir);
+    result
 }
 
 pub fn generate_preview_layout(
@@ -336,26 +392,8 @@ pub fn generate_preview_layout(
 }
 
 pub fn save_captions(params: SaveCaptionsParams) -> Result<()> {
-    let video_path = std::path::Path::new(&params.video_path);
-    // Sidecar file: video.mp4 -> video.capslap.json
-    // Let's sticker to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
-    // The plan said: <video_path>.capslap.json.
-    // If video is "movie.mp4", "movie.capslap.json" is fine.
-    // But if I have "movie.mp4" and "movie.avi", they would clash.
-    // Let's append ".capslap.json" to the full filename.
-    let _json_path = video_path.with_extension("capslap.json"); // Kept variable but underscored to suppress warning if we don't use it, but wait, we use `json_path` (the other one) below.
-                                                                // Actually the line 314 was unused because I shadowed it with line 321 `let json_path = ...`.
-                                                                // So I should just remove line 314.
-
-    // If the video path didn't have an extension, with_extension replaces the last component?
-    // No, it replaces extension. If video is /path/to/vid, it becomes /path/to/vid.capslap.json
-    // If video is /path/to/vid.mp4, it becomes /path/to/vid.capslap.json.
-    // Wait, if I want video.mp4.capslap.json, I should just append.
-    // Let's stick to replacing extension to keep it clean, OR append if we want to be safe against collisions (vid.mp4 vs vid.mov).
-    // The plan said: <video_path>.capslap.json.
-    // If video is "movie.mp4", "movie.capslap.json" is fine.
-    // But if I have "movie.mp4" and "movie.avi", they would clash.
-    // Let's append ".capslap.json" to the full filename.
+    // Sidecar captions file lives next to the video: video.mp4 -> video.mp4.capslap.json
+    // (appended, not extension-replaced, so video.mp4 and video.avi never clash)
     let json_path = format!("{}.capslap.json", params.video_path);
 
     let json = serde_json::to_string_pretty(&params.segments)?;
@@ -387,145 +425,120 @@ pub async fn generate_preview_frame(
         return Err(anyhow!("Failed to create temp directory: {}", e));
     }
 
-    // We need to probe to get video dimensions
-    // We don't have an ID for logs here, so we use a placeholder
-    let probe_id = "preview_probe";
-    let probe_result = probe(probe_id, &params.input_video, |e| {
-        // Ignore logs for preview
-        let _ = e;
-    })
-    .await?;
+    let result = async {
+        // We need to probe to get video dimensions
+        // We don't have an ID for logs here, so we use a placeholder
+        let probe_id = "preview_probe";
+        let probe_result = probe(probe_id, &params.input_video, |e| {
+            // Ignore logs for preview
+            let _ = e;
+        })
+        .await?;
 
-    // Determine target dimensions
-    let target_ar = crate::video::parse_target_ar(&params.export_format)?;
-    let src_w = probe_result.width.unwrap_or(1920) as u32;
-    let src_h = probe_result.height.unwrap_or(1080) as u32;
+        // Determine target dimensions
+        let target_ar = crate::video::parse_target_ar(&params.export_format)?;
+        let src_w = probe_result.width.unwrap_or(1920) as u32;
+        let src_h = probe_result.height.unwrap_or(1080) as u32;
 
-    let (target_w, target_h) = if let Some(size) = &params.output_size {
-        match size.as_str() {
-            "1080p" => {
-                let (base_w, base_h) = crate::video::ar_wh(target_ar);
-                let ar = base_w as f64 / base_h as f64;
-                if base_w > base_h {
-                    let w = (1080.0 * ar).round() as u32;
-                    (crate::video::round_even(w), 1080)
-                } else {
-                    let h = (1080.0 / ar).round() as u32;
-                    (1080, crate::video::round_even(h))
+        let (target_w, target_h) = if let Some(size) = &params.output_size {
+            match size.as_str() {
+                "1080p" => {
+                    let (base_w, base_h) = crate::video::ar_wh(target_ar);
+                    let ar = base_w as f64 / base_h as f64;
+                    if base_w > base_h {
+                        let w = (1080.0 * ar).round() as u32;
+                        (crate::video::round_even(w), 1080)
+                    } else {
+                        let h = (1080.0 / ar).round() as u32;
+                        (1080, crate::video::round_even(h))
+                    }
                 }
+                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
             }
-            _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
+        } else {
+            crate::video::canvas_no_downscale(src_w, src_h, target_ar)
+        };
+
+        // Calculate crop strategy
+        let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
+
+        let style = default_ass_style(
+            target_w,
+            target_h,
+            params.font_name.as_deref(),
+            params.text_color.as_deref(),
+            params.highlight_word_color.as_deref(),
+            params.outline_color.as_deref(),
+            params.glow_effect,
+            params.position.as_deref(),
+            params.font_size,
+        );
+
+        let ass_doc = build_ass_document(
+            target_w,
+            target_h,
+            &style,
+            &params.segments,
+            params.karaoke,
+            params.multiline,
+            params.glow_effect,
+        )?;
+
+        let ass_path = temp_dir.join("preview.ass");
+        fs::write(&ass_path, &ass_doc)?;
+
+        // Construct filter graph
+        let ass_str = ass_path.to_string_lossy().to_string();
+        let is_hdr = crate::video::is_hdr(&probe_result);
+        let vf = crate::video::build_fitpad_filter_with_options(
+            target_w,
+            target_h,
+            Some(&ass_str),
+            crate::video::HardwareEncoder::Software, // Use software mode for compatibility
+            crop_strategy,
+            is_hdr,
+        );
+
+        // Extract frame using FFmpeg
+        let ffmpeg_path = crate::video::get_ffmpeg_path_sync();
+        let time_sec = params.timestamp_ms as f64 / 1000.0;
+
+        let output = TokioCommand::new(&ffmpeg_path)
+            .arg("-ss")
+            .arg(time_sec.to_string())
+            .arg("-i")
+            .arg(&params.input_video)
+            .arg("-vf")
+            .arg(&vf)
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-f")
+            .arg("image2")
+            .arg("-c:v")
+            .arg("png")
+            .arg("-") // Output to stdout
+            .output()
+            .await
+            .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("FFmpeg preview failed: {}", stderr));
         }
-    } else {
-        crate::video::canvas_no_downscale(src_w, src_h, target_ar)
-    };
 
-    // Calculate crop strategy
-    let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
+        use base64::{engine::general_purpose, Engine as _};
+        let encoded = general_purpose::STANDARD.encode(&output.stdout);
+        let data_uri = format!("data:image/png;base64,{}", encoded);
 
-    // Build ASS file for valid segments
-    // Filter segments that overlap with timestamp ??
-    // Actually, for a single frame preview, we usually want to see a specific segment.
-    // But the caller might pass all segments.
-    // It's safer to pass all segments and let ASS renderer handle the timing,
-    // since we use timestamp to seek.
-
-    let style = default_ass_style(
-        target_w,
-        target_h,
-        params.font_name.as_deref(),
-        params.text_color.as_deref(),
-        params.highlight_word_color.as_deref(),
-        params.outline_color.as_deref(),
-        params.glow_effect,
-        params.position.as_deref(),
-        params.font_size,
-    );
-
-    let ass_doc = build_ass_document(
-        target_w,
-        target_h,
-        &style,
-        &params.segments,
-        params.karaoke,
-        params.multiline,
-        params.glow_effect,
-    )?;
-
-    let ass_path = temp_dir.join("preview.ass");
-    fs::write(&ass_path, &ass_doc)?;
-
-    // Construct filter graph
-    let ass_str = ass_path.to_string_lossy().to_string();
-    let is_hdr = crate::video::is_hdr(&probe_result);
-    // Use software encoder logic for filter because we are extracting a PNG,
-    // and we don't need hardware encode for a single frame usually, or it complicates things.
-    // `build_fitpad_filter_with_options` is what we want.
-    let vf = crate::video::build_fitpad_filter_with_options(
-        target_w,
-        target_h,
-        Some(&ass_str),
-        crate::video::HardwareEncoder::Software, // Use software mode for compatibility
-        crop_strategy,
-        is_hdr,
-    );
-
-    // Extract frame using FFmpeg
-    let ffmpeg_path = crate::video::get_ffmpeg_path_sync();
-    let time_sec = params.timestamp_ms as f64 / 1000.0;
-
-    // -ss placed before -i is faster aka keyframe seek (but less accurate)
-    // -ss placed after -i is slower (frame exact decoding) but more accurate.
-    // For preview we want accuracy so we seek after?
-    // Actually, if we use -ss before -i, ffmpeg seeks to keyframe and then decodes to timestamp.
-    // BUT since we are applying complex filters, we might need accurate decoding.
-    // Let's use -ss before -i for speed, but add -copyts or re-adjustment?
-    // Safer to put -ss after -i for exact frame if speed is acceptable (single frame).
-
-    // However, for complex filters, seeking might shift things.
-    // Let's try standard seeking.
-
-    // Note: We need to ensure we output image format.
-
-    // Wait, if we use fitpad filter, it modifies timestamps/frames? No.
-
-    let output = TokioCommand::new(&ffmpeg_path)
-        .arg("-ss")
-        .arg(time_sec.to_string())
-        .arg("-i")
-        .arg(&params.input_video)
-        .arg("-vf")
-        .arg(&vf)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-f")
-        .arg("image2")
-        .arg("-c:v")
-        .arg("png")
-        .arg("-") // Output to stdout
-        .output()
-        .await
-        .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(anyhow!("FFmpeg preview failed: {}", stderr));
+        Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult { image_data: data_uri })
     }
+    .await;
 
-    use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(&output.stdout);
-    let data_uri = format!("data:image/png;base64,{}", encoded);
-
-    // Cleanup
-    let _ = fs::remove_dir_all(temp_dir);
-
-    Ok(crate::types::PreviewFrameResult {
-        image_data: data_uri,
-    })
+    // Always clean up the temp dir, including on error
+    cleanup_temp_dir(&temp_dir);
+    result
 }
 
-#[cfg(test)]
-#[cfg(test)]
 #[cfg(test)]
 mod tests_persistence {
     use super::*;

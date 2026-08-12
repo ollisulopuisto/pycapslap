@@ -2,7 +2,7 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 import type api from './api'
 
 // Whisper model types
-export type WhisperModel = 'tiny' | 'base' | 'small' | 'medium' | 'large' | 'whisper-1'
+export type WhisperModel = 'tiny' | 'base' | 'small' | 'medium' | 'large' | 'turbo' | 'whisper-1'
 
 export interface ModelInfo {
   name: WhisperModel | 'whisper-1'
