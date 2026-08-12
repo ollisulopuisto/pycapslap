@@ -1677,6 +1677,11 @@ pub async fn transcribe_segments_with_temp(
 /// another machine on your network). This lets the app offload transcription
 /// to a machine that already has a Whisper model installed, instead of
 /// downloading a model here.
+///
+/// The audio is streamed directly from disk instead of loading it fully into
+/// memory, which prevents OOM and avoids the "stream reading error: unexpected
+/// EOF" that occurred when servers dropped the connection after receiving a
+/// single large allocation.
 #[allow(clippy::too_many_arguments)]
 pub async fn transcribe_with_remote_server(
     id: &str,
@@ -1696,30 +1701,47 @@ pub async fn transcribe_with_remote_server(
         message: format!("Remote Whisper server base URL: {}", base_url),
     });
 
-    let bytes = fs::read(audio_path).await?;
     let filename = std::path::Path::new(audio_path)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
     let mime = MimeGuess::from_path(audio_path).first_or_octet_stream();
+    let file_size = fs::metadata(audio_path)
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    emit(RpcEvent::Log {
+        id: id.into(),
+        message: format!(
+            "Streaming {:.1} MB audio file to remote server…",
+            file_size as f64 / 1_048_576.0
+        ),
+    });
+
+    // Stream the file instead of loading it all into RAM. This prevents OOM
+    // on large recordings and avoids server-side connection drops.
+    let file = fs::File::open(audio_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Cannot open audio file for upload: {}", e))?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = reqwest::Body::wrap_stream(stream);
+    let file_part = multipart::Part::stream_with_length(body, file_size)
+        .file_name(filename)
+        .mime_str(mime.as_ref())
+        .unwrap();
 
     let mut form = multipart::Form::new()
         .text("model", "whisper-1".to_string())
-        .part(
-            "file",
-            multipart::Part::bytes(bytes)
-                .file_name(filename)
-                .mime_str(mime.as_ref())
-                .unwrap(),
-        )
+        .part("file", file_part)
         .text("response_format", "verbose_json".to_string());
 
     if let Some(lang) = language {
         form = form.text("language", lang.to_string());
     }
-    if let Some(prompt) = prompt {
-        form = form.text("prompt", prompt.to_string());
+    if let Some(p) = prompt {
+        form = form.text("prompt", p.to_string());
     }
     if split_by_words {
         form = form.text("timestamp_granularities[]", "word".to_string());
@@ -1735,8 +1757,9 @@ pub async fn transcribe_with_remote_server(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("core/1.0.0")
-        .timeout(std::time::Duration::from_secs(900)) // Long transcription jobs over the network
+        .user_agent("capslap/1.0")
+        // 15-minute ceiling for very long recordings over the LAN.
+        .timeout(std::time::Duration::from_secs(900))
         .build()?;
 
     let mut request = client.post(&url).multipart(form);
@@ -1744,19 +1767,44 @@ pub async fn transcribe_with_remote_server(
         request = request.header("Authorization", format!("Bearer {}", key));
     }
 
-    let resp = request.send().await?;
+    let resp = request.send().await.map_err(|e| {
+        // Produce a human-readable message instead of the raw hyper error.
+        if e.is_timeout() {
+            anyhow::anyhow!("Remote Whisper server timed out (900 s). Is the server running at {}?", base_url)
+        } else if e.is_connect() {
+            anyhow::anyhow!("Cannot connect to remote Whisper server at {}. Check the URL and that the server is running.", base_url)
+        } else {
+            anyhow::anyhow!("Remote Whisper server request failed: {}", e)
+        }
+    })?;
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
+    let status = resp.status();
+    // Always collect the body as text first so we can show useful errors if
+    // the server returns non-JSON (e.g. an HTML error page or a truncated body).
+    let body_text = resp.text().await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to read response from remote Whisper server (connection dropped?): {}",
+            e
+        )
+    })?;
+
+    if !status.is_success() {
         return Err(anyhow::anyhow!(
             "Remote Whisper server error {}: {}",
             status,
-            body
+            &body_text[..body_text.len().min(500)]
         ));
     }
 
-    let whisper_response: WhisperResponse = resp.json().await?;
+    let whisper_response: WhisperResponse = serde_json::from_str(&body_text).map_err(|e| {
+        anyhow::anyhow!(
+            "Remote Whisper server returned unexpected response (not valid JSON). \
+             This can happen if the server closed the connection mid-transfer. \
+             Parse error: {}. Body preview: {}",
+            e,
+            &body_text[..body_text.len().min(300)]
+        )
+    })?;
 
     emit(RpcEvent::Log {
         id: id.into(),
