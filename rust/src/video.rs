@@ -15,12 +15,18 @@ static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
 static BEST_HW_ENCODER: OnceLock<HardwareEncoder> = OnceLock::new();
 
 type ProbeCacheMap = HashMap<String, (Option<std::time::SystemTime>, u64, ProbeResult)>;
+type FrameCacheMap = HashMap<String, (Option<std::time::SystemTime>, u64, String)>;
 
 // In-memory ProbeResult cache keyed by file path and (mtime, size)
 static PROBE_CACHE: OnceLock<RwLock<ProbeCacheMap>> = OnceLock::new();
+static FIRST_FRAME_CACHE: OnceLock<RwLock<FrameCacheMap>> = OnceLock::new();
 
 fn get_probe_cache() -> &'static RwLock<ProbeCacheMap> {
     PROBE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn get_frame_cache() -> &'static RwLock<FrameCacheMap> {
+    FIRST_FRAME_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 
@@ -1586,6 +1592,24 @@ fn parse_fps(s: &str) -> Option<f64> {
 
 /// Extract the first frame of a video as a base64 encoded PNG
 pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
+    // Check in-memory cache first
+    let metadata = std::fs::metadata(video_path).ok();
+    let mtime = metadata.as_ref().and_then(|m| m.modified().ok());
+    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let canonical = std::path::Path::new(video_path)
+        .canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| video_path.to_string());
+
+    {
+        let cache = get_frame_cache().read().unwrap();
+        if let Some((cached_mtime, cached_size, cached_data)) = cache.get(&canonical) {
+            if *cached_size == size && *cached_mtime == mtime {
+                return Ok(cached_data.clone());
+            }
+        }
+    }
+
     let ffmpeg_path = get_ffmpeg_path_sync();
 
     // Fast input seeking with -ss 0 before -i
@@ -1618,7 +1642,15 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     let encoded = general_purpose::STANDARD.encode(&output.stdout);
 
     // Return with data URI scheme
-    Ok(format!("data:image/png;base64,{}", encoded))
+    let result = format!("data:image/png;base64,{}", encoded);
+
+    // Update cache
+    {
+        let mut cache = get_frame_cache().write().unwrap();
+        cache.insert(canonical, (mtime, size, result.clone()));
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

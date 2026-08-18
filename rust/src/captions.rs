@@ -603,9 +603,9 @@ pub async fn generate_preview_frame(
         let wants_captions = render_mode != "clean";
 
         // The caption layer is drawn on transparent black, so it must stay PNG.
-        // Thumbnails of real frames are photos — JPEG keeps the data URI small.
+        // Opaque frames (full previews & thumbnails) are photos — fast JPEG keeps latency and data URIs small.
         let transparent = render_mode == "captions";
-        let as_jpeg = params.thumbnail_height.is_some() && !transparent;
+        let as_jpeg = !transparent;
 
         let ass_str = if wants_captions {
             let style = default_ass_style(
@@ -688,7 +688,15 @@ pub async fn generate_preview_frame(
                 .arg("image2")
                 .arg("-c:v")
                 .arg(if as_jpeg { "mjpeg" } else { "png" })
-                .args(if as_jpeg { vec!["-q:v", "4"] } else { vec![] })
+                .args(if as_jpeg {
+                    if params.thumbnail_height.is_some() {
+                        vec!["-q:v", "4"]
+                    } else {
+                        vec!["-q:v", "2"]
+                    }
+                } else {
+                    vec![]
+                })
                 .arg("-") // Output to stdout
                 .output()
                 .await
