@@ -347,36 +347,30 @@ export function CaptionPositionPanel({
 
         if (cancelled) return
 
-        // One entry per segment — the same unit as the text list beside this
-        // panel. Rendering is finer grained than that: a sentence is broken into
-        // as many on-screen blocks as it takes to fit the frame, which in
-        // karaoke is a word or two each. A thumbnail per one of those is no use
-        // for finding anything, and moving them independently is not what
-        // anybody wants from a sentence anyway.
-        const found: CaptionBlock[] = segments
-          .map((segment) => {
-            const covering = (layout?.cues ?? []).filter(
-              (cue) => cue.groupStartMs < segment.endMs && cue.groupEndMs > segment.startMs
-            )
-            if (covering.length === 0) return null
-
-            // The middle of a segment can land in a pause between its blocks,
-            // where a still would show no caption at all.
-            const middle = Math.round(segment.startMs + (segment.endMs - segment.startMs) / 2)
-            const onScreen = covering.find((cue) => cue.groupStartMs <= middle && cue.groupEndMs >= middle)
-            const shown = onScreen ?? covering[0]
-
-            return {
-              startMs: segment.startMs,
-              endMs: segment.endMs,
-              previewMs: Math.round(shown.groupStartMs + (shown.groupEndMs - shown.groupStartMs) / 2),
-              text: segment.text.trim(),
-              defaultYPct: covering[0].yPct,
-              anchor: covering[0].anchor,
-            }
+        // One entry per on-screen block — the unit the burner actually draws.
+        // A sentence is broken into as many blocks as it takes to fit the frame,
+        // which in karaoke is a word or two each, so a strip that followed the
+        // text list beside this panel would show one still per sentence and hide
+        // everything else the video puts on screen. Karaoke also emits a cue per
+        // highlighted word on top of that; those share a group and collapse into
+        // the one block a user drags.
+        const byGroup = new Map<string, CaptionBlock>()
+        for (const cue of layout?.cues ?? []) {
+          const key = `${cue.groupStartMs}-${cue.groupEndMs}`
+          if (byGroup.has(key)) continue
+          byGroup.set(key, {
+            startMs: cue.groupStartMs,
+            endMs: cue.groupEndMs,
+            previewMs: Math.round(cue.groupStartMs + (cue.groupEndMs - cue.groupStartMs) / 2),
+            text: cue.lines
+              .map((line) => line.words.map((word) => word.text).join(' '))
+              .join(' ')
+              .trim(),
+            defaultYPct: cue.yPct,
+            anchor: cue.anchor,
           })
-          .filter((block): block is CaptionBlock => block !== null)
-          .sort((a, b) => a.startMs - b.startMs)
+        }
+        const found: CaptionBlock[] = [...byGroup.values()].sort((a, b) => a.startMs - b.startMs)
         setBlocks(found)
         setSelectedKey((current) => current ?? (found[0] ? blockKey(found[0]) : null))
         setLayoutError(found.length === 0 ? 'No captions to position.' : null)
@@ -395,6 +389,18 @@ export function CaptionPositionPanel({
     () => blocks.find((b) => blockKey(b) === selectedKey) ?? blocks[0] ?? null,
     [blocks, selectedKey]
   )
+
+  // Tell the text editor which words are on the still, so it can mark them in
+  // the sentence they came from. Held in a ref because the callback is written
+  // inline by the parent: depending on it directly would fire on every render.
+  const onSelectBlockRef = useRef(onSelectBlock)
+  useEffect(() => {
+    onSelectBlockRef.current = onSelectBlock
+  })
+  useEffect(() => {
+    if (!selectedBlock) return
+    onSelectBlockRef.current?.({ startMs: selectedBlock.startMs, endMs: selectedBlock.endMs })
+  }, [selectedBlock])
 
   // Full-size pair for the block being edited (high priority).
   useEffect(() => {
@@ -443,21 +449,46 @@ export function CaptionPositionPanel({
     [renderFrame, cacheKey, rememberImage]
   )
 
+  // Drop this block's placement while leaving its neighbours where they are.
+  //
+  // One override can cover several blocks: "Apply to all" writes one per block,
+  // but a sidecar saved before the strip followed the on-screen blocks — or one
+  // written for a sentence that has since been re-split — spans all of them. So
+  // a range that is not this block's own is first pinned onto the other blocks
+  // it holds, and only then let go of here.
+  const withoutBlock = useCallback(
+    (block: CaptionBlock): PositionOverride[] => {
+      const covering = findOverride(overrides, block)
+      if (!covering) return [...overrides]
+      const isOwn = covering.startMs === block.startMs && covering.endMs === block.endMs
+      const rest = overrides.filter((o) => o !== covering)
+      if (isOwn) return rest
+      for (const other of blocks) {
+        if (other === block) continue
+        if (findOverride([covering], other)) {
+          rest.push({ startMs: other.startMs, endMs: other.endMs, yPct: covering.yPct })
+        }
+      }
+      return rest
+    },
+    [overrides, blocks]
+  )
+
   const setBlockY = useCallback(
     (block: CaptionBlock, yPct: number) => {
-      const next = overrides.filter((o) => !(o.startMs === block.startMs && o.endMs === block.endMs))
+      const next = withoutBlock(block)
       next.push({ startMs: block.startMs, endMs: block.endMs, yPct: clampY(yPct) })
       next.sort((a, b) => a.startMs - b.startMs)
       onOverridesChange(next)
     },
-    [overrides, onOverridesChange]
+    [withoutBlock, onOverridesChange]
   )
 
   const resetBlock = useCallback(
     (block: CaptionBlock) => {
-      onOverridesChange(overrides.filter((o) => !(o.startMs === block.startMs && o.endMs === block.endMs)))
+      onOverridesChange(withoutBlock(block).sort((a, b) => a.startMs - b.startMs))
     },
-    [overrides, onOverridesChange]
+    [withoutBlock, onOverridesChange]
   )
 
   const [isAutoPlacing, setIsAutoPlacing] = useState(false)
@@ -729,10 +760,7 @@ export function CaptionPositionPanel({
                 shiftPct={shiftPct}
                 moved={moved}
                 aspectRatio={aspectRatio}
-                onSelect={() => {
-                  setSelectedKey(key)
-                  onSelectBlock?.({ startMs: block.startMs, endMs: block.endMs })
-                }}
+                onSelect={() => setSelectedKey(key)}
                 onEdit={() => onEditBlock?.({ startMs: block.startMs, endMs: block.endMs })}
                 onVisible={requestThumbnail}
               />

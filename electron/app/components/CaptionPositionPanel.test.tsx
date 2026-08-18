@@ -192,10 +192,11 @@ describe('CaptionPositionPanel', () => {
     }
   })
 
-  it('shows one filmstrip frame per segment, not per on-screen block', async () => {
-    // Karaoke breaks a sentence into as many blocks as fit the frame — a word
-    // or two each — and each block emits a cue per word on top of that. The
-    // strip is for finding a sentence, so it follows the segments.
+  it('shows one filmstrip frame per on-screen block, not per segment', async () => {
+    // A sentence is drawn as as many blocks as fit the frame — a word or two
+    // each in karaoke. One still per sentence would show whichever of them the
+    // sentence's midpoint happened to land on and hide the rest, which reads as
+    // the preview showing text the editor does not.
     const cue = (groupStartMs: number, groupEndMs: number, text: string) => ({
       startMs: groupStartMs,
       endMs: groupEndMs,
@@ -224,8 +225,90 @@ describe('CaptionPositionPanel', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getAllByTitle(/HELLO THERE/)).toHaveLength(1)
+      expect(screen.getAllByTitle(/^HELLO/)).toHaveLength(1)
     })
+    expect(screen.getAllByTitle(/^THERE/)).toHaveLength(1)
+    expect(screen.getAllByTitle(/^BIG/)).toHaveLength(1)
+    expect(screen.getAllByTitle(/^WORLD/)).toHaveLength(1)
+  })
+
+  it('reports the block on the still, so the text list can mark its words', async () => {
+    const cue = (groupStartMs: number, groupEndMs: number, text: string) => ({
+      startMs: groupStartMs,
+      endMs: groupEndMs,
+      yPct: 88,
+      groupStartMs,
+      groupEndMs,
+      anchor: 'bottom' as const,
+      lines: [{ words: [{ text, isHighlighted: false }] }],
+    })
+    mockRust([cue(0, 1000, 'HELLO'), cue(1000, 2000, 'THERE')])
+    const onSelectBlock = vi.fn()
+
+    await act(async () => {
+      render(
+        <CaptionPositionPanel
+          videoPath="/tmp/clip.mp4"
+          segments={segments}
+          style={style}
+          overrides={[]}
+          onOverridesChange={vi.fn()}
+          onSelectBlock={onSelectBlock}
+          shownPlatforms={platforms}
+          onShownPlatformsChange={vi.fn()}
+        />
+      )
+    })
+
+    // Without being clicked: the block that loads selected is the one on screen.
+    await waitFor(() => {
+      expect(onSelectBlock).toHaveBeenCalledWith({ startMs: 0, endMs: 1000 })
+    })
+  })
+
+  it('leaves the other blocks in place when one is moved out of a shared override', async () => {
+    // "Apply to all" and older sidecars can leave one range covering several
+    // blocks. Moving one of them must not drag the rest along with it.
+    const cue = (groupStartMs: number, groupEndMs: number, text: string) => ({
+      startMs: groupStartMs,
+      endMs: groupEndMs,
+      yPct: 88,
+      groupStartMs,
+      groupEndMs,
+      anchor: 'bottom' as const,
+      lines: [{ words: [{ text, isHighlighted: false }] }],
+    })
+    mockRust([cue(0, 1000, 'HELLO'), cue(1000, 2000, 'THERE')])
+    const onOverridesChange = vi.fn()
+
+    await act(async () => {
+      render(
+        <CaptionPositionPanel
+          videoPath="/tmp/clip.mp4"
+          segments={segments}
+          style={style}
+          overrides={[{ startMs: 0, endMs: 2000, yPct: 30 }]}
+          onOverridesChange={onOverridesChange}
+          shownPlatforms={platforms}
+          onShownPlatformsChange={vi.fn()}
+        />
+      )
+    })
+
+    const stage = await screen.findByAltText('Video frame')
+    const target = stage.parentElement as HTMLElement
+    await act(async () => {
+      target.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientY: 0 }))
+      target.dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientY: 100 }))
+    })
+
+    expect(onOverridesChange).toHaveBeenCalled()
+    const written = onOverridesChange.mock.calls.at(-1)?.[0] as PositionOverride[]
+    // The second block keeps the height it was already drawn at...
+    expect(written).toContainEqual({ startMs: 1000, endMs: 2000, yPct: 30 })
+    // ...and only the dragged one moves.
+    const moved = written.find((o) => o.startMs === 0 && o.endMs === 1000)
+    expect(moved?.yPct).toBeGreaterThan(30)
   })
 
   it('offsets the caption layer by the difference from its default position', async () => {

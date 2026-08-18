@@ -91,6 +91,10 @@ export function CaptionEditor({
   // Set when a caption is picked in the position view, so the matching text is
   // easy to find in a long list.
   const [highlightedSegmentIndex, setHighlightedSegmentIndex] = useState<number | null>(null)
+  // The time range the still in the position view is showing. Captions are drawn
+  // a few words at a time, so a sentence in this list is on screen in pieces —
+  // this is the piece the user is looking at.
+  const [shownRange, setShownRange] = useState<{ startMs: number; endMs: number } | null>(null)
   const segmentRefs = useRef<(HTMLDivElement | null)[]>([])
 
   const positionStyle = useMemo(
@@ -159,7 +163,15 @@ export function CaptionEditor({
   }
 
   const handleSelectBlock = (range: { startMs: number; endMs: number }) => {
+    setShownRange(range)
     revealSegment(segmentIndexForRange(range))
+  }
+
+  /** Is this word part of the caption block the still is showing? */
+  const isOnStill = (word: WordSpan) => {
+    if (!isPositioning || !shownRange) return false
+    const middle = word.startMs + (word.endMs - word.startMs) / 2
+    return middle >= shownRange.startMs && middle <= shownRange.endMs
   }
 
   const handleEditBlock = (range: { startMs: number; endMs: number }) => {
@@ -382,6 +394,12 @@ export function CaptionEditor({
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 p-4">
+          {isPositioning && (
+            <p className="text-[11px] leading-relaxed text-white/40">
+              A caption is drawn a few words at a time. The highlighted words are the ones on the still — pick another
+              frame below it to see the rest.
+            </p>
+          )}
           {segments.map((seg, idx) => {
             const isEditing = editingSegmentIndex === idx
 
@@ -456,11 +474,21 @@ export function CaptionEditor({
                 {/* Words */}
                 <div className="flex flex-wrap gap-1.5">
                   {seg.words.map((word, wIdx) => {
+                    const onStill = isOnStill(word)
                     return (
                       <span
                         key={wIdx}
-                        className="px-2 py-1 rounded text-sm border transition-colors cursor-default bg-white/5 border-white/10 hover:bg-white/10 text-white/80"
-                        title={`${formatTime(word.startMs)} - ${formatTime(word.endMs)}`}
+                        className={cn(
+                          'px-2 py-1 rounded text-sm border transition-colors cursor-default',
+                          onStill
+                            ? 'bg-primary/25 border-primary/70 text-white'
+                            : 'bg-white/5 border-white/10 hover:bg-white/10 text-white/80'
+                        )}
+                        title={
+                          onStill
+                            ? `${formatTime(word.startMs)} - ${formatTime(word.endMs)} — on the still`
+                            : `${formatTime(word.startMs)} - ${formatTime(word.endMs)}`
+                        }
                       >
                         {word.text}
                       </span>
