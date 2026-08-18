@@ -2115,9 +2115,14 @@ pub fn whisper_to_caption_segments(
         let mut wi = 0usize;
         let mut out = Vec::with_capacity(segments.len());
 
-        for seg in segments {
+        for (seg_idx, seg) in segments.iter().enumerate() {
             let start_ms = (seg.start * 1000.0) as u64;
             let end_ms = (seg.end * 1000.0) as u64;
+            // Where the next segment's own words begin. The tolerance below may
+            // only reach into silence, never past this line.
+            let next_start_ms = segments
+                .get(seg_idx + 1)
+                .map(|next| (next.start * 1000.0) as u64);
 
             // skip segments that are beyond the actual audio duration
             if let Some(max_ms) = max_duration_ms {
@@ -2151,8 +2156,19 @@ pub fn whisper_to_caption_segments(
             // tolerance to this segment *and* the next one, so boundary words
             // appeared twice — and two segments holding the same words render as
             // two caption blocks on top of each other.
+            //
+            // The tolerance also has to stop at the next segment: whisper puts a
+            // segment boundary exactly where the next word starts, so a plain
+            // `end + 100ms` window swallowed that word — and with the cursor
+            // moved past it, every following segment held the words of the one
+            // before it. Sentences and word timings then disagreed by one word
+            // all the way to the end of the video.
             let mut segment_words = Vec::new();
-            let window_end = final_end_ms + 100; // +100ms tolerance
+            let window_end = match next_start_ms {
+                // Only reach into the gap, and stop just short of the next word.
+                Some(next) => (final_end_ms + 100).min(next.saturating_sub(1)),
+                None => final_end_ms + 100,
+            };
             while wi < all_words.len() {
                 let w = &all_words[wi];
                 let w_start_ms = (w.start * 1000.0) as u64;
@@ -2412,6 +2428,83 @@ mod tests {
             }
         }
         assert_eq!(seen, vec!["one", "two", "three", "four"]);
+
+        // ...and each word stays with the sentence it was spoken in. A word
+        // starting just after a boundary belongs to the segment that follows it,
+        // not to the one whose tolerance window happens to reach it.
+        let words_of = |segment: &CaptionSegment| {
+            segment
+                .words
+                .iter()
+                .map(|w| w.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words_of(&segments[0]), vec!["one", "two"]);
+        assert_eq!(words_of(&segments[1]), vec!["three", "four"]);
+    }
+
+    #[test]
+    fn boundary_word_does_not_shift_every_later_segment() {
+        // Whisper puts the boundary exactly where the next word starts, so the
+        // tolerance used to swallow that word into the previous segment. With
+        // the cursor moved past it, every following segment held the words of
+        // the sentence before it: the editor showed one text, the burner
+        // rendered another.
+        use crate::types::{WhisperResponse, WhisperSegment, WhisperWord};
+
+        let seg = |id: u32, start: f64, end: f64, text: &str| WhisperSegment {
+            id,
+            start,
+            end,
+            text: text.to_string(),
+        };
+        let word = |text: &str, start: f64, end: f64| WhisperWord {
+            word: text.to_string(),
+            start,
+            end,
+            glue_to_previous: false,
+        };
+
+        let response = WhisperResponse {
+            task: None,
+            language: None,
+            duration: Some(6.0),
+            text: "yksi kaksi kolme neljä viisi".to_string(),
+            segments: Some(vec![
+                seg(0, 0.0, 2.0, "yksi kaksi"),
+                seg(1, 2.0, 4.0, "kolme neljä"),
+                seg(2, 4.0, 6.0, "viisi"),
+            ]),
+            words: Some(vec![
+                word("yksi", 0.04, 0.9),
+                word("kaksi", 1.0, 2.0),
+                // Starts on the boundary, i.e. inside the old +100ms window.
+                word("kolme", 2.0, 3.0),
+                word("neljä", 3.02, 4.0),
+                word("viisi", 4.04, 6.0),
+            ]),
+        };
+
+        let segments = whisper_to_caption_segments(&response, false);
+        let words_of = |segment: &CaptionSegment| {
+            segment
+                .words
+                .iter()
+                .map(|w| w.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words_of(&segments[0]), vec!["yksi", "kaksi"]);
+        assert_eq!(words_of(&segments[1]), vec!["kolme", "neljä"]);
+        assert_eq!(words_of(&segments[2]), vec!["viisi"]);
+
+        // The words a segment holds are the words its own text names.
+        for segment in &segments {
+            assert_eq!(
+                words_of(segment).join(" "),
+                segment.text.trim(),
+                "segment text and word timings disagree"
+            );
+        }
     }
 
     // ============================================
