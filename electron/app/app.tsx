@@ -31,6 +31,9 @@ import { cn } from '@/lib/utils'
 import { TitleBar } from './components/TitleBar'
 import { ModelDownloader } from './components/ModelDownloader'
 import { CaptionEditor, CaptionSegment } from './components/CaptionEditor'
+import type { PositionOverride } from './components/CaptionPositionPanel'
+import { RecentVideos, rememberRecentVideos } from './components/RecentVideos'
+import { blockedBandsFor, loadPlatformSelection, savePlatformSelection, type PlatformId } from './components/safe-areas'
 import {
   Dialog,
   DialogContent,
@@ -512,8 +515,10 @@ function SettingsModal({
               onChange={(e) => setWhisperServerUrlState(e.target.value)}
             />
             <p className="text-xs text-white/30 leading-relaxed">
-              Optional. Point CapSlap at a whisper.cpp server (or any OpenAI-compatible Whisper API)
-              running on another machine, e.g. your Mac Studio: <code className="text-white/50">./server -m ggml-base.bin --port 8000</code>. When set, transcription runs on that machine instead of locally.
+              Optional. Point CapSlap at a whisper.cpp server (or any OpenAI-compatible Whisper API) running on another
+              machine, e.g. your Mac Studio:{' '}
+              <code className="text-white/50">./server -m ggml-base.bin --port 8000</code>. When set, transcription runs
+              on that machine instead of locally.
             </p>
           </div>
         </div>
@@ -583,12 +588,23 @@ export default function App() {
   const [exportStatus, setExportStatus] = useState('')
   const [previewFrames, setPreviewFrames] = useState<Record<string, string>>({}) // Map of template ID to base64 image
   const [rawPreviewFrame, setRawPreviewFrame] = useState<string | null>(null) // Fallback raw frame
+  const previewCache = React.useRef<Map<string, string>>(new Map())
 
   // Editor state
   const [isEditorOpen, setIsEditorOpen] = useState(false)
   const [editorSegments, setEditorSegments] = useState<CaptionSegment[]>([])
   const [editorVideoPath, setEditorVideoPath] = useState<string>('')
   const [editorJobId, setEditorJobId] = useState<string>('')
+  // Manual caption placements, kept out of the segments so timings stay untouched.
+  const [positionOverrides, setPositionOverrides] = useState<PositionOverride[]>([])
+  // Platforms to keep captions clear of. Lives here because the export needs it
+  // as much as the editor does.
+  const [shownPlatforms, setShownPlatforms] = useState<PlatformId[]>(loadPlatformSelection)
+
+  const updateShownPlatforms = (ids: PlatformId[]) => {
+    setShownPlatforms(ids)
+    savePlatformSelection(ids)
+  }
 
   useEffect(() => {
     // Listen for global progress events
@@ -615,18 +631,30 @@ export default function App() {
     // Use middle of the segment for better context
     const timestampMs = firstSegment.startMs + (firstSegment.endMs - firstSegment.startMs) / 2
 
-    console.log('Generating previews for timestamp:', timestampMs)
-
-    // Generate preview for each template in parallel — sequential runs mean
-    // every settings tweak costs 4 back-to-back ffmpeg jobs.
+    // Generate preview for each template in parallel, using cached results where possible
     const entries = await Promise.all(
       templates.map(async (template) => {
         try {
-          // If this is the currently selected template, use the current settings (overrides)
-          // Otherwise, use the template's defaults
           const isSelected = template.id === videoSettings.selectedTemplate
           const position = isSelected ? videoSettings.captionPosition : template.position
           const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
+          const fontName = getFontName(isSelected ? videoSettings.selectedFont : template.font)
+          const textColor = isSelected ? videoSettings.textColor : template.textColor
+          const highlightWordColor = isSelected ? videoSettings.highlightWordColor : template.highlightWordColor
+          const outlineColor = isSelected ? videoSettings.outlineColor : template.outlineColor
+          const fontSize = isSelected ? videoSettings.fontSize : 65
+          const glowEffect = isSelected ? videoSettings.glowEffect : template.glowEffect
+          const exportFormat =
+            videoSettings.exportFormats && videoSettings.exportFormats.length > 0
+              ? videoSettings.exportFormats[0]
+              : '9:16'
+          const cropStrategy = videoSettings.cropStrategy ?? 'fit'
+
+          const cacheKey = `${videoPath}:${Math.round(timestampMs)}:${firstSegment.text}:${template.id}:${fontName}:${textColor}:${highlightWordColor}:${outlineColor}:${fontSize}:${position}:${captionStyle}:${glowEffect}:${exportFormat}:${cropStrategy}:${shownPlatforms.join(',')}:${isSelected ? JSON.stringify(positionOverrides) : ''}`
+
+          if (previewCache.current.has(cacheKey)) {
+            return { id: template.id, imageData: previewCache.current.get(cacheKey)! }
+          }
 
           const result = (await (window as any).rust.call('generatePreviewFrame', {
             inputVideo: videoPath,
@@ -634,25 +662,30 @@ export default function App() {
             segments: [firstSegment], // Only pass the first segment for speed
             targetWidth: 1920, // Preview width
             // Rust struct expects camelCase
-            fontName: getFontName(videoSettings.selectedFont),
-            textColor: videoSettings.textColor,
-            highlightWordColor: videoSettings.highlightWordColor,
-            outlineColor: videoSettings.outlineColor,
-            fontSize: videoSettings.fontSize,
-            position: position,
+            fontName,
+            textColor,
+            highlightWordColor,
+            outlineColor,
+            fontSize,
+            position,
             karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
             multiline: captionStyle === 'karaoke-multiline',
-            glowEffect: videoSettings.glowEffect,
-            exportFormat:
-              videoSettings.exportFormats && videoSettings.exportFormats.length > 0
-                ? videoSettings.exportFormats[0]
-                : '9:16',
+            glowEffect,
+            exportFormat,
             outputSize: '1080p',
-            cropStrategy: videoSettings.cropStrategy,
-            fitMode: 'cover', // Added missing param if needed, defaults to cover
+            cropStrategy,
+            fitMode: 'cover',
+            positionOverrides: isSelected ? positionOverrides : [],
+            blockedBands: blockedBandsFor(shownPlatforms),
           })) as { imageData: string }
 
           if (result && result.imageData) {
+            // Keep preview cache bounded to 50 items
+            if (previewCache.current.size > 50) {
+              const firstKey = previewCache.current.keys().next().value
+              if (firstKey) previewCache.current.delete(firstKey)
+            }
+            previewCache.current.set(cacheKey, result.imageData)
             return { id: template.id, imageData: result.imageData }
           }
           return { id: template.id, imageData: null }
@@ -744,6 +777,28 @@ export default function App() {
     })
   }
 
+  /** Load the first frame of a newly added video into the preview area. */
+  const loadPreviewFrameFor = async (videoPath: string) => {
+    try {
+      const result = (await window.rust.call('extractFirstFrame', { videoPath })) as {
+        imageData: string
+      }
+      if (result && result.imageData) {
+        setRawPreviewFrame(result.imageData)
+      }
+    } catch (e) {
+      console.error('Failed to extract frame preview', e)
+    }
+  }
+
+  const handleOpenRecent = async (path: string) => {
+    rememberRecentVideos([path])
+    if (!selectedVideos.includes(path)) {
+      setSelectedVideos((prev) => [...prev, path])
+    }
+    await loadPreviewFrameFor(path)
+  }
+
   const handleVideoSelect = async () => {
     try {
       const paths = await window.rust.openFiles?.([
@@ -768,6 +823,7 @@ export default function App() {
         }
 
         setSelectedVideos((prev) => [...prev, ...pathsWithoutDuplicates])
+        rememberRecentVideos(pathsWithoutDuplicates)
 
         // Extract frame from the first new video
         if (pathsWithoutDuplicates.length > 0) {
@@ -843,6 +899,7 @@ export default function App() {
             endMs: Math.round(w.endMs),
           })),
         })),
+        positionOverrides,
       })
 
       await window.rust.call(
@@ -871,6 +928,8 @@ export default function App() {
           outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
           fontSize: videoSettings.fontSize,
+          positionOverrides,
+          blockedBands: blockedBandsFor(shownPlatforms),
         },
         editorJobId
       )
@@ -903,11 +962,13 @@ export default function App() {
       // Check for existing captions
       const result = (await window.rust.call('loadCaptions', { videoPath: video })) as {
         segments: CaptionSegment[] | null
+        positionOverrides?: PositionOverride[]
       }
 
       if (result && result.segments && result.segments.length > 0) {
         console.log('Loaded segments from disk', result.segments)
         setEditorSegments(result.segments)
+        setPositionOverrides(result.positionOverrides ?? [])
         setEditorVideoPath(video)
         setEditorJobId(requestId)
         setIsEditorOpen(true)
@@ -970,6 +1031,7 @@ export default function App() {
 
       if (result && result.transcription && result.transcription.segments) {
         setEditorSegments(result.transcription.segments)
+        setPositionOverrides([]) // Fresh captions start at the style's default position
         setIsGenerating(false) // Stop spinner, ready for edit
         setIsEditorOpen(true)
       } else {
@@ -1036,6 +1098,7 @@ export default function App() {
 
         // Extract frame from the first new video (drag and drop)
         const validNewPaths = pathsWithoutDuplicates.filter((path) => path !== null)
+        rememberRecentVideos(validNewPaths as string[])
         if (validNewPaths.length > 0) {
           const firstVideo = validNewPaths[0]
           try {
@@ -1524,7 +1587,10 @@ export default function App() {
         </div>
         {/* Upload sectino */}
 
-        <div className="relative flex-1 flex flex-col">
+        {/* min-w-0: without it this flex child refuses to shrink below the
+            intrinsic width of its content, and the caption filmstrip is as wide
+            as the video is long. */}
+        <div className="relative flex-1 flex flex-col min-w-0">
           {isEditorOpen ? (
             <CaptionEditor
               initialSegments={editorSegments}
@@ -1536,6 +1602,11 @@ export default function App() {
               onRefreshPreview={() => generatePreviews(editorVideoPath, editorSegments)}
               videoPath={editorVideoPath}
               settings={videoSettings}
+              fontName={getFontName(videoSettings.selectedFont)}
+              positionOverrides={positionOverrides}
+              onPositionOverridesChange={setPositionOverrides}
+              shownPlatforms={shownPlatforms}
+              onShownPlatformsChange={updateShownPlatforms}
               previewFrame={previewFrames[videoSettings.selectedTemplate] || rawPreviewFrame}
               isBurnedPreview={!!previewFrames[videoSettings.selectedTemplate]}
             />
@@ -1543,10 +1614,10 @@ export default function App() {
             <>
               <div className="relative flex-1 overflow-y-auto scrollbar-hide pb-28">
                 {selectedVideos.length === 0 && (
-                  <div className="h-full px-8 pt-6">
+                  <div className="h-full px-8 pt-6 pb-6 flex flex-col">
                     <div
                       className={cn(
-                        'group max-w-2xl mx-auto relative h-full flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer',
+                        'group w-full max-w-2xl mx-auto relative flex-1 min-h-[220px] flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer',
                         'hover:border-primary/70 hover:bg-primary/5',
                         isDragOver ? 'border-primary bg-primary/10 scale-[1.01]' : 'border-border/50 bg-card/30'
                       )}
@@ -1564,6 +1635,8 @@ export default function App() {
                         </div>
                       </div>
                     </div>
+
+                    <RecentVideos onOpen={handleOpenRecent} />
                   </div>
                 )}
 

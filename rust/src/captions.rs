@@ -2,7 +2,8 @@ use crate::rpc::RpcEvent;
 use crate::types::{
     BurnCaptionsParams, CaptionSegment, CaptionedVideoResult, ExtractAudioParams,
     GenerateCaptionsParams, GenerateCaptionsResult, LoadCaptionsParams, LoadCaptionsResult,
-    SaveCaptionsParams, TranscribeSegmentsParams, TranscribeSegmentsResult, WordSpan,
+    PositionOverride, SaveCaptionsParams, TranscribeSegmentsParams, TranscribeSegmentsResult,
+    WordSpan,
 };
 use crate::video::probe;
 use crate::{audio, whisper};
@@ -24,7 +25,7 @@ enum InternalUpdate {
 /// extracted audio and JSON files after every transcription/export.
 fn cleanup_temp_dir(dir: &std::path::Path) {
     if let Err(e) = fs::remove_dir_all(dir) {
-        eprintln!("DEBUG: failed to clean temp dir {:?}: {}", dir, e);
+        crate::debug_log!("DEBUG: failed to clean temp dir {:?}: {}", dir, e);
     }
 }
 
@@ -136,6 +137,8 @@ pub async fn burn_captions_with_segments(
             params.position,
             params.output_size,
             params.crop_strategy,
+            &params.position_overrides,
+            &params.blocked_bands,
             &mut emit,
         )
         .await
@@ -193,6 +196,8 @@ pub async fn generate_captions_single_pass(
             params.position,
             params.output_size,
             params.crop_strategy,
+            &params.position_overrides,
+            &params.blocked_bands,
             &mut emit,
         )
         .await?;
@@ -227,23 +232,15 @@ pub fn generate_preview_layout(
 
     let mut cues = Vec::new();
 
-    // Determine Y position as percentage for frontend
-    // In ASS, we calculated margin_v.
-    // If align is 5 (center), y_pct is 50.
-    // If align is 2 (bottom), y_pct is (100 - margin_pct).
-    // Let's reconstruct consistent pct from style.
-    let y_pct = if style.align == 5 {
-        50.0
-    } else {
-        // margin_v was calculated from pct_h
-        // margin_v = frame_h * (pct / 100)
-        // so pct = (margin_v / frame_h) * 100
-        let margin_pct = (style.margin_v as f32 / params.height as f32) * 100.0;
-        match style.align {
-            8 => margin_pct,         // Top aligned, margin from top
-            _ => 100.0 - margin_pct, // Bottom aligned (2), margin from bottom
-        }
+    // Same anchor the burner uses, expressed as a percentage of frame height so
+    // the editor can place an overlay without knowing about ASS.
+    let default_y = style_anchor_y(style.align, style.margin_v, params.height);
+    let anchor = match style.align {
+        5 => "center",
+        8 => "top",
+        _ => "bottom",
     };
+    let to_pct = |y: i32| (y as f32 / params.height as f32) * 100.0;
 
     if params.karaoke {
         let phrases = coalesce_phrases(&params.segments);
@@ -252,10 +249,32 @@ pub fn generate_preview_layout(
 
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
-            let segments =
-                split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size);
+            // Mirror build_ass_document's split so cue groups line up with the
+            // blocks that actually get rendered.
+            let segments = if params.multiline {
+                split_phrase_two_lines(&tokens_upper, &ph.spans, params.width, style.font_size)
+                    .into_iter()
+                    .map(|(t, s, _)| (t, s))
+                    .collect()
+            } else {
+                split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size)
+            };
 
             for (segment_tokens, segment_spans) in segments {
+                let group_start_ms = segment_spans.first().map(|s| s.start_ms).unwrap_or(0);
+                let group_end_ms = segment_spans.last().map(|s| s.end_ms).unwrap_or(0);
+                let y_pct = to_pct(cue_anchor_y(
+                    &params.position_overrides,
+                    &params.blocked_bands,
+                    group_start_ms,
+                    group_end_ms,
+                    default_y,
+                    params.height,
+                    style.align,
+                    if params.multiline { 2 } else { 1 },
+                    style.font_size,
+                ));
+
                 let windows = contiguous_cs_windows(&segment_spans);
 
                 for (i, (cs0, cs1)) in windows.iter().enumerate() {
@@ -281,6 +300,9 @@ pub fn generate_preview_layout(
                             words: preview_words,
                         }],
                         y_pct,
+                        group_start_ms,
+                        group_end_ms,
+                        anchor: anchor.to_string(),
                     });
                 }
             }
@@ -302,7 +324,6 @@ pub fn generate_preview_layout(
                 let segment_tokens_orig = original_tokens(&segment_spans);
                 let start_ms = segment_spans.first().unwrap().start_ms;
                 let end_ms = segment_spans.last().unwrap().end_ms;
-
                 let hi_opt = choose_highlight_idx(
                     &segment_tokens_orig,
                     &segment_spans,
@@ -378,17 +399,36 @@ pub fn generate_preview_layout(
                     vec![crate::types::PreviewLine { words }]
                 };
 
+                let y_pct = to_pct(cue_anchor_y(
+                    &params.position_overrides,
+                    &params.blocked_bands,
+                    start_ms,
+                    end_ms,
+                    default_y,
+                    params.height,
+                    style.align,
+                    lines_structure.len(),
+                    style.font_size,
+                ));
+
                 cues.push(crate::types::PreviewCue {
                     start_ms,
                     end_ms,
                     lines: lines_structure,
                     y_pct,
+                    // Non-karaoke cues are already one block each.
+                    group_start_ms: start_ms,
+                    group_end_ms: end_ms,
+                    anchor: anchor.to_string(),
                 });
             }
         }
     }
 
-    Ok(crate::types::PreviewLayoutResult { cues })
+    Ok(crate::types::PreviewLayoutResult {
+        cues,
+        font_size_px: style.font_size,
+    })
 }
 
 pub fn save_captions(params: SaveCaptionsParams) -> Result<()> {
@@ -396,7 +436,11 @@ pub fn save_captions(params: SaveCaptionsParams) -> Result<()> {
     // (appended, not extension-replaced, so video.mp4 and video.avi never clash)
     let json_path = format!("{}.capslap.json", params.video_path);
 
-    let json = serde_json::to_string_pretty(&params.segments)?;
+    let file = crate::types::CaptionsFile {
+        segments: params.segments,
+        position_overrides: params.position_overrides,
+    };
+    let json = serde_json::to_string_pretty(&file)?;
     fs::write(&json_path, json)?;
 
     Ok(())
@@ -408,13 +452,122 @@ pub fn load_captions(params: LoadCaptionsParams) -> Result<LoadCaptionsResult> {
 
     if path.exists() {
         let content = fs::read_to_string(path)?;
-        let segments: Vec<CaptionSegment> = serde_json::from_str(&content)?;
-        Ok(LoadCaptionsResult {
-            segments: Some(segments),
-        })
+        // Current format is an object; sidecars written by older builds are a
+        // bare array of segments.
+        match serde_json::from_str::<crate::types::CaptionsFile>(&content) {
+            Ok(file) => Ok(LoadCaptionsResult {
+                segments: Some(file.segments),
+                position_overrides: file.position_overrides,
+            }),
+            Err(_) => {
+                let segments: Vec<CaptionSegment> = serde_json::from_str(&content)?;
+                Ok(LoadCaptionsResult {
+                    segments: Some(segments),
+                    position_overrides: Vec::new(),
+                })
+            }
+        }
     } else {
-        Ok(LoadCaptionsResult { segments: None })
+        Ok(LoadCaptionsResult {
+            segments: None,
+            position_overrides: Vec::new(),
+        })
     }
+}
+
+/// Render the captions alone as an RGBA PNG the editor can drag over a
+/// caption-free frame.
+///
+/// FFmpeg gives us the same subtitles drawn on black and on white, stacked
+/// vertically. For a pixel where the caption covers a fraction `a` of the area,
+/// the two passes are `k = c*a` and `w = c*a + 255*(1-a)`, so the difference
+/// recovers the coverage and dividing it out of `k` recovers the colour.
+async fn render_caption_layer(
+    ffmpeg_path: &str,
+    frame_w: u32,
+    frame_h: u32,
+    ass_path: &str,
+    time_sec: f64,
+    scale_height: Option<u32>,
+) -> Result<Vec<u8>> {
+    let filter = crate::video::build_caption_layer_filter(ass_path, time_sec, scale_height);
+
+    let output = TokioCommand::new(ffmpeg_path)
+        .arg("-f")
+        .arg("lavfi")
+        .arg("-i")
+        .arg(format!("color=c=black:s={}x{}:d=1", frame_w, frame_h))
+        .arg("-f")
+        .arg("lavfi")
+        .arg("-i")
+        .arg(format!("color=c=white:s={}x{}:d=1", frame_w, frame_h))
+        .arg("-filter_complex")
+        .arg(&filter)
+        .arg("-map")
+        .arg("[out]")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2")
+        .arg("-c:v")
+        .arg("png")
+        .arg("-")
+        .output()
+        .await
+        .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!("FFmpeg caption layer render failed: {}", stderr));
+    }
+
+    let stacked = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+        .map_err(|e| anyhow!("Failed to decode caption layer: {}", e))?
+        .to_rgb8();
+
+    let (w, stacked_h) = stacked.dimensions();
+    if stacked_h < 2 {
+        return Err(anyhow!("Caption layer render returned an empty image"));
+    }
+    let h = stacked_h / 2;
+
+    let total_pixels = (w * h) as usize;
+    let raw = stacked.as_raw();
+    if raw.len() < total_pixels * 6 {
+        return Err(anyhow!("Unexpected caption layer image buffer size"));
+    }
+
+    let (black_slice, white_slice) = raw.split_at(total_pixels * 3);
+    let mut out_buffer = vec![0u8; total_pixels * 4];
+
+    for (out_px, (b_px, w_px)) in out_buffer
+        .chunks_exact_mut(4)
+        .zip(black_slice.chunks_exact(3).zip(white_slice.chunks_exact(3)))
+    {
+        let diff0 = w_px[0].saturating_sub(b_px[0]);
+        let diff1 = w_px[1].saturating_sub(b_px[1]);
+        let diff2 = w_px[2].saturating_sub(b_px[2]);
+        let showing_through = diff0.max(diff1).max(diff2);
+        let alpha = 255 - showing_through;
+
+        if alpha > 0 {
+            let inv_a = 255.0 / alpha as f32;
+            out_px[0] = ((b_px[0] as f32 * inv_a).min(255.0)) as u8;
+            out_px[1] = ((b_px[1] as f32 * inv_a).min(255.0)) as u8;
+            out_px[2] = ((b_px[2] as f32 * inv_a).min(255.0)) as u8;
+            out_px[3] = alpha;
+        }
+    }
+
+    let layer = image::RgbaImage::from_raw(w, h, out_buffer)
+        .ok_or_else(|| anyhow!("Failed to create RGBA caption layer buffer"))?;
+
+    let mut png = Vec::new();
+    layer
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| anyhow!("Failed to encode caption layer: {}", e))?;
+
+    Ok(png)
 }
 
 pub async fn generate_preview_frame(
@@ -440,95 +593,119 @@ pub async fn generate_preview_frame(
         let src_w = probe_result.width.unwrap_or(1920) as u32;
         let src_h = probe_result.height.unwrap_or(1080) as u32;
 
-        let (target_w, target_h) = if let Some(size) = &params.output_size {
-            match size.as_str() {
-                "1080p" => {
-                    let (base_w, base_h) = crate::video::ar_wh(target_ar);
-                    let ar = base_w as f64 / base_h as f64;
-                    if base_w > base_h {
-                        let w = (1080.0 * ar).round() as u32;
-                        (crate::video::round_even(w), 1080)
-                    } else {
-                        let h = (1080.0 / ar).round() as u32;
-                        (1080, crate::video::round_even(h))
-                    }
-                }
-                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
-            }
-        } else {
-            crate::video::canvas_no_downscale(src_w, src_h, target_ar)
-        };
+        let (target_w, target_h) =
+            crate::video::target_dimensions(params.output_size.as_deref(), src_w, src_h, target_ar);
 
         // Calculate crop strategy
         let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
 
-        let style = default_ass_style(
-            target_w,
-            target_h,
-            params.font_name.as_deref(),
-            params.text_color.as_deref(),
-            params.highlight_word_color.as_deref(),
-            params.outline_color.as_deref(),
-            params.glow_effect,
-            params.position.as_deref(),
-            params.font_size,
-        );
+        let render_mode = params.render_mode.as_deref().unwrap_or("video");
+        let wants_captions = render_mode != "clean";
 
-        let ass_doc = build_ass_document(
-            target_w,
-            target_h,
-            &style,
-            &params.segments,
-            params.karaoke,
-            params.multiline,
-            params.glow_effect,
-        )?;
+        // The caption layer is drawn on transparent black, so it must stay PNG.
+        // Thumbnails of real frames are photos — JPEG keeps the data URI small.
+        let transparent = render_mode == "captions";
+        let as_jpeg = params.thumbnail_height.is_some() && !transparent;
 
-        let ass_path = temp_dir.join("preview.ass");
-        fs::write(&ass_path, &ass_doc)?;
+        let ass_str = if wants_captions {
+            let style = default_ass_style(
+                target_w,
+                target_h,
+                params.font_name.as_deref(),
+                params.text_color.as_deref(),
+                params.highlight_word_color.as_deref(),
+                params.outline_color.as_deref(),
+                params.glow_effect,
+                params.position.as_deref(),
+                params.font_size,
+            );
 
-        // Construct filter graph
-        let ass_str = ass_path.to_string_lossy().to_string();
-        let is_hdr = crate::video::is_hdr(&probe_result);
-        let vf = crate::video::build_fitpad_filter_with_options(
-            target_w,
-            target_h,
-            Some(&ass_str),
-            crate::video::HardwareEncoder::Software, // Use software mode for compatibility
-            crop_strategy,
-            is_hdr,
-        );
+            let ass_doc = build_ass_document(
+                target_w,
+                target_h,
+                &style,
+                &params.segments,
+                params.karaoke,
+                params.multiline,
+                params.glow_effect,
+                &params.position_overrides,
+                &params.blocked_bands,
+            )?;
 
-        // Extract frame using FFmpeg
+            let ass_path = temp_dir.join("preview.ass");
+            fs::write(&ass_path, &ass_doc)?;
+            Some(ass_path.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
         let ffmpeg_path = crate::video::get_ffmpeg_path_sync();
         let time_sec = params.timestamp_ms as f64 / 1000.0;
 
-        let output = TokioCommand::new(&ffmpeg_path)
-            .arg("-ss")
-            .arg(time_sec.to_string())
-            .arg("-i")
-            .arg(&params.input_video)
-            .arg("-vf")
-            .arg(&vf)
-            .arg("-frames:v")
-            .arg("1")
-            .arg("-f")
-            .arg("image2")
-            .arg("-c:v")
-            .arg("png")
-            .arg("-") // Output to stdout
-            .output()
-            .await
-            .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
+        let image_bytes = if transparent {
+            render_caption_layer(
+                &ffmpeg_path,
+                target_w,
+                target_h,
+                ass_str.as_deref().unwrap(),
+                time_sec,
+                params.thumbnail_height,
+            )
+            .await?
+        } else {
+            // Construct filter graph
+            let is_hdr = crate::video::is_hdr(&probe_result);
+            let mut vf = crate::video::build_fitpad_filter_with_options(
+                target_w,
+                target_h,
+                ass_str.as_deref(),
+                crate::video::HardwareEncoder::Software, // Use software mode for compatibility
+                crop_strategy,
+                is_hdr,
+            );
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("FFmpeg preview failed: {}", stderr));
-        }
+            if let Some(thumb_h) = params.thumbnail_height {
+                vf.push_str(&format!(",scale=-2:{}:flags=bilinear", thumb_h.max(2)));
+            }
+
+            // Restore the seeked-to moment before libass looks for a cue.
+            if ass_str.is_some() {
+                vf = format!("{},{}", crate::video::seek_pts_filter(time_sec), vf);
+            }
+
+            let output = TokioCommand::new(&ffmpeg_path)
+                .arg("-ss")
+                .arg(time_sec.to_string())
+                .arg("-i")
+                .arg(&params.input_video)
+                .arg("-threads")
+                .arg("2")
+                .arg("-vf")
+                .arg(&vf)
+                .arg("-frames:v")
+                .arg("1")
+                .arg("-f")
+                .arg("image2")
+                .arg("-c:v")
+                .arg(if as_jpeg { "mjpeg" } else { "png" })
+                .args(if as_jpeg { vec!["-q:v", "4"] } else { vec![] })
+                .arg("-") // Output to stdout
+                .output()
+                .await
+                .map_err(|e| anyhow!("Failed to run ffmpeg: {}", e))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(anyhow!("FFmpeg preview failed: {}", stderr));
+            }
+
+            output.stdout
+        };
 
         use base64::{engine::general_purpose, Engine as _};
-        let encoded = general_purpose::STANDARD.encode(&output.stdout);
-        let data_uri = format!("data:image/png;base64,{}", encoded);
+        let encoded = general_purpose::STANDARD.encode(&image_bytes);
+        let mime = if as_jpeg { "jpeg" } else { "png" };
+        let data_uri = format!("data:image/{};base64,{}", mime, encoded);
 
         Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult { image_data: data_uri })
     }
@@ -569,6 +746,11 @@ mod tests_persistence {
         save_captions(SaveCaptionsParams {
             video_path: video_path.clone(),
             segments: segments.clone(),
+            position_overrides: vec![PositionOverride {
+                start_ms: 1000,
+                end_ms: 2000,
+                y_pct: 35.0,
+            }],
         })?;
 
         // Check file exists
@@ -585,11 +767,130 @@ mod tests_persistence {
         assert_eq!(loaded_segments.len(), 2);
         assert_eq!(loaded_segments[0].text, "Hello world");
         assert_eq!(loaded_segments[1].end_ms, 3500);
+        assert_eq!(loaded.position_overrides.len(), 1);
+        assert_eq!(loaded.position_overrides[0].y_pct, 35.0);
 
         // Cleanup
         let _ = fs::remove_file(json_path);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_load_legacy_bare_array_sidecar() -> Result<()> {
+        // Sidecars written before position overrides existed are a bare array.
+        let video_file = NamedTempFile::new()?;
+        let video_path = video_file.path().to_string_lossy().to_string();
+        let json_path = format!("{}.capslap.json", video_path);
+
+        fs::write(
+            &json_path,
+            r#"[{"startMs":0,"endMs":500,"text":"Legacy","words":[]}]"#,
+        )?;
+
+        let loaded = load_captions(LoadCaptionsParams {
+            video_path: video_path.clone(),
+        })?;
+
+        let loaded_segments = loaded.segments.expect("legacy sidecar should load");
+        assert_eq!(loaded_segments.len(), 1);
+        assert_eq!(loaded_segments[0].text, "Legacy");
+        assert!(loaded.position_overrides.is_empty());
+
+        let _ = fs::remove_file(json_path);
+
+        Ok(())
+    }
+
+    #[test]
+    fn a_word_split_across_a_segment_boundary_is_put_back_together() {
+        // Exactly what whisper does with long Finnish words: it emits "korke"
+        // and "alla" as separate pieces and breaks the segment between them.
+        let segments = vec![
+            CaptionSegment {
+                start_ms: 0,
+                end_ms: 1000,
+                text: "tarpeeksi korke".to_string(),
+                words: vec![
+                    WordSpan {
+                        start_ms: 0,
+                        end_ms: 500,
+                        text: "tarpeeksi".to_string(),
+                        glue_to_previous: false,
+                    },
+                    WordSpan {
+                        start_ms: 500,
+                        end_ms: 1000,
+                        text: "korke".to_string(),
+                        glue_to_previous: false,
+                    },
+                ],
+            },
+            CaptionSegment {
+                start_ms: 1000,
+                end_ms: 2000,
+                text: "alla birtsille.".to_string(),
+                words: vec![
+                    WordSpan {
+                        start_ms: 1000,
+                        end_ms: 1400,
+                        text: "alla".to_string(),
+                        glue_to_previous: true,
+                    },
+                    WordSpan {
+                        start_ms: 1400,
+                        end_ms: 2000,
+                        text: "birtsille.".to_string(),
+                        glue_to_previous: false,
+                    },
+                ],
+            },
+        ];
+
+        let phrases = coalesce_phrases(&segments);
+        let words: Vec<&str> = phrases
+            .iter()
+            .flat_map(|p| p.spans.iter())
+            .map(|s| s.text.as_str())
+            .collect();
+
+        assert_eq!(words, vec!["tarpeeksi", "korkealla", "birtsille."]);
+
+        // The rejoined word has to cover both halves, or karaoke would stop
+        // highlighting it halfway through.
+        let joined = phrases
+            .iter()
+            .flat_map(|p| p.spans.iter())
+            .find(|s| s.text == "korkealla")
+            .expect("the halves should have been joined");
+        assert_eq!(joined.start_ms, 500);
+        assert_eq!(joined.end_ms, 1400);
+    }
+
+    #[test]
+    fn test_resolve_anchor_y_uses_override_for_matching_cue() {
+        let overrides = vec![PositionOverride {
+            start_ms: 1000,
+            end_ms: 2000,
+            y_pct: 25.0,
+        }];
+
+        // Cue midpoint 1500ms falls inside the override.
+        assert_eq!(resolve_anchor_y(&overrides, 1000, 2000, 900, 1000), 250);
+        // Cue midpoint 2500ms does not, so the style default stands.
+        assert_eq!(resolve_anchor_y(&overrides, 2000, 3000, 900, 1000), 900);
+        // No overrides at all.
+        assert_eq!(resolve_anchor_y(&[], 1000, 2000, 900, 1000), 900);
+    }
+
+    #[test]
+    fn test_style_anchor_y_per_alignment() {
+        // Bottom-aligned keeps its margin from the bottom edge...
+        assert_eq!(style_anchor_y(2, 120, 1000), 880);
+        // ...center ignores the margin...
+        assert_eq!(style_anchor_y(5, 120, 1000), 500);
+        // ...and top measures its margin from the top.
+        assert_eq!(style_anchor_y(8, 120, 1000), 120);
     }
 }
 
@@ -612,6 +913,8 @@ async fn optimized_multi_format_encode(
     position: Option<String>,
     output_size: Option<String>,
     crop_strategy: Option<String>,
+    position_overrides: &[PositionOverride],
+    blocked_bands: &[(f32, f32)],
     emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     // Fail fast if libass is not available (required for burning subtitles)
@@ -648,50 +951,8 @@ async fn optimized_multi_format_encode(
         let src_h = probe_result.height.unwrap_or(1080) as u32;
 
         // Determine target dimensions based on output_size or aspect ratio
-        let (target_w, target_h) = if let Some(size) = &output_size {
-            let (base_w, base_h) = crate::video::ar_wh(target_ar);
-            let ar = base_w as f64 / base_h as f64;
-
-            match size.as_str() {
-                "1080p" => {
-                    // Logic:
-                    // If Landscape (w > h): H=1080, W=1080*AR
-                    // If Portrait (h > w):  W=1080, H=1080/AR
-                    // If Square: 1080x1080
-                    if base_w > base_h {
-                        let w = (1080.0 * ar).round() as u32;
-                        (crate::video::round_even(w), 1080)
-                    } else {
-                        let h = (1080.0 / ar).round() as u32;
-                        (1080, crate::video::round_even(h))
-                    }
-                }
-                "720p" => {
-                    if base_w > base_h {
-                        let w = (720.0 * ar).round() as u32;
-                        (crate::video::round_even(w), 720)
-                    } else {
-                        let h = (720.0 / ar).round() as u32;
-                        (720, crate::video::round_even(h))
-                    }
-                }
-                "4k" | "2160p" => {
-                    // 4K usually refers to 3840x2160 (UHD)
-                    // Landscape: H=2160
-                    // Portrait: W=2160
-                    if base_w > base_h {
-                        let w = (2160.0 * ar).round() as u32;
-                        (crate::video::round_even(w), 2160)
-                    } else {
-                        let h = (2160.0 / ar).round() as u32;
-                        (2160, crate::video::round_even(h))
-                    }
-                }
-                _ => crate::video::canvas_no_downscale(src_w, src_h, target_ar),
-            }
-        } else {
-            crate::video::canvas_no_downscale(src_w, src_h, target_ar)
-        };
+        let (target_w, target_h) =
+            crate::video::target_dimensions(output_size.as_deref(), src_w, src_h, target_ar);
 
         // Build ASS subtitle file optimized for this format
         emit(RpcEvent::Log {
@@ -721,6 +982,8 @@ async fn optimized_multi_format_encode(
             karaoke,
             multiline,
             glow_effect,
+            position_overrides,
+            blocked_bands,
         )?;
         emit(RpcEvent::Log {
             id: id.into(),
@@ -1040,7 +1303,11 @@ async fn try_encode_with_encoder(
     });
 
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
+    cmd.stderr(if crate::debug_enabled() {
+        std::process::Stdio::inherit()
+    } else {
+        std::process::Stdio::null()
+    });
 
     // Log intent
     let _ = tx.send(InternalUpdate::Event(RpcEvent::Log {
@@ -1169,7 +1436,7 @@ struct Phrase {
 
 // Heuristics: new phrase if punctuation on previous token or gap > 350ms or length > 3 words
 fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
-    eprintln!(
+    crate::debug_log!(
         "DEBUG: Entering coalesce_phrases with {} segments",
         segments.len()
     );
@@ -1177,13 +1444,27 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
     for s in segments {
         for w in &s.words {
             let t = w.text.trim();
-            if !t.is_empty() {
-                all.push(WordSpan {
-                    start_ms: w.start_ms,
-                    end_ms: w.end_ms,
-                    text: t.to_string(),
-                });
+            if t.is_empty() {
+                continue;
             }
+
+            // Put a word back together before anything measures or wraps it.
+            // Doing it here means line breaking, highlighting and karaoke all
+            // see one word, with no special cases of their own.
+            if w.glue_to_previous {
+                if let Some(previous) = all.last_mut() {
+                    previous.text.push_str(t);
+                    previous.end_ms = w.end_ms.max(previous.end_ms);
+                    continue;
+                }
+            }
+
+            all.push(WordSpan {
+                start_ms: w.start_ms,
+                end_ms: w.end_ms,
+                text: t.to_string(),
+                glue_to_previous: false,
+            });
         }
         // Fallback: if a segment has text but no words, split evenly so nothing gets dropped
         if s.words.is_empty() && !s.text.trim().is_empty() {
@@ -1199,6 +1480,7 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
                     start_ms: s0,
                     end_ms: e0,
                     text: tok.to_string(),
+                    glue_to_previous: false,
                 });
             }
         }
@@ -1354,6 +1636,7 @@ fn preprocess_hyphenated_tokens(
                         start_ms: s_ms,
                         end_ms: e_ms,
                         text: sub_token.clone(),
+                        glue_to_previous: false,
                     });
 
                     current_start += part_dur;
@@ -1484,6 +1767,88 @@ struct AssStyle {
     align: u32,        // 1..9 grid; 2 = bottom-center
     margin_v: u32,     // pixels
     highlight: String, // green for current word
+}
+
+/// The Y coordinate we hand to ASS `\pos` for a style with no manual override.
+///
+/// Which edge of the text block lands on that coordinate depends on the
+/// alignment: `\an8` anchors the top, `\an5` the middle, `\an2` the bottom.
+fn style_anchor_y(align: u32, margin_v: u32, frame_h: u32) -> i32 {
+    match align {
+        5 => (frame_h / 2) as i32,                      // Middle center
+        8 => margin_v as i32,                           // Top center, margin from the top
+        _ => (frame_h as i32 - margin_v as i32).max(0), // Bottom center, margin from the bottom
+    }
+}
+
+/// Which edge of the text block sits on the anchor, for a given ASS alignment.
+fn anchor_name(align: u32) -> &'static str {
+    match align {
+        5 => "center",
+        8 => "top",
+        _ => "bottom",
+    }
+}
+
+/// Rough height of a caption block as a percentage of frame height. ASS lines
+/// sit about 1.2 line heights apart; the outline adds a little.
+fn block_height_pct(line_count: usize, font_size: u32, frame_h: u32) -> f32 {
+    if frame_h == 0 {
+        return 0.0;
+    }
+    (line_count.max(1) as f32) * (font_size as f32 * 1.25) / (frame_h as f32) * 100.0
+}
+
+/// Anchor Y for one cue, in pixels.
+///
+/// A manual placement wins outright — the user dragged it there. Otherwise the
+/// style's own position is used, nudged clear of any interface the target
+/// platforms draw over the video.
+#[allow(clippy::too_many_arguments)]
+fn cue_anchor_y(
+    overrides: &[PositionOverride],
+    blocked: &[(f32, f32)],
+    start_ms: u64,
+    end_ms: u64,
+    default_y: i32,
+    frame_h: u32,
+    align: u32,
+    line_count: usize,
+    font_size: u32,
+) -> i32 {
+    let overridden = resolve_anchor_y(overrides, start_ms, end_ms, default_y, frame_h);
+    if overridden != default_y || blocked.is_empty() || frame_h == 0 {
+        return overridden;
+    }
+
+    let y_pct = (default_y as f32 / frame_h as f32) * 100.0;
+    let dodged = crate::placement::dodge_blocked(
+        y_pct,
+        anchor_name(align),
+        block_height_pct(line_count, font_size, frame_h),
+        blocked,
+    );
+    ((dodged / 100.0) * frame_h as f32).round() as i32
+}
+
+/// Anchor Y for one cue: a manual override if the cue's midpoint falls inside
+/// one, otherwise the style default.
+fn resolve_anchor_y(
+    overrides: &[PositionOverride],
+    start_ms: u64,
+    end_ms: u64,
+    default_y: i32,
+    frame_h: u32,
+) -> i32 {
+    if overrides.is_empty() {
+        return default_y;
+    }
+    let mid_ms = start_ms + end_ms.saturating_sub(start_ms) / 2;
+    overrides
+        .iter()
+        .find(|o| mid_ms >= o.start_ms && mid_ms <= o.end_ms)
+        .map(|o| (((frame_h as f32) * (o.y_pct / 100.0)).round() as i32).clamp(0, frame_h as i32))
+        .unwrap_or(default_y)
 }
 
 fn _pct_to_margin_v(frame_h: u32, y_pct_from_top: f32) -> u32 {
@@ -1812,6 +2177,7 @@ fn choose_highlight_idx(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_ass_document(
     w: u32,
     h: u32,
@@ -1820,11 +2186,13 @@ fn build_ass_document(
     karaoke: bool,
     multiline: bool,
     glow_effect: bool,
+    position_overrides: &[PositionOverride],
+    blocked_bands: &[(f32, f32)],
 ) -> Result<String> {
     if segments.is_empty() {
         return Err(anyhow!("No caption segments"));
     }
-    eprintln!(
+    crate::debug_log!(
         "DEBUG: build_ass_document start. karaoke={}, multiline={}, glow={}",
         karaoke, multiline, glow_effect
     );
@@ -1875,14 +2243,24 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     .collect()
             };
 
-            // Calculate Y position based on alignment
-            let y_pos = match style.align {
-                5 => (h / 2) as i32,                            // Middle center
-                _ => (h as i32 - style.margin_v as i32).max(0), // Bottom center
-            };
+            let default_y = style_anchor_y(style.align, style.margin_v, h);
 
             // Process each width-appropriate segment
             for (segment_tokens, segment_spans, split_idx) in segments {
+                // Every karaoke window of this block shares one Y, so a caption
+                // the user dragged moves as a whole instead of word by word.
+                let y_pos = cue_anchor_y(
+                    position_overrides,
+                    blocked_bands,
+                    segment_spans.first().map(|s| s.start_ms).unwrap_or(0),
+                    segment_spans.last().map(|s| s.end_ms).unwrap_or(0),
+                    default_y,
+                    h,
+                    style.align,
+                    if split_idx == usize::MAX { 1 } else { 2 },
+                    style.font_size,
+                );
+
                 let windows = contiguous_cs_windows(&segment_spans);
 
                 for (i, (cs0, cs1)) in windows.iter().enumerate() {
@@ -1973,11 +2351,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
         let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
         let x = (w / 2) as i32;
-        // Calculate Y position based on alignment
-        let y = match style.align {
-            5 => (h / 2) as i32, // Middle center - use actual center of frame
-            _ => (h as i32 - style.margin_v as i32).max(0), // Bottom center - use margin
-        };
+        let default_y = style_anchor_y(style.align, style.margin_v, h);
 
         let phrases = coalesce_phrases(segments);
 
@@ -1985,7 +2359,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         let mut hl_state = HighlightState::new(segments);
 
         for (p_idx, phrase) in phrases.iter().enumerate() {
-            eprintln!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
+            crate::debug_log!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
             let tokens_upper = normalize_tokens(&phrase.spans);
 
             // Split phrase into segments suitable for the current style
@@ -2050,6 +2424,21 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                         style.font_size,
                     )
                 };
+
+                // Now that the text is assembled we know how many lines it
+                // has, which is what deciding whether it clears the platform
+                // interface depends on.
+                let y = cue_anchor_y(
+                    position_overrides,
+                    blocked_bands,
+                    segment_spans.first().unwrap().start_ms,
+                    segment_spans.last().unwrap().end_ms,
+                    default_y,
+                    h,
+                    style.align,
+                    1 + text_body.matches(r"\N").count(),
+                    style.font_size,
+                );
 
                 // Your layered renderer (glow + black stroke + fill)
                 let glow_w = style.outline_w as f32 * 2.0;
@@ -2166,7 +2555,7 @@ fn split_phrase_multiline(
     frame_w: u32,
     font_px: u32,
 ) -> Vec<(Vec<String>, Vec<WordSpan>)> {
-    eprintln!(
+    crate::debug_log!(
         "DEBUG: split_phrase_multiline start. tokens={}",
         tokens.len()
     );
@@ -2218,7 +2607,7 @@ fn split_phrase_multiline(
     let mut current_chunk_lines = 1;
     let mut current_line_len = 0;
 
-    eprintln!(
+    crate::debug_log!(
         "DEBUG: split_phrase_multiline starting loop over {} tokens",
         tokens.len()
     );
@@ -2252,7 +2641,7 @@ fn split_phrase_multiline(
         segments.push((current_chunk_tokens, current_chunk_spans));
     }
 
-    eprintln!(
+    crate::debug_log!(
         "DEBUG: split_phrase_multiline end. segments={}",
         segments.len()
     );
@@ -2268,7 +2657,7 @@ fn assemble_multiline(
     font_size: u32,
     max_chars_per_line: usize,
 ) -> String {
-    eprintln!("DEBUG: assemble_multiline start. tokens={}", tokens.len());
+    crate::debug_log!("DEBUG: assemble_multiline start. tokens={}", tokens.len());
     // Similar to assemble_colored_two_lines but auto-wraps based on max_chars
     let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
     // Bigger font for highlight? Maybe not for block text, it might shift layout too much.
@@ -2285,7 +2674,7 @@ fn assemble_multiline(
 
     for (i, token) in tokens.iter().enumerate() {
         if i % 10 == 0 {
-            eprintln!("DEBUG: assemble_multiline loop i={}", i);
+            crate::debug_log!("DEBUG: assemble_multiline loop i={}", i);
         }
         let t_clean = token
             .replace('\\', r"\\")
@@ -2411,6 +2800,7 @@ mod tests {
             start_ms: 0,
             end_ms: 1000,
             text: "FOO-BAR".to_string(),
+            glue_to_previous: false,
         };
         let tokens = vec!["FOO-BAR".to_string()];
         let spans = vec![span];

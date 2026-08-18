@@ -258,6 +258,15 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                 Err(e) => write_err(format!("Invalid params for loadCaptions: {}", e)),
             }
         }
+        "autoPlaceCaptions" => {
+            match serde_json::from_value::<core::types::AutoPlaceParams>(r.params) {
+                Ok(p) => match core::placement::auto_place_captions(p).await {
+                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
+                    Err(e) => write_err(e.to_string()),
+                },
+                Err(e) => write_err(format!("Invalid params for autoPlaceCaptions: {}", e)),
+            }
+        }
         "generatePreviewFrame" => {
             match serde_json::from_value::<core::types::PreviewFrameParams>(r.params) {
                 Ok(p) => match captions::generate_preview_frame(p).await {

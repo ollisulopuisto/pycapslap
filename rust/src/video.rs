@@ -1,9 +1,29 @@
 use crate::rpc::RpcEvent;
 use crate::whisper::{find_ffmpeg_binary, find_ffprobe_binary};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{OnceLock, RwLock};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command as TokioCommand;
+
+static VIDEOTOOLBOX_AVAIL: OnceLock<bool> = OnceLock::new();
+static NVENC_AVAIL: OnceLock<bool> = OnceLock::new();
+static LIBASS_AVAIL: OnceLock<bool> = OnceLock::new();
+static FFMPEG_WHISPER_AVAIL: OnceLock<bool> = OnceLock::new();
+static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
+static BEST_HW_ENCODER: OnceLock<HardwareEncoder> = OnceLock::new();
+
+type ProbeCacheMap = HashMap<String, (Option<std::time::SystemTime>, u64, ProbeResult)>;
+
+// In-memory ProbeResult cache keyed by file path and (mtime, size)
+static PROBE_CACHE: OnceLock<RwLock<ProbeCacheMap>> = OnceLock::new();
+
+fn get_probe_cache() -> &'static RwLock<ProbeCacheMap> {
+    PROBE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+
 
 /// Get FFmpeg binary path synchronously (for use in sync functions)
 pub fn get_ffmpeg_path_sync() -> String {
@@ -17,12 +37,12 @@ pub fn get_ffmpeg_path_sync() -> String {
     // Try to use cached path or default to "ffmpeg"
     // In sync context, we can't use the full async detection
     if let Ok(ffmpeg_path) = std::env::var("FFMPEG_PATH") {
-        eprintln!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
+        crate::debug_log!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
         let path = std::path::Path::new(&ffmpeg_path);
         if usable(path) {
             return ffmpeg_path;
         } else {
-            eprintln!(
+            crate::debug_log!(
                 "DEBUG: FFMPEG_PATH points to non-existent or unrunnable file, falling back to auto-detection"
             );
         }
@@ -39,7 +59,7 @@ pub fn get_ffmpeg_path_sync() -> String {
     });
 
     if usable(&bundled_rust) {
-        eprintln!(
+        crate::debug_log!(
             "DEBUG: Found bundled ffmpeg at rust/bin: {:?}",
             bundled_rust
         );
@@ -55,7 +75,7 @@ pub fn get_ffmpeg_path_sync() -> String {
                 "bin/ffmpeg"
             });
             if usable(&bundled) {
-                eprintln!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
+                crate::debug_log!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
                 return bundled.to_string_lossy().to_string();
             }
         }
@@ -72,18 +92,18 @@ pub fn get_ffmpeg_path_sync() -> String {
     for path in paths {
         if let Ok(which_path) = which::which(path) {
             if usable(&which_path) {
-                eprintln!("DEBUG: Found ffmpeg at {}", which_path.display());
+                crate::debug_log!("DEBUG: Found ffmpeg at {}", which_path.display());
                 return which_path.to_string_lossy().to_string();
             }
         }
         let p = std::path::Path::new(path);
         if p.is_file() && usable(p) {
-            eprintln!("DEBUG: Found ffmpeg at {}", path);
+            crate::debug_log!("DEBUG: Found ffmpeg at {}", path);
             return path.to_string();
         }
     }
 
-    eprintln!("DEBUG: No ffmpeg found, falling back to 'ffmpeg'");
+    crate::debug_log!("DEBUG: No ffmpeg found, falling back to 'ffmpeg'");
     "ffmpeg".to_string() // Fallback
 }
 
@@ -137,6 +157,63 @@ pub enum TargetAR {
     AR16x9,
     AR4x5,
     AR1x1,
+}
+
+/// Longest edge H.264 encoders accept. VideoToolbox refuses to open a session
+/// beyond this, and the export then falls back to software — which on a canvas
+/// that large crawls badly enough to look like a hang.
+const MAX_ENCODE_EDGE: u32 = 4096;
+
+/// Shrink a canvas, keeping its shape, until an encoder will take it.
+///
+/// Bites when a source with an aspect ratio far from the target is exported at
+/// its own resolution: fitting a 4032x3024 phone video into 9:16 without
+/// downscaling calls for a 4032x7168 canvas, most of it black bars, at fourteen
+/// times the pixels of 1080p.
+fn clamp_to_encodable(w: u32, h: u32) -> (u32, u32) {
+    let longest = w.max(h);
+    if longest <= MAX_ENCODE_EDGE {
+        return (w, h);
+    }
+    let scale = MAX_ENCODE_EDGE as f64 / longest as f64;
+    // Round down to even: rounding up could land back over the limit.
+    let shrink = |v: u32| (((v as f64) * scale).round() as u32 & !1).max(2);
+    (shrink(w), shrink(h))
+}
+
+/// Frame size an export lands on, given the requested output size.
+///
+/// A named size fixes the short edge and derives the other from the aspect
+/// ratio; anything else keeps the source resolution where it can.
+pub fn target_dimensions(
+    output_size: Option<&str>,
+    src_w: u32,
+    src_h: u32,
+    target_ar: TargetAR,
+) -> (u32, u32) {
+    let Some(size) = output_size else {
+        let (w, h) = canvas_no_downscale(src_w, src_h, target_ar);
+        return clamp_to_encodable(w, h);
+    };
+
+    let edge: f64 = match size {
+        "1080p" => 1080.0,
+        "720p" => 720.0,
+        "4k" | "2160p" => 2160.0,
+        _ => {
+            let (w, h) = canvas_no_downscale(src_w, src_h, target_ar);
+            return clamp_to_encodable(w, h);
+        }
+    };
+
+    let (base_w, base_h) = ar_wh(target_ar);
+    let ar = base_w as f64 / base_h as f64;
+    let (w, h) = if base_w > base_h {
+        (round_even((edge * ar).round() as u32), edge as u32)
+    } else {
+        (edge as u32, round_even((edge / ar).round() as u32))
+    };
+    clamp_to_encodable(w, h)
 }
 
 pub fn round_even(x: u32) -> u32 {
@@ -267,6 +344,66 @@ pub fn build_fitpad_filter_with_format(
     build_fitpad_filter_with_options(target_w, target_h, subtitle_path, encoder, "fit", is_hdr)
 }
 
+/// The `ass` filter clause for a subtitle file, pointed at our bundled fonts
+/// when we can find them.
+fn ass_filter(subtitle_path: &str) -> String {
+    let escaped_path = escape_subtitle_path(subtitle_path);
+
+    match _get_fonts_dir() {
+        Some(fonts_dir) => {
+            let fonts_path_str = fonts_dir.to_string_lossy().to_string();
+            let escaped_fonts_path = escape_subtitle_path(&fonts_path_str);
+            // escape_subtitle_path wraps in single quotes; strip them so we can
+            // compose the ass='...':fontsdir='...' form.
+            let clean_path = escaped_path.trim_matches('\'');
+            let clean_fonts = escaped_fonts_path.trim_matches('\'');
+            format!("ass='{}':fontsdir='{}'", clean_path, clean_fonts)
+        }
+        None => format!("ass={}", escaped_path),
+    }
+}
+
+/// Draw the subtitles twice with no video in the graph — once on black, once on
+/// white — and stack the results.
+///
+/// libass leaves the alpha channel alone, so rendering straight onto a
+/// transparent canvas yields an invisible image. Rendering against two known
+/// backgrounds instead lets the caller recover exact per-pixel coverage:
+/// `white - black` is the background showing through, so `alpha = 255 - that`,
+/// and the black pass is the colour already premultiplied by it.
+pub fn build_caption_layer_filter(
+    subtitle_path: &str,
+    time_sec: f64,
+    scale_height: Option<u32>,
+) -> String {
+    let ass = ass_filter(subtitle_path);
+    let seek = seek_pts_filter(time_sec);
+    let scale = match scale_height {
+        Some(h) => format!(",scale=-2:{}:flags=bilinear", h.max(2)),
+        None => String::new(),
+    };
+    // Deliberately no explicit `format` conversion here: forcing one (gbrp in
+    // particular) makes swscale leave the trailing `width % 16` columns
+    // untouched, which reads as fully opaque once the two passes are compared.
+    format!(
+        "[0]{seek},{ass}{scale}[k];[1]{seek},{ass}{scale}[w];[k][w]vstack=inputs=2[out]",
+        seek = seek,
+        ass = ass,
+        scale = scale
+    )
+}
+
+/// Stamp a frame with an absolute presentation time.
+///
+/// Input seeking (`-ss` before `-i`) rebases timestamps to zero, so libass would
+/// look for a cue at t=0 no matter which moment we asked for — and draw nothing
+/// unless a caption happens to start the video. Since preview renders emit a
+/// single frame, pinning its PTS to the requested moment is both correct and
+/// independent of how the demuxer chose to seek.
+pub fn seek_pts_filter(time_sec: f64) -> String {
+    format!("setpts={:.3}/TB", time_sec.max(0.0))
+}
+
 // / Extended filter builder with crop strategy support
 pub fn build_fitpad_filter_with_options(
     target_w: u32,
@@ -322,28 +459,7 @@ pub fn build_fitpad_filter_with_options(
 
     // 3. Subtitles
     if let Some(path) = subtitle_path {
-        let escaped_path = escape_subtitle_path(path);
-
-        // Check for custom fonts directory
-        let fonts_dir_opt = _get_fonts_dir();
-
-        if let Some(fonts_dir) = fonts_dir_opt {
-            let fonts_path_str = fonts_dir.to_string_lossy().to_string();
-            let escaped_fonts_path = escape_subtitle_path(&fonts_path_str);
-            // Append :fontsdir=... to the ass filter
-            // Note: escape_subtitle_path wraps in single quotes, so we strip them for the param value if needed
-            // but for fontsdir inside the filter string, we need to be careful.
-            // standard syntax: ass='path.ass':fontsdir='fonts_path'
-
-            // Re-escape logic specifically for the filter param structure
-            // We strip the outer quotes from our helper for cleaner composition here
-            let clean_path = escaped_path.trim_matches('\'');
-            let clean_fonts = escaped_fonts_path.trim_matches('\'');
-
-            filters.push(format!("ass='{}':fontsdir='{}'", clean_path, clean_fonts));
-        } else {
-            filters.push(format!("ass={}", escaped_path));
-        }
+        filters.push(ass_filter(path));
     }
 
     // 3. Encoder-specific format optimization
@@ -431,57 +547,59 @@ pub fn is_macos() -> bool {
 /// Check if VideoToolbox H.264 encoder is available on macOS
 /// This function tests if ffmpeg supports h264_videotoolbox encoder
 pub async fn is_videotoolbox_available() -> bool {
-    if !is_macos() {
-        return false;
-    }
-
-    // Test if ffmpeg has h264_videotoolbox encoder available
-    let result = Command::new(get_ffmpeg_path_sync())
-        .args(["-hide_banner", "-encoders"])
-        .output();
-
-    match result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout.contains("h264_videotoolbox")
+    *VIDEOTOOLBOX_AVAIL.get_or_init(|| {
+        if !is_macos() {
+            return false;
         }
-        Err(_) => false,
-    }
+
+        let result = Command::new(get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-encoders"])
+            .output();
+
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains("h264_videotoolbox")
+            }
+            Err(_) => false,
+        }
+    })
 }
 
 /// Check if NVIDIA NVENC H.264 encoder is available
 /// This function tests if ffmpeg supports h264_nvenc encoder
 pub async fn is_nvenc_available() -> bool {
-    // Test if ffmpeg has h264_nvenc encoder available
-    let result = Command::new(get_ffmpeg_path_sync())
-        .args(["-hide_banner", "-encoders"])
-        .output();
+    *NVENC_AVAIL.get_or_init(|| {
+        let result = Command::new(get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-encoders"])
+            .output();
 
-    match result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            stdout.contains("h264_nvenc")
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains("h264_nvenc")
+            }
+            Err(_) => false,
         }
-        Err(_) => false,
-    }
+    })
 }
 
 /// Check if FFmpeg has built-in Whisper support (requires FFmpeg 8.0+)
 /// This function tests if ffmpeg supports the whisper audio filter
 pub async fn is_ffmpeg_whisper_available() -> bool {
-    // Test if ffmpeg has whisper filter available
-    let result = Command::new(get_ffmpeg_path_sync())
-        .args(["-hide_banner", "-filters"])
-        .output();
+    *FFMPEG_WHISPER_AVAIL.get_or_init(|| {
+        let result = Command::new(get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-filters"])
+            .output();
 
-    match result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Look for whisper filter in the audio filters list
-            stdout.contains("whisper")
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains("whisper")
+            }
+            Err(_) => false,
         }
-        Err(_) => false,
-    }
+    })
 }
 
 /// Check if whisper.cpp CLI is available (preferred method)
@@ -492,54 +610,82 @@ pub async fn is_whisper_cpp_available() -> bool {
 
 /// Check if FFmpeg has libass support for subtitles
 pub async fn is_libass_available() -> bool {
-    let result = Command::new(get_ffmpeg_path_sync())
-        .args(["-hide_banner", "-filters"])
-        .output();
+    *LIBASS_AVAIL.get_or_init(|| {
+        let result = Command::new(get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-filters"])
+            .output();
 
-    match result {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            // Look for 'ass' or 'subtitles' filter
-            stdout.contains(" ass ")
+        match result {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                stdout.contains(" ass ")
+            }
+            Err(_) => false,
         }
-        Err(_) => false,
-    }
+    })
 }
 
 /// Get FFmpeg version to check if it's 8.0+ for Whisper support
 pub async fn get_ffmpeg_version() -> Option<String> {
-    let result = Command::new(get_ffmpeg_path_sync())
-        .args(["-version"])
-        .output();
+    FFMPEG_VERSION
+        .get_or_init(|| {
+            let result = Command::new(get_ffmpeg_path_sync())
+                .args(["-version"])
+                .output();
 
-    match result {
-        Ok(output) => {
-            // FFmpeg -version outputs to stdout (not stderr like other commands)
-            let stdout = String::from_utf8_lossy(&output.stdout);
-
-            // Extract version from first line: "ffmpeg version 8.0.2 ..."
-            stdout.lines().next().and_then(|line| {
-                // Split by whitespace and find "version" then get next word
-                let words: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pos) = words.iter().position(|&word| word == "version") {
-                    words.get(pos + 1).map(|v| v.to_string())
-                } else {
-                    None
+            match result {
+                Ok(output) => {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    stdout.lines().next().and_then(|line| {
+                        let words: Vec<&str> = line.split_whitespace().collect();
+                        if let Some(pos) = words.iter().position(|&word| word == "version") {
+                            words.get(pos + 1).map(|v| v.to_string())
+                        } else {
+                            None
+                        }
+                    })
                 }
-            })
-        }
-        Err(_) => None,
-    }
+                Err(_) => None,
+            }
+        })
+        .clone()
 }
 
 /// Determine the best available hardware encoder
 pub async fn get_best_hardware_encoder() -> HardwareEncoder {
-    if is_videotoolbox_available().await {
-        HardwareEncoder::VideoToolbox
-    } else if is_nvenc_available().await {
-        HardwareEncoder::Nvenc
-    } else {
+    *BEST_HW_ENCODER.get_or_init(|| {
+        if !is_macos() {
+            if is_nvenc_sync() {
+                return HardwareEncoder::Nvenc;
+            }
+            return HardwareEncoder::Software;
+        }
+
+        let result = Command::new(get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-encoders"])
+            .output();
+
+        if let Ok(output) = result {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("h264_videotoolbox") {
+                return HardwareEncoder::VideoToolbox;
+            }
+        }
         HardwareEncoder::Software
+    })
+}
+
+fn is_nvenc_sync() -> bool {
+    let result = Command::new(get_ffmpeg_path_sync())
+        .args(["-hide_banner", "-encoders"])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            stdout.contains("h264_nvenc")
+        }
+        Err(_) => false,
     }
 }
 
@@ -991,7 +1137,11 @@ pub async fn export_video(
     cmd.arg("-progress").arg("pipe:1");
 
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
+    cmd.stderr(if crate::debug_enabled() {
+        std::process::Stdio::inherit()
+    } else {
+        std::process::Stdio::null()
+    });
 
     emit(RpcEvent::Log {
         id: id.into(),
@@ -1116,7 +1266,11 @@ pub async fn export_video(
 
         fallback_cmd
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit());
+            .stderr(if crate::debug_enabled() {
+                std::process::Stdio::inherit()
+            } else {
+                std::process::Stdio::null()
+            });
 
         emit(RpcEvent::Log {
             id: id.into(),
@@ -1183,6 +1337,24 @@ pub async fn probe(
     input: &str,
     mut emit: impl FnMut(RpcEvent),
 ) -> anyhow::Result<ProbeResult> {
+    // Check file metadata for caching
+    let meta = std::fs::metadata(input).ok();
+    let mtime = meta.as_ref().and_then(|m| m.modified().ok());
+    let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+
+    if let Ok(cache) = get_probe_cache().read() {
+        if let Some((cached_mtime, cached_size, cached_result)) = cache.get(input) {
+            if *cached_mtime == mtime && *cached_size == file_size {
+                emit(RpcEvent::Progress {
+                    id: id.into(),
+                    status: "Probed".into(),
+                    progress: 0.05,
+                });
+                return Ok(cached_result.clone());
+            }
+        }
+    }
+
     emit(RpcEvent::Progress {
         id: id.into(),
         status: "Probing…".into(),
@@ -1348,7 +1520,7 @@ pub async fn probe(
         status: "Probe complete".into(),
         progress: 1.0,
     });
-    Ok(ProbeResult {
+    let result = ProbeResult {
         duration,
         width,
         height,
@@ -1360,7 +1532,13 @@ pub async fn probe(
         color_space,
         color_transfer,
         color_primaries,
-    })
+    };
+
+    if let Ok(mut cache) = get_probe_cache().write() {
+        cache.insert(input.to_string(), (mtime, file_size, result.clone()));
+    }
+
+    Ok(result)
 }
 
 /// Check if video is HDR based on probe result
@@ -1405,15 +1583,16 @@ fn parse_fps(s: &str) -> Option<f64> {
 pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     let ffmpeg_path = get_ffmpeg_path_sync();
 
-    // Command to extract the first frame
-    // ffmpeg -i input.mp4 -ss 0 -vframes 1 -f image2 -c:v png -
+    // Fast input seeking with -ss 0 before -i
     let output = Command::new(&ffmpeg_path)
-        .arg("-i")
-        .arg(video_path)
         .arg("-ss")
         .arg("0")
+        .arg("-i")
+        .arg(video_path)
         .arg("-vframes")
         .arg("1")
+        .arg("-threads")
+        .arg("2")
         .arg("-f")
         .arg("image2")
         .arg("-c:v")
@@ -1439,6 +1618,37 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_phone_video_exported_at_source_size_stays_encodable() {
+        use super::*;
+        // 4032x3024 into 9:16 without downscaling wants 4032x7168, which
+        // VideoToolbox refuses; the export then falls back to software and
+        // takes long enough to look broken.
+        let (w, h) = target_dimensions(Some("original"), 4032, 3024, TargetAR::AR9x16);
+        assert!(
+            w <= 4096 && h <= 4096,
+            "canvas {}x{} is beyond what an H.264 encoder accepts",
+            w,
+            h
+        );
+        // The shape is kept.
+        let ratio = w as f32 / h as f32;
+        assert!((ratio - 9.0 / 16.0).abs() < 0.01, "aspect drifted to {}", ratio);
+        assert_eq!((w % 2, h % 2), (0, 0), "dimensions must stay even");
+    }
+
+    #[test]
+    fn ordinary_sizes_pass_through_untouched() {
+        use super::*;
+        assert_eq!(target_dimensions(Some("1080p"), 1920, 1080, TargetAR::AR9x16), (1080, 1920));
+        assert_eq!(target_dimensions(Some("4k"), 3840, 2160, TargetAR::AR9x16), (2160, 3840));
+        // A 16:9 source into 16:9 at its own size needs no clamping.
+        assert_eq!(
+            target_dimensions(Some("original"), 1920, 1080, TargetAR::AR16x9),
+            (1920, 1080)
+        );
+    }
+
     use super::*;
 
     // ============================================

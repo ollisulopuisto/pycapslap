@@ -13,7 +13,9 @@
   },
   "scripts": {
     "dev": "npm run build:rust && electron-vite dev -w",
-    "build:rust": "cd ../rust && cargo build",
+    "dev:debug": "CAPSLAP_DEBUG=1 npm run dev",
+    "build:rust": "cd ../rust && cargo build --release",
+    "build:rust:dev": "cd ../rust && cargo build",
     "lint": "eslint . --fix",
     "lint:rust": "cd ../rust && cargo clippy",
     "format": "prettier --write .",

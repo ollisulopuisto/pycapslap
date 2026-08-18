@@ -17,6 +17,7 @@ const api = {
 
 const rust = {
   openFiles: (filters?: any) => ipcRenderer.invoke('dialog:openFiles', { filters }),
+  filesExist: (paths: string[]): Promise<boolean[]> => ipcRenderer.invoke('files:exist', paths),
   call: (method: string, params: any, requestId?: string) =>
     ipcRenderer.invoke('core:call', { method, params, requestId }),
   onProgress: (cb: (p: any) => void) => {

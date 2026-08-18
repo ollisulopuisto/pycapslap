@@ -6,6 +6,7 @@ import { registerWindowIPC } from '@/lib/window/ipcEvents'
 import appIcon from '@/resources/build/icon.png?asset'
 import { pathToFileURL } from 'url'
 import { Sidecar } from './sidecar'
+import { debug, error as logError } from './log'
 
 let core: Sidecar | null = null
 let ipcRegistered = false
@@ -86,7 +87,7 @@ function registerResourcesProtocol() {
           filePath = relativePath.slice('local/'.length)
           // Decode generic URL encoding if needed (spaces etc)
           filePath = decodeURIComponent(filePath)
-          console.log('Loading local file:', filePath)
+          debug('Loading local file:', filePath)
         } else {
           const possiblePaths = [
             join(__dirname, '../../resources', relativePath),
@@ -104,7 +105,7 @@ function registerResourcesProtocol() {
         }
 
         if (!filePath || !fs.existsSync(filePath)) {
-          console.error('File not found:', filePath)
+          logError('File not found:', filePath)
           return new Response('Resource not found', { status: 404 })
         }
 
@@ -191,7 +192,7 @@ function registerResourcesProtocol() {
         const response = await net.fetch(pathToFileURL(filePath).toString())
         return response
       } catch (error) {
-        console.error('Protocol error:', error)
+        logError('Protocol error:', error)
         return new Response('Resource not found', { status: 404 })
       }
     })
@@ -200,26 +201,38 @@ function registerResourcesProtocol() {
 
 function registerRustIPC() {
   ipcMain.handle('dialog:openFiles', async (evt, payload) => {
-    console.log('[MAIN] File dialog requested:', payload)
+    debug('[MAIN] File dialog requested:', payload)
     const win = BrowserWindow.fromWebContents(evt.sender)
     const props: any[] = ['openFile', 'multiSelections']
     const filters = payload?.filters ?? undefined
     const options = { properties: props, filters }
-    const res = win && !win.isDestroyed()
-      ? await dialog.showOpenDialog(win, options)
-      : await dialog.showOpenDialog(options)
+    const res =
+      win && !win.isDestroyed() ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
     if (res.canceled || res.filePaths.length === 0) {
-      console.log('[MAIN] File dialog cancelled')
+      debug('[MAIN] File dialog cancelled')
       return null
     }
-    console.log('[MAIN] File selected:', res.filePaths)
+    debug('[MAIN] File selected:', res.filePaths)
     return res.filePaths
   })
 
+  // Recent files are remembered by path, and paths go stale: the video gets
+  // renamed, moved, or lives on a volume that is not mounted right now.
+  ipcMain.handle('files:exist', async (_evt, paths: string[]) => {
+    if (!Array.isArray(paths)) return []
+    return paths.map((p) => {
+      try {
+        return typeof p === 'string' && fs.statSync(p).isFile()
+      } catch {
+        return false
+      }
+    })
+  })
+
   ipcMain.handle('core:call', async (evt, payload) => {
-    console.log('[MAIN] Core call:', payload.method, payload.params, payload.requestId)
+    debug('[MAIN] Core call:', payload.method, payload.params, payload.requestId)
     if (!core) {
-      console.error('[MAIN] Core sidecar not initialized')
+      logError('[MAIN] Core sidecar not initialized')
       throw new Error('Core sidecar not initialized')
     }
     const win = BrowserWindow.fromWebContents(evt.sender)
@@ -228,7 +241,7 @@ function registerRustIPC() {
       payload.method,
       payload.params,
       (p) => {
-        console.log('[MAIN] Core progress:', p)
+        debug('[MAIN] Core progress:', p)
         // Only forward progress to a live window (window may be recreated on macOS)
         if (win && !win.isDestroyed()) {
           win.webContents.send('core:progress', p)

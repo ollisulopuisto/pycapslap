@@ -12,19 +12,20 @@ Object.defineProperty(window, 'electron', {
   writable: true,
 })
 
-// Mock ResizeObserver (not available in jsdom)
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+// Mock ResizeObserver and IntersectionObserver (not available in happy-dom).
+// These are real classes because components call them with `new`, which a
+// plain vi.fn() implementation cannot serve.
+class NoopObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return []
+  }
+}
 
-// Mock IntersectionObserver
-global.IntersectionObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}))
+global.ResizeObserver = NoopObserver as unknown as typeof ResizeObserver
+global.IntersectionObserver = NoopObserver as unknown as typeof IntersectionObserver
 
 // Mock matchMedia
 Object.defineProperty(window, 'matchMedia', {

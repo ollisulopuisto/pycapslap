@@ -81,8 +81,14 @@ pub async fn transcribe_with_whisper_cpp(
     cmd.kill_on_drop(true);
     // DTW disabled - causes timestamp issues for some audio files
 
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get().min(16))
+        .unwrap_or(4);
+
     cmd.arg("-m")
         .arg(&model_path)
+        .arg("-t")
+        .arg(threads.to_string())
         .arg("--output-json-full") // Full JSON output
         // NOTE: no --no-prints — we rely on whisper.cpp's stderr "progress = N%"
         // lines to report transcription progress back to the UI.
@@ -1099,11 +1105,17 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                                         }
                                     }
 
-                                    // Start new word
+                                    // Start new word. Merging is per segment, so
+                                    // a piece opening a segment without a leading
+                                    // space is really the tail of the last word of
+                                    // the segment before it — remember that, or
+                                    // the two halves get drawn with a space
+                                    // between them.
                                     current_merged_word = Some(crate::types::WhisperWord {
                                         word: token_text.to_string(),
                                         start: token_start_sec,
                                         end: token_end_sec,
+                                        glue_to_previous: !starts_with_space,
                                     });
                                 } else {
                                     // Append to current word
@@ -1122,6 +1134,7 @@ fn parse_whisper_cpp_output(json_output: &str) -> anyhow::Result<WhisperResponse
                                         word: token_text_trimmed.to_string(),
                                         start: token_start_sec,
                                         end: token_end_sec,
+                                        glue_to_previous: false,
                                     });
                                 }
                             }
@@ -1977,6 +1990,7 @@ pub fn whisper_to_caption_segments(
                             start_ms,
                             end_ms,
                             text,
+                            glue_to_previous: false,
                         }],
                     })
                 })
@@ -2052,6 +2066,7 @@ pub fn whisper_to_caption_segments(
                             start_ms: word_start_ms,
                             end_ms: word_end_ms,
                             text: word_text,
+                            glue_to_previous: false,
                         }],
                     });
                 }
@@ -2101,11 +2116,15 @@ pub fn whisper_to_caption_segments(
                 }
             }
 
+            // Consume the words as we take them. Scanning with a separate cursor
+            // and leaving `wi` behind handed every word inside the ±100ms
+            // tolerance to this segment *and* the next one, so boundary words
+            // appeared twice — and two segments holding the same words render as
+            // two caption blocks on top of each other.
             let mut segment_words = Vec::new();
             let window_end = final_end_ms + 100; // +100ms tolerance
-            let mut j = wi;
-            while j < all_words.len() {
-                let w = &all_words[j];
+            while wi < all_words.len() {
+                let w = &all_words[wi];
                 let w_start_ms = (w.start * 1000.0) as u64;
                 if w_start_ms > window_end {
                     break; // words are ordered by start: no more matches
@@ -2115,8 +2134,11 @@ pub fn whisper_to_caption_segments(
                     start_ms: w_start_ms,
                     end_ms: w_end_ms,
                     text: w.word.clone(),
+                    // Carried through so the renderer can put a word back
+                    // together that whisper split across a segment boundary.
+                    glue_to_previous: w.glue_to_previous,
                 });
-                j += 1;
+                wi += 1;
             }
 
             out.push(CaptionSegment {
@@ -2140,6 +2162,7 @@ pub fn whisper_to_caption_segments(
                 start_ms: 0,
                 end_ms: duration as u64,
                 text,
+                glue_to_previous: false,
             }],
         }]
     }
@@ -2244,7 +2267,9 @@ pub async fn compute_segments_cache_key(
         "language": params.language,
         "split_by_words": params.split_by_words,
         "prompt": params.prompt,
-        "version": "v2_merged_tokens", // Invalidate cache for new merging logic
+        // Cached entries hold parsed words, so a change to the parser has to
+        // invalidate them: v3 records which pieces continue the previous word.
+        "version": "v3_word_glue",
     });
     let params_hash = blake3::hash(params_for_hash.to_string().as_bytes())
         .to_hex()
@@ -2287,6 +2312,77 @@ pub fn get_cache_dir() -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn segment_words_are_never_shared_between_segments() {
+        // Two adjacent segments with a word starting right on the boundary. The
+        // ±100ms tolerance used to hand that word to both, which showed up as
+        // duplicated words in the editor and doubled captions in the preview.
+        use crate::types::{WhisperResponse, WhisperSegment, WhisperWord};
+
+        let response = WhisperResponse {
+            task: None,
+            language: None,
+            duration: Some(4.0),
+            text: "one two three four".to_string(),
+            segments: Some(vec![
+                WhisperSegment {
+                    id: 0,
+                    start: 0.0,
+                    end: 2.0,
+                    text: "one two".to_string(),
+                },
+                WhisperSegment {
+                    id: 1,
+                    start: 2.0,
+                    end: 4.0,
+                    text: "three four".to_string(),
+                },
+            ]),
+            words: Some(vec![
+                WhisperWord {
+                    word: "one".into(),
+                    start: 0.0,
+                    end: 0.9,
+                    glue_to_previous: false,
+                },
+                WhisperWord {
+                    word: "two".into(),
+                    start: 1.0,
+                    end: 1.95,
+                    glue_to_previous: false,
+                },
+                WhisperWord {
+                    word: "three".into(),
+                    start: 2.02,
+                    end: 3.0,
+                    glue_to_previous: false,
+                },
+                WhisperWord {
+                    word: "four".into(),
+                    start: 3.0,
+                    end: 4.0,
+                    glue_to_previous: false,
+                },
+            ]),
+        };
+
+        let segments = whisper_to_caption_segments(&response, false);
+        assert_eq!(segments.len(), 2);
+
+        let mut seen: Vec<String> = Vec::new();
+        for segment in &segments {
+            for word in &segment.words {
+                assert!(
+                    !seen.contains(&word.text),
+                    "word {:?} appears in more than one segment",
+                    word.text
+                );
+                seen.push(word.text.clone());
+            }
+        }
+        assert_eq!(seen, vec!["one", "two", "three", "four"]);
+    }
 
     // ============================================
     // is_digits tests

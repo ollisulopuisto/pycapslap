@@ -17,7 +17,12 @@ export default defineConfig({
     },
   },
   resolve: {
+    // Mirrors electron.vite.config.ts so component tests resolve the same
+    // imports the app does.
     alias: {
+      '@/app': resolve(__dirname, 'app'),
+      '@/lib': resolve(__dirname, 'lib'),
+      '@/resources': resolve(__dirname, 'resources'),
       '@': resolve(__dirname, './app'),
       '@lib': resolve(__dirname, './lib'),
     },

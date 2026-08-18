@@ -26,6 +26,7 @@ declare global {
     api: typeof api
     rust: {
       openFiles: (filters?: any) => Promise<string[] | null>
+      filesExist: (paths: string[]) => Promise<boolean[]>
       call: (method: string, params: any, requestId?: string) => Promise<any>
       onProgress: (cb: (p: any) => void) => () => void
       getFilePath: (file: File) => string | null

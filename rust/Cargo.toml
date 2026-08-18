@@ -22,3 +22,8 @@ which = "8.0.0"
 hex_color = "3.0.0"
 image = "0.25"
 base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

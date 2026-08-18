@@ -1,3 +1,4 @@
+import { debug, info, error as logError } from './log'
 import { spawn } from 'node:child_process'
 import readline from 'node:readline'
 import path from 'node:path'
@@ -15,7 +16,7 @@ export class Sidecar {
   private writeLock = Promise.resolve()
 
   constructor() {
-    console.log('[SIDECAR] Initializing Rust sidecar...')
+    info('[SIDECAR] Initializing Rust sidecar...')
     this.start()
   }
 
@@ -28,7 +29,8 @@ export class Sidecar {
       // Production paths (extraResources goes to Resources/ directly) - prioritize these first
       path.resolve(process.resourcesPath || __dirname, binName),
       path.resolve(__dirname, '../../../app.asar.unpacked/resources', binName),
-      // Development path
+      // Development paths (prefer release build for snappy performance, fall back to debug)
+      path.resolve(__dirname, '../../../rust/target/release', binName),
       path.resolve(__dirname, '../../../rust/target/debug', binName),
       // Alternative production paths
       path.resolve(process.resourcesPath || __dirname, 'app.asar.unpacked/resources', binName),
@@ -51,8 +53,8 @@ export class Sidecar {
       }
     }
 
-    console.log('[SIDECAR] Trying binary paths:', possiblePaths)
-    console.log('[SIDECAR] Starting Rust binary:', binPath)
+    debug('[SIDECAR] Trying binary paths:', possiblePaths)
+    info('[SIDECAR] Starting Rust binary:', binPath)
 
     try {
       // Set working directory to the same directory as the binary
@@ -77,35 +79,33 @@ export class Sidecar {
       this.rl = readline.createInterface({ input: this.proc.stdout! })
 
       this.proc.on('error', (err) => {
-        console.error('[SIDECAR] Process error:', err)
-        console.error('[SIDECAR] Binary path was:', binPath)
-        console.error('[SIDECAR] Possible paths tried:', possiblePaths)
+        logError('[SIDECAR] Process error:', err)
+        logError('[SIDECAR] Binary path was:', binPath)
+        logError('[SIDECAR] Possible paths tried:', possiblePaths)
         this.failAllPending(new Error(`Core sidecar process error: ${err.message}`))
       })
     } catch (err) {
-      console.error('[SIDECAR] Failed to spawn process:', err)
-      console.error('[SIDECAR] Binary path was:', binPath)
-      console.error('[SIDECAR] Possible paths tried:', possiblePaths)
+      logError('[SIDECAR] Failed to spawn process:', err)
+      logError('[SIDECAR] Binary path was:', binPath)
+      logError('[SIDECAR] Possible paths tried:', possiblePaths)
       throw err
     }
 
     this.proc.on('exit', (code, signal) => {
-      console.log('[SIDECAR] Process exited with code:', code, 'signal:', signal)
+      info('[SIDECAR] Process exited with code:', code, 'signal:', signal)
       // Reject all in-flight requests so the renderer never hangs on a dead sidecar.
-      this.failAllPending(
-        new Error(`Core sidecar process exited unexpectedly (code: ${code}, signal: ${signal})`)
-      )
+      this.failAllPending(new Error(`Core sidecar process exited unexpectedly (code: ${code}, signal: ${signal})`))
     })
 
     this.rl.on('line', (line) => {
       try {
         // Truncate raw log if too long (e.g. base64 image)
         const displayLine = line.length > 500 ? line.substring(0, 500) + '...[TRUNCATED]' : line
-        console.log('[SIDECAR] Raw response:', displayLine)
+        debug('[SIDECAR] Raw response:', displayLine)
         const msg = JSON.parse(line)
 
         if (msg.event === 'progress' && this.progressCb) {
-          console.log('[SIDECAR] Progress event:', msg)
+          debug('[SIDECAR] Progress event:', msg)
           this.progressCb(msg)
           return
         }
@@ -119,21 +119,21 @@ export class Sidecar {
             safeResult.image_data = '[BASE64 IMAGE DATA TRUNCATED]'
           }
 
-          console.log('[SIDECAR] Success response for:', msg.id, safeResult)
+          debug('[SIDECAR] Success response for:', msg.id, safeResult)
           this.pending.get(msg.id)?.resolve(msg.result)
           this.pending.delete(msg.id)
         } else if (msg.error && msg.id) {
-          console.log('[SIDECAR] Error response for:', msg.id, msg.error)
+          info('[SIDECAR] Error response for:', msg.id, msg.error)
           const friendlyError = this.createFriendlyError(msg.error)
           this.pending.get(msg.id)?.reject(friendlyError)
           this.pending.delete(msg.id)
         }
       } catch (err) {
-        console.error('[SIDECAR] Failed to parse response:', line.substring(0, 200), err)
+        logError('[SIDECAR] Failed to parse response:', line.substring(0, 200), err)
       }
     })
 
-    console.log('[SIDECAR] Rust sidecar started successfully')
+    info('[SIDECAR] Rust sidecar started successfully')
   }
 
   private createFriendlyError(errorMessage: string): Error {
@@ -185,7 +185,7 @@ export class Sidecar {
 
   private failAllPending(error: Error) {
     for (const [id, p] of this.pending) {
-      console.error('[SIDECAR] Rejecting pending request:', id, error.message)
+      logError('[SIDECAR] Rejecting pending request:', id, error.message)
       p.reject(error)
       this.pending.delete(id)
     }
@@ -203,10 +203,10 @@ export class Sidecar {
               return
             }
 
-            console.log('[SIDECAR] Writing to process:', data.trim())
+            debug('[SIDECAR] Writing to process:', data.trim())
             this.proc.stdin.write(data, 'utf8', (err) => {
               if (err) {
-                console.error('[SIDECAR] Write error:', err)
+                logError('[SIDECAR] Write error:', err)
                 reject(err)
               } else {
                 resolve()
@@ -215,7 +215,7 @@ export class Sidecar {
           })
       )
       .catch((err) => {
-        console.error('[SIDECAR] Write lock chain error:', err)
+        logError('[SIDECAR] Write lock chain error:', err)
         throw err
       })
 
@@ -224,7 +224,7 @@ export class Sidecar {
 
   call(method: string, params: any, onProgress?: (p: Progress) => void, requestId?: string) {
     const id = requestId || randomUUID()
-    console.log('[SIDECAR] Calling method:', method, 'with params:', params, 'id:', id)
+    debug('[SIDECAR] Calling method:', method, 'with params:', params, 'id:', id)
 
     if (onProgress) this.progressCb = onProgress
     const req = JSON.stringify({ id, method, params }) + '\n'
@@ -232,9 +232,9 @@ export class Sidecar {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })
 
-      console.log('[SIDECAR] Sending request:', req.trim())
+      debug('[SIDECAR] Sending request:', req.trim())
       this.writeWithLock(req).catch((err) => {
-        console.error('[SIDECAR] Failed to write to process:', err)
+        logError('[SIDECAR] Failed to write to process:', err)
         this.pending.delete(id)
         reject(err)
       })

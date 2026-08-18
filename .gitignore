@@ -33,3 +33,5 @@ node_modules/
 electron/package-lock.json
 *.tsbuildinfo
 rust/check_output.txt
+*.bak
+

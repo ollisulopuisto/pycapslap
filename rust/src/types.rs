@@ -11,12 +11,35 @@ pub struct CaptionSegment {
     pub words: Vec<WordSpan>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WordSpan {
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
+    /// This is the tail of the previous word, not a word of its own.
+    ///
+    /// Whisper emits sub-word pieces and marks a new word with a leading space.
+    /// When it also breaks a segment mid-word — common in Finnish, where words
+    /// are long — the pieces arrive in different segments and would otherwise be
+    /// drawn with a space between them ("KORKE ALLA" instead of "KORKEALLA").
+    #[serde(default)]
+    pub glue_to_previous: bool,
+}
+
+/// A manual vertical placement for the caption(s) shown during a time range.
+///
+/// `y_pct` is the position of the caption's anchor point (the same point ASS
+/// puts at `\pos`, which depends on the style alignment) as a percentage of the
+/// frame height, measured from the top. A cue adopts an override when its
+/// midpoint falls inside the range, so overrides survive text edits that shift
+/// segment boundaries a little.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PositionOverride {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub y_pct: f32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -78,6 +101,11 @@ pub struct WhisperWord {
     pub word: String,
     pub start: f64,
     pub end: f64,
+    /// Set when this piece had no leading space, meaning it continues the
+    /// previous word rather than starting a new one. Defaults to false so
+    /// cached responses and remote servers that send whole words still parse.
+    #[serde(default)]
+    pub glue_to_previous: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -137,6 +165,13 @@ pub struct GenerateCaptionsParams {
     pub crop_strategy: Option<String>, // "start", "center", "end", "fit" (letterbox)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whisper_base_url: Option<String>, // Optional OpenAI-compatible Whisper server base URL
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>, // Manually placed captions
+    /// Vertical stretches the target platforms cover with their own interface,
+    /// as (top, bottom) percentages of frame height. Captions dodge these unless
+    /// the user placed them by hand.
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -174,6 +209,13 @@ pub struct BurnCaptionsParams {
     pub output_size: Option<String>, // Target output size
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crop_strategy: Option<String>, // Crop strategy
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>, // Manually placed captions
+    /// Vertical stretches the target platforms cover with their own interface,
+    /// as (top, bottom) percentages of frame height. Captions dodge these unless
+    /// the user placed them by hand.
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -230,12 +272,20 @@ pub struct PreviewLayoutParams {
     #[serde(default)]
     pub multiline: bool,
     pub glow_effect: bool,
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>,
+    /// Vertical stretches the target platforms cover with their own interface,
+    /// as (top, bottom) percentages of frame height. Captions dodge these unless
+    /// the user placed them by hand.
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewLayoutResult {
     pub cues: Vec<PreviewCue>,
+    pub font_size_px: u32, // Rendered font size at the requested frame size
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -244,7 +294,13 @@ pub struct PreviewCue {
     pub start_ms: u64,
     pub end_ms: u64,
     pub lines: Vec<PreviewLine>,
-    pub y_pct: f32, // Vertical position as percentage from top
+    pub y_pct: f32, // Anchor position as percentage from top
+    // The visual block this cue belongs to. Karaoke emits one cue per word
+    // window, but all windows of a block share these bounds — so the editor can
+    // treat a block as a single draggable caption.
+    pub group_start_ms: u64,
+    pub group_end_ms: u64,
+    pub anchor: String, // Which edge of the text block sits at y_pct: "top" | "center" | "bottom"
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -265,6 +321,20 @@ pub struct PreviewWord {
 pub struct SaveCaptionsParams {
     pub video_path: String,
     pub segments: Vec<CaptionSegment>,
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>,
+}
+
+/// On-disk shape of the `<video>.capslap.json` sidecar.
+///
+/// Older builds wrote a bare array of segments; `load_captions` still reads
+/// those, and saving migrates the file to this form.
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptionsFile {
+    pub segments: Vec<CaptionSegment>,
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -277,6 +347,8 @@ pub struct LoadCaptionsParams {
 #[serde(rename_all = "camelCase")]
 pub struct LoadCaptionsResult {
     pub segments: Option<Vec<CaptionSegment>>,
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -307,6 +379,66 @@ pub struct PreviewFrameParams {
     pub output_size: Option<String>, // Target output size
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crop_strategy: Option<String>, // Crop strategy
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>, // Manually placed captions
+    /// What to draw:
+    /// - "video" (default): the frame with captions burned in
+    /// - "clean": the frame with no captions
+    /// - "captions": only the captions, on a transparent canvas, so the editor
+    ///   can composite and drag them over a "clean" frame without re-rendering
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render_mode: Option<String>,
+    /// Scale the result down to this height (filmstrip thumbnails).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnail_height: Option<u32>,
+    /// Vertical stretches the target platforms cover with their own interface,
+    /// as (top, bottom) percentages of frame height. Captions dodge these unless
+    /// the user placed them by hand.
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoPlaceParams {
+    pub input_video: String,
+    pub segments: Vec<CaptionSegment>,
+    pub export_format: String,
+    pub karaoke: bool,
+    #[serde(default)]
+    pub multiline: bool,
+    pub font_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight_word_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<String>,
+    #[serde(default)]
+    pub glow_effect: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crop_strategy: Option<String>,
+    /// Vertical stretches the caption should stay out of, as (top, bottom)
+    /// percentages of frame height — where the target platforms draw their own
+    /// interface over the video.
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoPlaceResult {
+    pub position_overrides: Vec<PositionOverride>,
+    /// How many captions the picture argued for moving.
+    pub moved: usize,
+    /// How many captions were considered.
+    pub total: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

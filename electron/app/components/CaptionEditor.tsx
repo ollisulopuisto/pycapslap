@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/app/components/ui/button'
-import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw, MoveVertical } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { CaptionPositionPanel, type PositionOverride } from './CaptionPositionPanel'
+import type { PlatformId } from './safe-areas'
 
 // Types (mirrored from app.tsx for now to avoid circular deps)
 interface Template {
@@ -29,6 +31,8 @@ interface Settings {
   glowEffect: boolean
   captionStyle: Template['captionStyle']
   captionPosition: 'top' | 'top-quarter' | 'center' | 'bottom-quarter' | 'bottom'
+  fontSize: number
+  cropStrategy?: string
   // ... other settings
 }
 
@@ -52,6 +56,12 @@ interface CaptionEditorProps {
   onRefreshPreview?: () => void
   videoPath: string
   settings: Settings
+  /** Resolved font family name, e.g. "Montserrat Black". */
+  fontName: string
+  positionOverrides: PositionOverride[]
+  onPositionOverridesChange: (overrides: PositionOverride[]) => void
+  shownPlatforms: PlatformId[]
+  onShownPlatformsChange: (ids: PlatformId[]) => void
   previewFrame?: string | null
   isBurnedPreview?: boolean
 }
@@ -61,8 +71,13 @@ export function CaptionEditor({
   onBurn,
   onCancel,
   onRefreshPreview,
-  videoPath: _videoPath, // Kept to satisfy props
-  settings: _settings,
+  videoPath,
+  settings,
+  fontName,
+  positionOverrides,
+  onPositionOverridesChange,
+  shownPlatforms,
+  onShownPlatformsChange,
   previewFrame,
 }: CaptionEditorProps) {
   const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
@@ -70,6 +85,39 @@ export function CaptionEditor({
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [editText, setEditText] = useState('')
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isPositioning, setIsPositioning] = useState(false)
+  // Set when a caption is picked in the position view, so the matching text is
+  // easy to find in a long list.
+  const [highlightedSegmentIndex, setHighlightedSegmentIndex] = useState<number | null>(null)
+  const segmentRefs = useRef<(HTMLDivElement | null)[]>([])
+
+  const positionStyle = useMemo(
+    () => ({
+      fontName,
+      fontSize: settings.fontSize,
+      textColor: settings.textColor,
+      highlightWordColor: settings.highlightWordColor,
+      outlineColor: settings.outlineColor,
+      glowEffect: settings.glowEffect,
+      position: settings.captionPosition,
+      karaoke: settings.captionStyle === 'karaoke' || settings.captionStyle === 'karaoke-multiline',
+      multiline: settings.captionStyle === 'karaoke-multiline',
+      exportFormat: settings.exportFormats?.[0] ?? '9:16',
+      cropStrategy: settings.cropStrategy,
+    }),
+    [
+      fontName,
+      settings.fontSize,
+      settings.textColor,
+      settings.highlightWordColor,
+      settings.outlineColor,
+      settings.glowEffect,
+      settings.captionPosition,
+      settings.captionStyle,
+      settings.exportFormats,
+      settings.cropStrategy,
+    ]
+  )
 
   const handleRefresh = async () => {
     if (onRefreshPreview) {
@@ -80,6 +128,44 @@ export function CaptionEditor({
         setIsRefreshing(false)
       }
     }
+  }
+
+  /**
+   * Which segment does a caption in the position view belong to?
+   *
+   * Captions are laid out by merging every word and re-splitting to fit the
+   * frame, so a caption's bounds rarely match a segment's. The segment sharing
+   * the most time with it is the one the words came from.
+   */
+  const segmentIndexForRange = (range: { startMs: number; endMs: number }): number => {
+    let best = -1
+    let bestOverlap = 0
+    segments.forEach((seg, index) => {
+      const overlap = Math.min(seg.endMs, range.endMs) - Math.max(seg.startMs, range.startMs)
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap
+        best = index
+      }
+    })
+    return best
+  }
+
+  const revealSegment = (index: number) => {
+    if (index < 0) return
+    setHighlightedSegmentIndex(index)
+    segmentRefs.current[index]?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
+
+  const handleSelectBlock = (range: { startMs: number; endMs: number }) => {
+    revealSegment(segmentIndexForRange(range))
+  }
+
+  const handleEditBlock = (range: { startMs: number; endMs: number }) => {
+    const index = segmentIndexForRange(range)
+    if (index < 0) return
+    revealSegment(index)
+    setEditingSegmentIndex(index)
+    setEditText(segments[index].text)
   }
 
   // Move the last word of segment[index] to the beginning of segment[index+1]
@@ -200,47 +286,74 @@ export function CaptionEditor({
 
   return (
     <div className="flex bg-[#08090a] text-white h-full w-full overflow-hidden">
-      {/* Left: Video Player */}
-      {/* Left: Preview Image */}
-      <div className="flex-1 relative bg-black flex flex-col justify-center items-center border-r border-white/10">
-        <div className="relative w-full h-full max-h-full aspect-[9/16] max-w-md mx-auto bg-black">
-          {/* Refresh Button Overlay */}
-          {onRefreshPreview && (
-            <div className="absolute top-4 right-4 z-20">
-              <Button
-                variant="outline"
-                size="icon"
-                className="rounded-full bg-black/40 border-white/20 hover:bg-black/60 hover:border-white/40 text-white backdrop-blur-sm shadow-xl"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleRefresh()
-                }}
-                disabled={isRefreshing}
-                title="Refresh Preview"
-              >
-                <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
-              </Button>
-            </div>
-          )}
-
-          {/* Static Preview Image Layer */}
-          {previewFrame ? (
-            <div className="absolute inset-0 z-10 bg-black">
-              <img src={previewFrame} className="w-full h-full object-contain" alt="Preview" />
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              <p>No preview available</p>
-            </div>
-          )}
+      {/* Left: caption placement, or a still of how the captions will look */}
+      {isPositioning ? (
+        <div className="flex-1 flex min-w-0 border-r border-white/10">
+          <CaptionPositionPanel
+            videoPath={videoPath}
+            segments={segments}
+            style={positionStyle}
+            overrides={positionOverrides}
+            onOverridesChange={onPositionOverridesChange}
+            onSelectBlock={handleSelectBlock}
+            onEditBlock={handleEditBlock}
+            shownPlatforms={shownPlatforms}
+            onShownPlatformsChange={onShownPlatformsChange}
+          />
         </div>
-      </div>
+      ) : (
+        <div className="flex-1 relative bg-black flex flex-col justify-center items-center border-r border-white/10">
+          <div className="relative w-full h-full max-h-full aspect-[9/16] max-w-md mx-auto bg-black">
+            {/* Refresh Button Overlay */}
+            {onRefreshPreview && (
+              <div className="absolute top-4 right-4 z-20">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="rounded-full bg-black/40 border-white/20 hover:bg-black/60 hover:border-white/40 text-white backdrop-blur-sm shadow-xl"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleRefresh()
+                  }}
+                  disabled={isRefreshing}
+                  title="Refresh Preview"
+                >
+                  <RefreshCw className={cn('w-4 h-4', isRefreshing && 'animate-spin')} />
+                </Button>
+              </div>
+            )}
+
+            {/* Static Preview Image Layer */}
+            {previewFrame ? (
+              <div className="absolute inset-0 z-10 bg-black">
+                <img src={previewFrame} className="w-full h-full object-contain" alt="Preview" />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground">
+                <p>No preview available</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Right: Editor */}
       <div className="w-[450px] flex flex-col h-full bg-[#08090a] border-l border-white/10">
         <div className="flex items-center justify-between border-b border-white/10 p-4 shrink-0">
           <h2 className="text-xl font-medium">Edit Captions</h2>
           <div className="flex gap-2">
+            <Button
+              variant={isPositioning ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setIsPositioning((on) => !on)}
+              title="Drag captions to a different height"
+            >
+              <MoveVertical className="w-4 h-4 mr-2" />
+              Position
+              {positionOverrides.length > 0 && (
+                <span className="ml-1.5 text-[10px] opacity-70">{positionOverrides.length}</span>
+              )}
+            </Button>
             <Button variant="ghost" onClick={onCancel} size="sm">
               Cancel
             </Button>
@@ -257,7 +370,13 @@ export function CaptionEditor({
 
             if (isEditing) {
               return (
-                <div key={idx} className="bg-card border border-primary rounded-lg p-4 flex flex-col gap-3">
+                <div
+                  key={idx}
+                  ref={(node) => {
+                    segmentRefs.current[idx] = node
+                  }}
+                  className="bg-card border border-primary rounded-lg p-4 flex flex-col gap-3"
+                >
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-mono text-muted-foreground">
                       Editing {formatTime(seg.startMs)} - {formatTime(seg.endMs)}
@@ -284,8 +403,12 @@ export function CaptionEditor({
             return (
               <div
                 key={idx}
+                ref={(node) => {
+                  segmentRefs.current[idx] = node
+                }}
                 className={cn(
-                  'group bg-card/30 border border-border/30 rounded-lg p-4 flex flex-col gap-3 transition-all cursor-pointer relative hover:border-primary/30'
+                  'group bg-card/30 border rounded-lg p-4 flex flex-col gap-3 transition-all cursor-pointer relative hover:border-primary/30',
+                  highlightedSegmentIndex === idx ? 'border-primary/60 bg-primary/5' : 'border-border/30'
                 )}
                 onDoubleClick={(e) => {
                   e.stopPropagation()
