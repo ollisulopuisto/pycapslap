@@ -73,23 +73,63 @@ const THUMBNAIL_HEIGHT = 200
 const MIN_Y_PCT = 4
 const MAX_Y_PCT = 99
 
-let activeRenders = 0
-const renderQueue: (() => void)[] = []
+interface RenderJob {
+  run: () => void
+  priority: 'high' | 'low'
+  isCancelled: () => boolean
+}
 
-/** Run `job` once a render slot frees up. */
-function scheduleRender<T>(job: () => Promise<T>): Promise<T> {
+let activeRenders = 0
+const renderQueue: RenderJob[] = []
+
+function pumpQueue() {
+  while (renderQueue.length > 0 && activeRenders < MAX_CONCURRENT_RENDERS) {
+    const next = renderQueue.shift()
+    if (!next) break
+    if (next.isCancelled()) {
+      continue
+    }
+    next.run()
+    break
+  }
+}
+
+/** Run `job` once a render slot frees up, prioritizing high-priority stage previews over filmstrip thumbnails. */
+function scheduleRender<T>(
+  job: () => Promise<T>,
+  priority: 'high' | 'low' = 'low',
+  isCancelled: () => boolean = () => false
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const start = () => {
+      if (isCancelled()) {
+        reject(new Error('Render cancelled'))
+        return
+      }
       activeRenders++
       job()
         .then(resolve, reject)
         .finally(() => {
           activeRenders--
-          renderQueue.shift()?.()
+          pumpQueue()
         })
     }
-    if (activeRenders < MAX_CONCURRENT_RENDERS) start()
-    else renderQueue.push(start)
+
+    if (activeRenders < MAX_CONCURRENT_RENDERS) {
+      start()
+    } else {
+      const renderJob: RenderJob = { run: start, priority, isCancelled }
+      if (priority === 'high') {
+        const firstLow = renderQueue.findIndex((j) => j.priority === 'low')
+        if (firstLow >= 0) {
+          renderQueue.splice(firstLow, 0, renderJob)
+        } else {
+          renderQueue.push(renderJob)
+        }
+      } else {
+        renderQueue.push(renderJob)
+      }
+    }
   })
 }
 
@@ -221,28 +261,35 @@ export function CaptionPositionPanel({
   )
 
   const renderFrame = useCallback(
-    async (timestampMs: number, mode: 'clean' | 'captions', thumbnailHeight?: number): Promise<string | null> => {
+    async (
+      timestampMs: number,
+      mode: 'clean' | 'captions',
+      thumbnailHeight?: number,
+      priority: 'high' | 'low' = 'low'
+    ): Promise<string | null> => {
       if (mode === 'clean') {
         const cleanKey = `${videoPath}|${timestampMs}|${thumbnailHeight ?? 'full'}`
         const cached = cleanFrameCache.current.get(cleanKey)
         if (cached) return cached
       }
 
-      const result = (await scheduleRender(() =>
-        window.rust.call('generatePreviewFrame', {
-          inputVideo: videoPath,
-          segments,
-          timestampMs,
-          renderMode: mode,
-          thumbnailHeight,
-          // Captions are drawn where the style puts them; the editor applies
-          // the user's offset on top as a plain CSS shift.
-          positionOverrides: [],
-          blockedBands: blockedBandsFor(shownPlatforms),
-          outputSize: '1080p',
-          fitMode: 'cover',
-          ...activeStyle,
-        })
+      const result = (await scheduleRender(
+        () =>
+          window.rust.call('generatePreviewFrame', {
+            inputVideo: videoPath,
+            segments,
+            timestampMs,
+            renderMode: mode,
+            thumbnailHeight,
+            // Captions are drawn where the style puts them; the editor applies
+            // the user's offset on top as a plain CSS shift.
+            positionOverrides: [],
+            blockedBands: blockedBandsFor(shownPlatforms),
+            outputSize: '1080p',
+            fitMode: 'cover',
+            ...activeStyle,
+          }),
+        priority
       )) as { imageData?: string } | null
 
       const imageData = result?.imageData ?? null
@@ -264,7 +311,12 @@ export function CaptionPositionPanel({
     const bootstrap = async () => {
       try {
         const first = segments[0]
-        const image = await renderFrame(midpointOf({ startMs: first.startMs, endMs: first.endMs }), 'clean')
+        const image = await renderFrame(
+          midpointOf({ startMs: first.startMs, endMs: first.endMs }),
+          'clean',
+          undefined,
+          'high'
+        )
         if (cancelled || !image) return
 
         const size = await new Promise<{ width: number; height: number }>((resolve, reject) => {
@@ -344,7 +396,7 @@ export function CaptionPositionPanel({
     [blocks, selectedKey]
   )
 
-  // Full-size pair for the block being edited.
+  // Full-size pair for the block being edited (high priority).
   useEffect(() => {
     if (!selectedBlock) return
     const key = cacheKey(blockKey(selectedBlock))
@@ -354,7 +406,10 @@ export function CaptionPositionPanel({
     const load = async () => {
       try {
         const at = selectedBlock.previewMs
-        const [frame, captions] = await Promise.all([renderFrame(at, 'clean'), renderFrame(at, 'captions')])
+        const [frame, captions] = await Promise.all([
+          renderFrame(at, 'clean', undefined, 'high'),
+          renderFrame(at, 'captions', undefined, 'high'),
+        ])
         if (!aliveRef.current || !frame || !captions) return
         rememberImage(setStageImages, key, { frame, captions })
       } catch {
@@ -374,8 +429,8 @@ export function CaptionPositionPanel({
         try {
           const at = block.previewMs
           const [frame, captions] = await Promise.all([
-            renderFrame(at, 'clean', THUMBNAIL_HEIGHT),
-            renderFrame(at, 'captions', THUMBNAIL_HEIGHT),
+            renderFrame(at, 'clean', THUMBNAIL_HEIGHT, 'low'),
+            renderFrame(at, 'captions', THUMBNAIL_HEIGHT, 'low'),
           ])
           if (!aliveRef.current || !frame || !captions) return
           rememberImage(setThumbImages, key, { frame, captions })

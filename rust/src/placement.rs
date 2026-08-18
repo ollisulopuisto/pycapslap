@@ -422,6 +422,8 @@ async fn sample_profiles(
         .arg("-i")
         .arg(input_video)
         .arg("-an")
+        .arg("-threads")
+        .arg("2")
         .arg("-vf")
         .arg(&vf)
         .arg("-f")
@@ -434,17 +436,19 @@ async fn sample_profiles(
         .spawn()
         .map_err(|e| anyhow!("Failed to run ffmpeg for placement sampling: {}", e))?;
 
-    let mut stdout = child
+    let stdout = child
         .stdout
         .take()
         .ok_or_else(|| anyhow!("ffmpeg produced no output to sample"))?;
+
+    let mut reader = tokio::io::BufReader::with_capacity(65536, stdout);
 
     let frame_bytes = (SAMPLE_WIDTH * sample_h) as usize;
     let mut buffer = vec![0u8; frame_bytes];
     let mut profiles = Vec::new();
 
     // A short read just means the stream ended, possibly mid-frame.
-    while stdout.read_exact(&mut buffer).await.is_ok() {
+    while reader.read_exact(&mut buffer).await.is_ok() {
         profiles.push(FrameProfile {
             activity: row_activity(&buffer, SAMPLE_WIDTH as usize, sample_h as usize),
             brightness: row_brightness(&buffer, SAMPLE_WIDTH as usize, sample_h as usize),

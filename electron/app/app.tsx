@@ -706,8 +706,9 @@ export default function App() {
   }
 
   // Update previews when editor segments or RELEVANT video settings change
+  // Pause dashboard template generation while the full-screen editor is open to dedicate all CPU/GPU to the editor
   useEffect(() => {
-    if (editorSegments.length > 0 && editorVideoPath) {
+    if (editorSegments.length > 0 && editorVideoPath && !isEditorOpen) {
       const timer = setTimeout(() => {
         generatePreviews(editorVideoPath, editorSegments)
       }, 500) // Debounce 500ms to avoid rapid regeneration while picking color
@@ -716,6 +717,7 @@ export default function App() {
     }
     return undefined
   }, [
+    isEditorOpen,
     editorSegments,
     editorVideoPath,
     // Add relevant settings dependencies

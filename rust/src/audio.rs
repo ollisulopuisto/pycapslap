@@ -60,9 +60,13 @@ pub async fn extract_audio(
         .arg("-acodec")
         .arg(audio_codec);
 
-    // Add explicit bitrate only when re-encoding
-    if !use_copy && target_codec == "aac" {
-        cmd.arg("-b:a").arg("160k"); // Explicit AAC bitrate for quality
+    // Add explicit bitrate/sampling options when re-encoding
+    if !use_copy {
+        if target_codec == "aac" {
+            cmd.arg("-b:a").arg("160k"); // Explicit AAC bitrate for quality
+        } else if target_codec == "pcm_s16le" || target_codec == "wav" {
+            cmd.arg("-ar").arg("16000").arg("-ac").arg("1");
+        }
     }
 
     cmd.arg(&out);

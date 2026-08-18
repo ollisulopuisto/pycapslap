@@ -74,11 +74,11 @@ pub async fn extract_and_transcribe_with_server(
     let result = async {
         let probe_result = probe(id, input_video, &mut emit).await?;
 
-        let audio_filename = format!("audio_{}.mp3", id);
+        let audio_filename = format!("audio_{}.wav", id);
         let temp_audio_path = temp_dir.join(&audio_filename);
         let audio_params = ExtractAudioParams {
             input: input_video.to_string(),
-            codec: Some("mp3".to_string()),
+            codec: Some("pcm_s16le".to_string()),
             out: Some(temp_audio_path.to_string_lossy().to_string()),
         };
         let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
