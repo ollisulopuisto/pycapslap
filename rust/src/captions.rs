@@ -493,6 +493,8 @@ async fn render_caption_layer(
     let filter = crate::video::build_caption_layer_filter(ass_path, time_sec, scale_height);
 
     let output = TokioCommand::new(ffmpeg_path)
+        .arg("-threads")
+        .arg("2")
         .arg("-f")
         .arg("lavfi")
         .arg("-i")
@@ -508,9 +510,9 @@ async fn render_caption_layer(
         .arg("-frames:v")
         .arg("1")
         .arg("-f")
-        .arg("image2")
-        .arg("-c:v")
-        .arg("png")
+        .arg("rawvideo")
+        .arg("-pix_fmt")
+        .arg("rgb24")
         .arg("-")
         .output()
         .await
@@ -521,18 +523,19 @@ async fn render_caption_layer(
         return Err(anyhow!("FFmpeg caption layer render failed: {}", stderr));
     }
 
-    let stacked = image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
-        .map_err(|e| anyhow!("Failed to decode caption layer: {}", e))?
-        .to_rgb8();
-
-    let (w, stacked_h) = stacked.dimensions();
-    if stacked_h < 2 {
+    let raw = &output.stdout;
+    let h = scale_height.unwrap_or(frame_h);
+    let stacked_h = h * 2;
+    if stacked_h == 0 {
         return Err(anyhow!("Caption layer render returned an empty image"));
     }
-    let h = stacked_h / 2;
+    let h_bytes = stacked_h as usize * 3;
+    if h_bytes == 0 || raw.len() % h_bytes != 0 {
+        return Err(anyhow!("Unexpected caption layer image buffer size"));
+    }
+    let w = (raw.len() / h_bytes) as u32;
 
     let total_pixels = (w * h) as usize;
-    let raw = stacked.as_raw();
     if raw.len() < total_pixels * 6 {
         return Err(anyhow!("Unexpected caption layer image buffer size"));
     }
