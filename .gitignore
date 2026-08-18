@@ -34,4 +34,7 @@ electron/package-lock.json
 *.tsbuildinfo
 rust/check_output.txt
 *.bak
+*~
+*.backup
+*.swp
 

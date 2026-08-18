@@ -17,6 +17,7 @@ import {
   Palette,
   ChevronDown,
   Check,
+  Loader2,
 } from 'lucide-react'
 import {
   DropdownMenu,
@@ -327,18 +328,22 @@ const getFontName = (fontId: string): string => {
   return FONT_NAMES[fontId as keyof typeof FONT_NAMES] || 'Montserrat Black'
 }
 
-function TemplatePreviewCard({
+export function TemplatePreviewCard({
   template,
   isSelected,
   onSelect,
-  previewFrame, // New prop
+  previewFrame,
   isBurnedPreview,
+  isLoading,
+  isGenerating,
 }: {
   template: Template
   isSelected: boolean
   onSelect: () => void
   previewFrame?: string | null // Base64 image data
   isBurnedPreview?: boolean
+  isLoading?: boolean
+  isGenerating?: boolean
 }) {
   const [isHovered, setIsHovered] = React.useState(false)
 
@@ -396,11 +401,28 @@ function TemplatePreviewCard({
       <div className="flex flex-col h-full">
         {/* Video Preview with 9:16 aspect ratio */}
         <div className="relative w-full" style={{ aspectRatio: '9/16' }}>
-          {previewFrame ? (
+          {isLoading ? (
+            <div className="relative w-full h-full flex flex-col items-center justify-center bg-black/80 gap-2 p-2">
+              <Loader2 className="w-5 h-5 animate-spin text-primary" data-testid="preview-loading-spinner" />
+              <span className="text-[10px] text-muted-foreground text-center font-medium">Loading preview…</span>
+            </div>
+          ) : previewFrame ? (
             <div className="relative w-full h-full">
-              <img src={previewFrame} className="w-full h-full object-cover" alt="Preview" />
+              <img
+                src={previewFrame}
+                className="w-full h-full object-cover animate-in fade-in duration-300"
+                alt="Preview"
+              />
               {/* Caption Overlay - only show if not burned preview */}
               {!isBurnedPreview && renderCaptionPreview()}
+              {isGenerating && (
+                <div
+                  className="absolute top-2 left-2 z-10 p-1 rounded-full bg-black/60 backdrop-blur-xs border border-white/10"
+                  title="Generating template preview"
+                >
+                  <Loader2 className="w-3 h-3 animate-spin text-primary" />
+                </div>
+              )}
             </div>
           ) : (
             <video
@@ -546,18 +568,25 @@ function SettingsModal({
   )
 }
 
-function FileCard({ path, onRemove }: { path: string; onRemove: () => void }) {
+export function FileCard({ path, isLoading, onRemove }: { path: string; isLoading?: boolean; onRemove: () => void }) {
   const fileName = path.split('/').pop() || ''
 
   return (
     <div className="group relative bg-gradient-to-br from-card/80 to-card/40 border border-border/30 rounded-xl p-4 hover:border-primary/40 transition-all duration-300 backdrop-blur-sm">
       <div className="flex items-center gap-4">
-        <div className="relative">
-          <FileVideo className="w-6 h-6 text-white" />
+        <div className="relative flex items-center justify-center w-6 h-6">
+          {isLoading ? (
+            <Loader2 className="w-5 h-5 text-primary animate-spin" data-testid="file-loading-spinner" />
+          ) : (
+            <FileVideo className="w-6 h-6 text-white" />
+          )}
         </div>
 
         <div className="flex-1 min-w-0">
           <p className="font-medium text-foreground truncate text-sm">{fileName}</p>
+          {isLoading && (
+            <p className="text-[11px] text-primary/80 flex items-center gap-1 font-medium">Loading preview frame…</p>
+          )}
         </div>
 
         <Button
@@ -579,6 +608,8 @@ export default function App() {
   const [apiKey, setApiKey] = useState('')
   const [isLoaded, setIsLoaded] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [isLoadingPreviewFrame, setIsLoadingPreviewFrame] = useState(false)
+  const [isGeneratingPreviews, setIsGeneratingPreviews] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const [_, setDragCounter] = useState(0)
   const [isApiKeySettingsOpen, setIsApiKeySettingsOpen] = useState(false)
@@ -626,83 +657,88 @@ export default function App() {
   const generatePreviews = async (videoPath: string, segments: CaptionSegment[]) => {
     if (!videoPath || !segments || segments.length === 0) return
 
-    // Use the start time of the first segment for the preview
-    const firstSegment = segments[0]
-    // Use middle of the segment for better context
-    const timestampMs = firstSegment.startMs + (firstSegment.endMs - firstSegment.startMs) / 2
+    setIsGeneratingPreviews(true)
+    try {
+      // Use the start time of the first segment for the preview
+      const firstSegment = segments[0]
+      // Use middle of the segment for better context
+      const timestampMs = firstSegment.startMs + (firstSegment.endMs - firstSegment.startMs) / 2
 
-    // Generate preview for each template in parallel, using cached results where possible
-    const entries = await Promise.all(
-      templates.map(async (template) => {
-        try {
-          const isSelected = template.id === videoSettings.selectedTemplate
-          const position = isSelected ? videoSettings.captionPosition : template.position
-          const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
-          const fontName = getFontName(isSelected ? videoSettings.selectedFont : template.font)
-          const textColor = isSelected ? videoSettings.textColor : template.textColor
-          const highlightWordColor = isSelected ? videoSettings.highlightWordColor : template.highlightWordColor
-          const outlineColor = isSelected ? videoSettings.outlineColor : template.outlineColor
-          const fontSize = isSelected ? videoSettings.fontSize : 65
-          const glowEffect = isSelected ? videoSettings.glowEffect : template.glowEffect
-          const exportFormat =
-            videoSettings.exportFormats && videoSettings.exportFormats.length > 0
-              ? videoSettings.exportFormats[0]
-              : '9:16'
-          const cropStrategy = videoSettings.cropStrategy ?? 'fit'
+      // Generate preview for each template in parallel, using cached results where possible
+      const entries = await Promise.all(
+        templates.map(async (template) => {
+          try {
+            const isSelected = template.id === videoSettings.selectedTemplate
+            const position = isSelected ? videoSettings.captionPosition : template.position
+            const captionStyle = isSelected ? videoSettings.captionStyle : template.captionStyle
+            const fontName = getFontName(isSelected ? videoSettings.selectedFont : template.font)
+            const textColor = isSelected ? videoSettings.textColor : template.textColor
+            const highlightWordColor = isSelected ? videoSettings.highlightWordColor : template.highlightWordColor
+            const outlineColor = isSelected ? videoSettings.outlineColor : template.outlineColor
+            const fontSize = isSelected ? videoSettings.fontSize : 65
+            const glowEffect = isSelected ? videoSettings.glowEffect : template.glowEffect
+            const exportFormat =
+              videoSettings.exportFormats && videoSettings.exportFormats.length > 0
+                ? videoSettings.exportFormats[0]
+                : '9:16'
+            const cropStrategy = videoSettings.cropStrategy ?? 'fit'
 
-          const cacheKey = `${videoPath}:${Math.round(timestampMs)}:${firstSegment.text}:${template.id}:${fontName}:${textColor}:${highlightWordColor}:${outlineColor}:${fontSize}:${position}:${captionStyle}:${glowEffect}:${exportFormat}:${cropStrategy}:${shownPlatforms.join(',')}:${isSelected ? JSON.stringify(positionOverrides) : ''}`
+            const cacheKey = `${videoPath}:${Math.round(timestampMs)}:${firstSegment.text}:${template.id}:${fontName}:${textColor}:${highlightWordColor}:${outlineColor}:${fontSize}:${position}:${captionStyle}:${glowEffect}:${exportFormat}:${cropStrategy}:${shownPlatforms.join(',')}:${isSelected ? JSON.stringify(positionOverrides) : ''}`
 
-          if (previewCache.current.has(cacheKey)) {
-            return { id: template.id, imageData: previewCache.current.get(cacheKey)! }
-          }
-
-          const result = (await (window as any).rust.call('generatePreviewFrame', {
-            inputVideo: videoPath,
-            timestampMs: timestampMs,
-            segments: [firstSegment], // Only pass the first segment for speed
-            targetWidth: 1920, // Preview width
-            // Rust struct expects camelCase
-            fontName,
-            textColor,
-            highlightWordColor,
-            outlineColor,
-            fontSize,
-            position,
-            karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
-            multiline: captionStyle === 'karaoke-multiline',
-            glowEffect,
-            exportFormat,
-            outputSize: '1080p',
-            cropStrategy,
-            fitMode: 'cover',
-            positionOverrides: isSelected ? positionOverrides : [],
-            blockedBands: blockedBandsFor(shownPlatforms),
-          })) as { imageData: string }
-
-          if (result && result.imageData) {
-            // Keep preview cache bounded to 50 items
-            if (previewCache.current.size > 50) {
-              const firstKey = previewCache.current.keys().next().value
-              if (firstKey) previewCache.current.delete(firstKey)
+            if (previewCache.current.has(cacheKey)) {
+              return { id: template.id, imageData: previewCache.current.get(cacheKey)! }
             }
-            previewCache.current.set(cacheKey, result.imageData)
-            return { id: template.id, imageData: result.imageData }
-          }
-          return { id: template.id, imageData: null }
-        } catch (e) {
-          console.error(`Failed to generate preview for ${template.id}`, e)
-          return { id: template.id, imageData: null }
-        }
-      })
-    )
 
-    const newPreviewFrames: Record<string, string> = {}
-    for (const entry of entries) {
-      if (entry.imageData) {
-        newPreviewFrames[entry.id] = entry.imageData
+            const result = (await (window as any).rust.call('generatePreviewFrame', {
+              inputVideo: videoPath,
+              timestampMs: timestampMs,
+              segments: [firstSegment], // Only pass the first segment for speed
+              targetWidth: 1920, // Preview width
+              // Rust struct expects camelCase
+              fontName,
+              textColor,
+              highlightWordColor,
+              outlineColor,
+              fontSize,
+              position,
+              karaoke: captionStyle === 'karaoke' || captionStyle === 'karaoke-multiline',
+              multiline: captionStyle === 'karaoke-multiline',
+              glowEffect,
+              exportFormat,
+              outputSize: '1080p',
+              cropStrategy,
+              fitMode: 'cover',
+              positionOverrides: isSelected ? positionOverrides : [],
+              blockedBands: blockedBandsFor(shownPlatforms),
+            })) as { imageData: string }
+
+            if (result && result.imageData) {
+              // Keep preview cache bounded to 50 items
+              if (previewCache.current.size > 50) {
+                const firstKey = previewCache.current.keys().next().value
+                if (firstKey) previewCache.current.delete(firstKey)
+              }
+              previewCache.current.set(cacheKey, result.imageData)
+              return { id: template.id, imageData: result.imageData }
+            }
+            return { id: template.id, imageData: null }
+          } catch (e) {
+            console.error(`Failed to generate preview for ${template.id}`, e)
+            return { id: template.id, imageData: null }
+          }
+        })
+      )
+
+      const newPreviewFrames: Record<string, string> = {}
+      for (const entry of entries) {
+        if (entry.imageData) {
+          newPreviewFrames[entry.id] = entry.imageData
+        }
       }
+      setPreviewFrames(newPreviewFrames)
+    } finally {
+      setIsGeneratingPreviews(false)
     }
-    setPreviewFrames(newPreviewFrames)
   }
 
   // Update previews when editor segments or RELEVANT video settings change
@@ -781,6 +817,7 @@ export default function App() {
 
   /** Load the first frame of a newly added video into the preview area. */
   const loadPreviewFrameFor = async (videoPath: string) => {
+    setIsLoadingPreviewFrame(true)
     try {
       const result = (await window.rust.call('extractFirstFrame', { videoPath })) as {
         imageData: string
@@ -790,6 +827,8 @@ export default function App() {
       }
     } catch (e) {
       console.error('Failed to extract frame preview', e)
+    } finally {
+      setIsLoadingPreviewFrame(false)
     }
   }
 
@@ -829,18 +868,7 @@ export default function App() {
 
         // Extract frame from the first new video
         if (pathsWithoutDuplicates.length > 0) {
-          const firstVideo = pathsWithoutDuplicates[0]
-          try {
-            // Call backend to extract frame
-            const result = (await window.rust.call('extractFirstFrame', { videoPath: firstVideo })) as {
-              imageData: string
-            }
-            if (result && result.imageData) {
-              setRawPreviewFrame(result.imageData)
-            }
-          } catch (e) {
-            console.error('Failed to extract frame preview', e)
-          }
+          await loadPreviewFrameFor(pathsWithoutDuplicates[0])
         }
       }
     } catch (error) {
@@ -960,6 +988,10 @@ export default function App() {
     const activeApiKey = (apiKeyOverride ?? apiKey).trim() || ''
     const activeWhisperServerUrl = (whisperServerUrlOverride ?? videoSettings.whisperServerUrl).trim() || ''
 
+    setIsGenerating(true)
+    setExportProgress(0)
+    setExportStatus('Checking saved captions...')
+
     try {
       // Check for existing captions
       const result = (await window.rust.call('loadCaptions', { videoPath: video })) as {
@@ -973,6 +1005,7 @@ export default function App() {
         setPositionOverrides(result.positionOverrides ?? [])
         setEditorVideoPath(video)
         setEditorJobId(requestId)
+        setIsGenerating(false)
         setIsEditorOpen(true)
         toast.info('Loaded saved captions layout!')
         return
@@ -985,13 +1018,13 @@ export default function App() {
     // A remote Whisper server doesn't need an OpenAI API key, so only prompt
     // for the key when using the OpenAI model with no server configured.
     if (!activeApiKey && videoSettings.selectedModel === 'whisper-1' && !activeWhisperServerUrl) {
+      setIsGenerating(false)
       setShouldGenerateAfterApiKey(true)
       setIsApiKeySettingsOpen(true)
       return
     }
 
     try {
-      setIsGenerating(true)
       setExportProgress(0)
       setExportStatus('Transcribing...')
 
@@ -1099,20 +1132,10 @@ export default function App() {
         setSelectedVideos((prev) => [...prev, ...pathsWithoutDuplicates.filter((path) => path !== null)])
 
         // Extract frame from the first new video (drag and drop)
-        const validNewPaths = pathsWithoutDuplicates.filter((path) => path !== null)
-        rememberRecentVideos(validNewPaths as string[])
+        const validNewPaths = pathsWithoutDuplicates.filter((path) => path !== null) as string[]
+        rememberRecentVideos(validNewPaths)
         if (validNewPaths.length > 0) {
-          const firstVideo = validNewPaths[0]
-          try {
-            const result = (await window.rust.call('extractFirstFrame', { videoPath: firstVideo })) as {
-              imageData: string
-            }
-            if (result && result.imageData) {
-              setRawPreviewFrame(result.imageData)
-            }
-          } catch (e) {
-            console.error('Failed to extract frame preview', e)
-          }
+          await loadPreviewFrameFor(validNewPaths[0])
         }
       }
     }
@@ -1229,6 +1252,8 @@ export default function App() {
                     onSelect={() => selectTemplate(template)}
                     previewFrame={previewFrames[template.id] || rawPreviewFrame}
                     isBurnedPreview={!!previewFrames[template.id]}
+                    isLoading={isLoadingPreviewFrame}
+                    isGenerating={isGeneratingPreviews}
                   />
                 ))}
               </div>
@@ -1611,6 +1636,7 @@ export default function App() {
               onShownPlatformsChange={updateShownPlatforms}
               previewFrame={previewFrames[videoSettings.selectedTemplate] || rawPreviewFrame}
               isBurnedPreview={!!previewFrames[videoSettings.selectedTemplate]}
+              isLoadingPreview={isLoadingPreviewFrame || isGeneratingPreviews}
             />
           ) : (
             <>
@@ -1652,7 +1678,11 @@ export default function App() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => setSelectedVideos([])}
+                              onClick={() => {
+                                setSelectedVideos([])
+                                setRawPreviewFrame(null)
+                                setPreviewFrames({})
+                              }}
                               className="text-muted-foreground hover:text-foreground text-xs"
                             >
                               Clear all
@@ -1671,7 +1701,17 @@ export default function App() {
                           <FileCard
                             key={index}
                             path={path}
-                            onRemove={() => setSelectedVideos((prev) => prev.filter((p) => p !== path))}
+                            isLoading={index === 0 && isLoadingPreviewFrame}
+                            onRemove={() => {
+                              setSelectedVideos((prev) => {
+                                const next = prev.filter((p) => p !== path)
+                                if (next.length === 0) {
+                                  setRawPreviewFrame(null)
+                                  setPreviewFrames({})
+                                }
+                                return next
+                              })
+                            }}
                           />
                         ))}
                       </div>

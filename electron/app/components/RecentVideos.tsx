@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Clock, X } from 'lucide-react'
+import { Clock, X, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export interface RecentVideo {
@@ -153,9 +153,11 @@ export function RecentVideos({ onOpen }: { onOpen: (path: string) => void }) {
             onClick={() => onOpen(entry.path)}
             title={entry.path}
           >
-            <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-black">
-              {entry.thumbnail && (
+            <div className="h-12 w-9 shrink-0 overflow-hidden rounded bg-black flex items-center justify-center">
+              {entry.thumbnail ? (
                 <img src={entry.thumbnail} alt="" className="h-full w-full object-cover" draggable={false} />
+              ) : (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground/50" />
               )}
             </div>
 

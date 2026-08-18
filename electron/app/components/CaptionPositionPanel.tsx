@@ -779,13 +779,16 @@ function SafeAreaOverlay({
               left: `${region.left}%`,
               width: `${region.width}%`,
               height: `${region.height}%`,
-              border: `1px dashed ${platform.color}`,
-              backgroundColor: `${platform.color}1f`,
+              border: `2px dashed ${platform.color}`,
+              backgroundColor: `${platform.color}33`,
+              // Dark halo either side of the border so the dashes stay visible
+              // over bright footage as well as dark.
+              boxShadow: `0 0 0 1px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(0,0,0,0.75)`,
             }}
           >
             <span
-              className="absolute top-0.5 left-1 text-[9px] font-medium tracking-wide"
-              style={{ color: platform.color }}
+              className="absolute top-0 left-0 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-black"
+              style={{ backgroundColor: platform.color }}
             >
               {region.label}
             </span>
@@ -866,7 +869,9 @@ function FilmstripFrame({
           />
         </>
       ) : (
-        <div className="absolute inset-0 bg-white/5 animate-pulse" />
+        <div className="absolute inset-0 flex items-center justify-center bg-white/5 animate-pulse">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-white/30" />
+        </div>
       )}
 
       <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] font-mono text-white/70 px-1 py-0.5">

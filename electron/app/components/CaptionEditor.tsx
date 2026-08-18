@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { Button } from '@/app/components/ui/button'
-import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw, MoveVertical } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Pencil, Check, X, Zap, RefreshCw, MoveVertical, Loader2 } from 'lucide-react'
 import { Textarea } from '@/app/components/ui/textarea'
 import { cn } from '@/lib/utils'
 import { CaptionPositionPanel, type PositionOverride } from './CaptionPositionPanel'
@@ -64,6 +64,7 @@ interface CaptionEditorProps {
   onShownPlatformsChange: (ids: PlatformId[]) => void
   previewFrame?: string | null
   isBurnedPreview?: boolean
+  isLoadingPreview?: boolean
 }
 
 export function CaptionEditor({
@@ -79,6 +80,7 @@ export function CaptionEditor({
   shownPlatforms,
   onShownPlatformsChange,
   previewFrame,
+  isLoadingPreview,
 }: CaptionEditorProps) {
   const [segments, setSegments] = useState<CaptionSegment[]>(initialSegments)
   // Removed unused video playback state
@@ -324,9 +326,24 @@ export function CaptionEditor({
             )}
 
             {/* Static Preview Image Layer */}
-            {previewFrame ? (
+            {isRefreshing ? (
+              <div className="absolute inset-0 z-10 bg-black flex flex-col items-center justify-center">
+                {previewFrame && (
+                  <img src={previewFrame} className="w-full h-full object-contain opacity-30" alt="Preview" />
+                )}
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/50 backdrop-blur-xs">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                  <p className="text-xs font-medium text-white/90">Updating preview…</p>
+                </div>
+              </div>
+            ) : previewFrame ? (
               <div className="absolute inset-0 z-10 bg-black">
                 <img src={previewFrame} className="w-full h-full object-contain" alt="Preview" />
+              </div>
+            ) : isLoadingPreview ? (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-xs text-white/80 font-medium">Loading preview frame…</p>
               </div>
             ) : (
               <div className="flex items-center justify-center h-full text-muted-foreground">
