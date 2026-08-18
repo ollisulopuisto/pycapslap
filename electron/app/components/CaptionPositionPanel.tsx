@@ -163,6 +163,7 @@ export function CaptionPositionPanel({
   const aliveRef = useRef(true)
   const requestedThumbs = useRef(new Set<string>())
   const requestedStages = useRef(new Set<string>())
+  const cleanFrameCache = useRef(new Map<string, string>())
 
   useEffect(() => {
     aliveRef.current = true
@@ -221,6 +222,12 @@ export function CaptionPositionPanel({
 
   const renderFrame = useCallback(
     async (timestampMs: number, mode: 'clean' | 'captions', thumbnailHeight?: number): Promise<string | null> => {
+      if (mode === 'clean') {
+        const cleanKey = `${videoPath}|${timestampMs}|${thumbnailHeight ?? 'full'}`
+        const cached = cleanFrameCache.current.get(cleanKey)
+        if (cached) return cached
+      }
+
       const result = (await scheduleRender(() =>
         window.rust.call('generatePreviewFrame', {
           inputVideo: videoPath,
@@ -237,7 +244,13 @@ export function CaptionPositionPanel({
           ...activeStyle,
         })
       )) as { imageData?: string } | null
-      return result?.imageData ?? null
+
+      const imageData = result?.imageData ?? null
+      if (imageData && mode === 'clean') {
+        const cleanKey = `${videoPath}|${timestampMs}|${thumbnailHeight ?? 'full'}`
+        cleanFrameCache.current.set(cleanKey, imageData)
+      }
+      return imageData
     },
     [videoPath, segments, activeStyle, shownPlatforms]
   )

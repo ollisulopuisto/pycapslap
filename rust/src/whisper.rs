@@ -8,8 +8,14 @@ use blake3;
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use tokio::fs;
 use tokio::process::Command as TokioCommand;
+
+static CACHED_WHISPER_PATH: OnceLock<Option<String>> = OnceLock::new();
+static CACHED_FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
+static CACHED_FFPROBE_PATH: OnceLock<Option<String>> = OnceLock::new();
+
 
 /// Transcribe audio using whisper.cpp CLI (preferred method)
 pub async fn transcribe_with_whisper_cpp(
@@ -373,44 +379,54 @@ pub fn binary_runnable(path: &Path) -> bool {
 
 /// Find whisper.cpp binary across different locations and platforms
 pub async fn find_whisper_binary() -> anyhow::Result<String> {
-    // Priority order:
-    // 1. Bundled binary (next to executable)
-    // 2. Project binary (for development)
-    // 3. System installation (Homebrew, etc.)
+    if let Some(cached) = CACHED_WHISPER_PATH.get() {
+        return match cached {
+            Some(p) => Ok(p.clone()),
+            None => Err(anyhow::anyhow!("whisper.cpp binary not found in any location")),
+        };
+    }
 
-    // Try to get the directory where the current executable is located
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let bundled_paths = get_bundled_whisper_paths(exe_dir);
-            for path in bundled_paths {
-                if path.exists() && binary_runnable(&path) {
-                    return Ok(path.to_string_lossy().to_string());
+    let result = (|| {
+        // Priority order:
+        // 1. Bundled binary (next to executable)
+        // 2. Project binary (for development)
+        // 3. System installation (Homebrew, etc.)
+
+        // Try to get the directory where the current executable is located
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let bundled_paths = get_bundled_whisper_paths(exe_dir);
+                for path in bundled_paths {
+                    if path.exists() && binary_runnable(&path) {
+                        return Some(path.to_string_lossy().to_string());
+                    }
                 }
             }
         }
-    }
 
-    // Try project directory (for development)
-    let project_paths = get_project_whisper_paths();
-    for path in project_paths {
-        if path.exists() && binary_runnable(&path) {
-            return Ok(path.to_string_lossy().to_string());
-        }
-    }
-
-    // Try system installations
-    let system_paths = get_system_whisper_paths();
-    for path in system_paths {
-        if let Ok(which_path) = which::which(&path) {
-            if binary_runnable(&which_path) {
-                return Ok(which_path.to_string_lossy().to_string());
+        // Try project directory (for development)
+        let project_paths = get_project_whisper_paths();
+        for path in project_paths {
+            if path.exists() && binary_runnable(&path) {
+                return Some(path.to_string_lossy().to_string());
             }
         }
-    }
 
-    Err(anyhow::anyhow!(
-        "whisper.cpp binary not found in any location"
-    ))
+        // Try system installations
+        let system_paths = get_system_whisper_paths();
+        for path in system_paths {
+            if let Ok(which_path) = which::which(&path) {
+                if binary_runnable(&which_path) {
+                    return Some(which_path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        None
+    })();
+
+    let _ = CACHED_WHISPER_PATH.set(result.clone());
+    result.ok_or_else(|| anyhow::anyhow!("whisper.cpp binary not found in any location"))
 }
 
 /// Get possible bundled whisper binary paths (next to executable)
@@ -526,98 +542,112 @@ fn get_system_whisper_paths() -> Vec<String> {
 
 /// Find FFmpeg binary using priority order (bundled > project > system)
 pub async fn find_ffmpeg_binary() -> anyhow::Result<String> {
-    // Priority order:
-    // 1. Bundled binary (next to executable)
-    // 2. Project binary (for development)
-    // 3. System installation (Homebrew, etc.)
-
-    // Allow override via environment
-    if let Ok(path) = std::env::var("FFMPEG_PATH") {
-        let p = std::path::Path::new(&path);
-        if p.exists() && binary_runnable(p) {
-            return Ok(path);
-        }
+    if let Some(cached) = CACHED_FFMPEG_PATH.get() {
+        return match cached {
+            Some(p) => Ok(p.clone()),
+            None => Err(anyhow::anyhow!("FFmpeg binary not found in any location")),
+        };
     }
 
-    // Try bundled binary first (next to executable)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let bundled_paths = get_bundled_ffmpeg_paths(exe_dir);
-            for path in bundled_paths {
-                if path.exists() && binary_runnable(&path) {
-                    return Ok(path.to_string_lossy().to_string());
+    let result = (|| {
+        // Allow override via environment
+        if let Ok(path) = std::env::var("FFMPEG_PATH") {
+            let p = std::path::Path::new(&path);
+            if p.exists() && binary_runnable(p) {
+                return Some(path);
+            }
+        }
+
+        // Try bundled binary first (next to executable)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let bundled_paths = get_bundled_ffmpeg_paths(exe_dir);
+                for path in bundled_paths {
+                    if path.exists() && binary_runnable(&path) {
+                        return Some(path.to_string_lossy().to_string());
+                    }
                 }
             }
         }
-    }
 
-    // Try project directory (for development)
-    let project_paths = get_project_ffmpeg_paths();
-    for path in project_paths {
-        if path.exists() && binary_runnable(&path) {
-            return Ok(path.to_string_lossy().to_string());
-        }
-    }
-
-    // Try system installations
-    let system_paths = get_system_ffmpeg_paths();
-    for path in system_paths {
-        if let Ok(which_path) = which::which(&path) {
-            if binary_runnable(&which_path) {
-                return Ok(which_path.to_string_lossy().to_string());
+        // Try project directory (for development)
+        let project_paths = get_project_ffmpeg_paths();
+        for path in project_paths {
+            if path.exists() && binary_runnable(&path) {
+                return Some(path.to_string_lossy().to_string());
             }
         }
-    }
 
-    Err(anyhow::anyhow!("FFmpeg binary not found in any location"))
+        // Try system installations
+        let system_paths = get_system_ffmpeg_paths();
+        for path in system_paths {
+            if let Ok(which_path) = which::which(&path) {
+                if binary_runnable(&which_path) {
+                    return Some(which_path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        None
+    })();
+
+    let _ = CACHED_FFMPEG_PATH.set(result.clone());
+    result.ok_or_else(|| anyhow::anyhow!("FFmpeg binary not found in any location"))
 }
 
 /// Find ffprobe binary using priority order (bundled > project > system)
 pub async fn find_ffprobe_binary() -> anyhow::Result<String> {
-    // Priority order:
-    // 1. Bundled binary (next to executable)
-    // 2. Project binary (for development)
-    // 3. System installation (Homebrew, etc.)
-
-    // Allow override via environment
-    if let Ok(path) = std::env::var("FFPROBE_PATH") {
-        let p = std::path::Path::new(&path);
-        if p.exists() && binary_runnable(p) {
-            return Ok(path);
-        }
+    if let Some(cached) = CACHED_FFPROBE_PATH.get() {
+        return match cached {
+            Some(p) => Ok(p.clone()),
+            None => Err(anyhow::anyhow!("ffprobe binary not found in any location")),
+        };
     }
 
-    // Try bundled binary first (next to executable)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let bundled_paths = get_bundled_ffprobe_paths(exe_dir);
-            for path in bundled_paths {
-                if path.exists() && binary_runnable(&path) {
-                    return Ok(path.to_string_lossy().to_string());
+    let result = (|| {
+        // Allow override via environment
+        if let Ok(path) = std::env::var("FFPROBE_PATH") {
+            let p = std::path::Path::new(&path);
+            if p.exists() && binary_runnable(p) {
+                return Some(path);
+            }
+        }
+
+        // Try bundled binary first (next to executable)
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                let bundled_paths = get_bundled_ffprobe_paths(exe_dir);
+                for path in bundled_paths {
+                    if path.exists() && binary_runnable(&path) {
+                        return Some(path.to_string_lossy().to_string());
+                    }
                 }
             }
         }
-    }
 
-    // Try project directory (for development)
-    let project_paths = get_project_ffprobe_paths();
-    for path in project_paths {
-        if path.exists() && binary_runnable(&path) {
-            return Ok(path.to_string_lossy().to_string());
-        }
-    }
-
-    // Try system installations
-    let system_paths = get_system_ffprobe_paths();
-    for path in system_paths {
-        if let Ok(which_path) = which::which(&path) {
-            if binary_runnable(&which_path) {
-                return Ok(which_path.to_string_lossy().to_string());
+        // Try project directory (for development)
+        let project_paths = get_project_ffprobe_paths();
+        for path in project_paths {
+            if path.exists() && binary_runnable(&path) {
+                return Some(path.to_string_lossy().to_string());
             }
         }
-    }
 
-    Err(anyhow::anyhow!("ffprobe binary not found in any location"))
+        // Try system installations
+        let system_paths = get_system_ffprobe_paths();
+        for path in system_paths {
+            if let Ok(which_path) = which::which(&path) {
+                if binary_runnable(&which_path) {
+                    return Some(which_path.to_string_lossy().to_string());
+                }
+            }
+        }
+
+        None
+    })();
+
+    let _ = CACHED_FFPROBE_PATH.set(result.clone());
+    result.ok_or_else(|| anyhow::anyhow!("ffprobe binary not found in any location"))
 }
 
 /// Get possible bundled FFmpeg binary paths (next to executable)

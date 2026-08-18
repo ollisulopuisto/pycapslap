@@ -58,32 +58,38 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn emit_event(ev: RpcEvent) {
+    let mut out = io::stdout().lock();
+    let _ = serde_json::to_writer(&mut out, &ev);
+    let _ = out.write_all(b"\n");
+    let _ = out.flush();
+}
+
+fn write_ok<T: serde::Serialize>(id: &str, value: &T) {
+    let resp = RpcResponse {
+        id: id.to_string(),
+        result: value,
+    };
+    let mut out = io::stdout().lock();
+    let _ = serde_json::to_writer(&mut out, &resp);
+    let _ = out.write_all(b"\n");
+    let _ = out.flush();
+}
+
+fn write_err(id: &str, e: String) {
+    let err = RpcError {
+        id: id.to_string(),
+        error: e,
+    };
+    let mut out = io::stdout().lock();
+    let _ = serde_json::to_writer(&mut out, &err);
+    let _ = out.write_all(b"\n");
+    let _ = out.flush();
+}
+
 async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
     let id = r.id.clone();
-
-    // Emit progress/log events — no captured stdout handle.
-    let mut emit = |ev: RpcEvent| {
-        println!("{}", serde_json::to_string(&ev).unwrap());
-        let _ = io::stdout().flush();
-    };
-
-    let write_ok = |value: serde_json::Value| {
-        let resp = RpcResponse {
-            id: id.clone(),
-            result: value,
-        };
-        println!("{}", serde_json::to_string(&resp).unwrap());
-        let _ = io::stdout().flush();
-    };
-
-    let write_err = |e: String| {
-        let err = RpcError {
-            id: id.clone(),
-            error: e,
-        };
-        println!("{}", serde_json::to_string(&err).unwrap());
-        let _ = io::stdout().flush();
-    };
+    let mut emit = emit_event;
 
     // Setup cancellation token for this request
     let (tx, mut rx) = tokio::sync::broadcast::channel(1);
@@ -109,19 +115,19 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
     };
 
     match r.method.as_str() {
-        "ping" => write_ok(serde_json::json!({"ok": true})),
+        "ping" => write_ok(&id, &serde_json::json!({"ok": true})),
         "cancel" => {
             // New cancel method
             if let Some(target_id) = r.params.as_str() {
                 let map = cancel_map.lock().unwrap();
                 if let Some(tx) = map.get(target_id) {
                     let _ = tx.send(()); // Send cancellation signal
-                    write_ok(serde_json::json!({ "cancelled": true }));
+                    write_ok(&id, &serde_json::json!({ "cancelled": true }));
                 } else {
-                    write_err(format!("Task with id {} not found", target_id));
+                    write_err(&id, format!("Task with id {} not found", target_id));
                 }
             } else {
-                write_err("Invalid params for cancel, expected string id".to_string());
+                write_err(&id, "Invalid params for cancel, expected string id".to_string());
             }
         }
         "generateCaptions" => {
@@ -130,16 +136,16 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                     tokio::select! {
                         res = captions::generate_captions(&id, p, &mut emit) => {
                             match res {
-                                Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                                Err(e) => write_err(e.to_string()),
+                                Ok(v) => write_ok(&id, &v),
+                                Err(e) => write_err(&id, e.to_string()),
                             }
                         }
                         _ = rx.recv() => {
-                            write_err("Cancelled".to_string());
+                            write_err(&id, "Cancelled".to_string());
                         }
                     }
                 }
-                Err(e) => write_err(format!("Invalid params for generateCaptions: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for generateCaptions: {}", e)),
             }
         }
         "downloadModel" => {
@@ -148,37 +154,34 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                     tokio::select! {
                        res = core::whisper::download_model_rpc(&id, p, &mut emit) => {
                             match res {
-                               Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                               Err(e) => write_err(e.to_string()),
+                               Ok(v) => write_ok(&id, &v),
+                               Err(e) => write_err(&id, e.to_string()),
                            }
                        }
                        _ = rx.recv() => {
-                            write_err("Cancelled".to_string());
+                            write_err(&id, "Cancelled".to_string());
                        }
                     }
                 }
-                Err(e) => write_err(format!("Invalid params for downloadModel: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for downloadModel: {}", e)),
             }
         }
         "checkModelExists" => match serde_json::from_value::<String>(r.params) {
             Ok(model_name) => match core::whisper::check_model_exists(&model_name) {
-                Ok(exists) => write_ok(serde_json::to_value(exists).unwrap()),
-                Err(e) => write_err(e.to_string()),
+                Ok(exists) => write_ok(&id, &exists),
+                Err(e) => write_err(&id, e.to_string()),
             },
-            Err(e) => write_err(format!("Invalid params for checkModelExists: {}", e)),
+            Err(e) => write_err(&id, format!("Invalid params for checkModelExists: {}", e)),
         },
         "extractFirstFrame" => {
             match serde_json::from_value::<core::types::ExtractFirstFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_first_frame(&p.video_path) {
-                    Ok(base64_img) => write_ok(
-                        serde_json::to_value(core::types::ExtractFirstFrameResult {
-                            image_data: base64_img,
-                        })
-                        .unwrap(),
-                    ),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(base64_img) => write_ok(&id, &core::types::ExtractFirstFrameResult {
+                        image_data: base64_img,
+                    }),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for extractFirstFrame: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for extractFirstFrame: {}", e)),
             }
         }
         "transcribe" => {
@@ -198,21 +201,21 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                         ) => {
                             match res {
                                 Ok((probe, audio, transcription)) => {
-                                    write_ok(serde_json::json!({
+                                    write_ok(&id, &serde_json::json!({
                                         "probeResult": probe,
                                         "audioFile": audio,
                                         "transcription": transcription
                                     }));
                                 },
-                                Err(e) => write_err(e.to_string()),
+                                Err(e) => write_err(&id, e.to_string()),
                             }
                         }
                         _ = rx.recv() => {
-                            write_err("Cancelled".to_string());
+                            write_err(&id, "Cancelled".to_string());
                         }
                     }
                 }
-                Err(e) => write_err(format!("Invalid params for transcribe: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for transcribe: {}", e)),
             }
         }
         "burn" => match serde_json::from_value::<core::types::BurnCaptionsParams>(r.params) {
@@ -220,62 +223,62 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                 tokio::select! {
                     res = captions::burn_captions_with_segments(&id, p, &mut emit) => {
                         match res {
-                            Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                            Err(e) => write_err(e.to_string()),
+                            Ok(v) => write_ok(&id, &v),
+                            Err(e) => write_err(&id, e.to_string()),
                         }
                     }
                     _ = rx.recv() => {
-                        write_err("Cancelled".to_string());
+                        write_err(&id, "Cancelled".to_string());
                     }
                 }
             }
-            Err(e) => write_err(format!("Invalid params for burn: {}", e)),
+            Err(e) => write_err(&id, format!("Invalid params for burn: {}", e)),
         },
         "previewLayout" => {
             match serde_json::from_value::<core::types::PreviewLayoutParams>(r.params) {
                 Ok(p) => match captions::generate_preview_layout(p) {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(v) => write_ok(&id, &v),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for previewLayout: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for previewLayout: {}", e)),
             }
         }
         "saveCaptions" => {
             match serde_json::from_value::<core::types::SaveCaptionsParams>(r.params) {
                 Ok(p) => match captions::save_captions(p) {
-                    Ok(_) => write_ok(serde_json::json!({ "ok": true })),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(_) => write_ok(&id, &serde_json::json!({ "ok": true })),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for saveCaptions: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for saveCaptions: {}", e)),
             }
         }
         "loadCaptions" => {
             match serde_json::from_value::<core::types::LoadCaptionsParams>(r.params) {
                 Ok(p) => match captions::load_captions(p) {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(v) => write_ok(&id, &v),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for loadCaptions: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for loadCaptions: {}", e)),
             }
         }
         "autoPlaceCaptions" => {
             match serde_json::from_value::<core::types::AutoPlaceParams>(r.params) {
                 Ok(p) => match core::placement::auto_place_captions(p).await {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(v) => write_ok(&id, &v),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for autoPlaceCaptions: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for autoPlaceCaptions: {}", e)),
             }
         }
         "generatePreviewFrame" => {
             match serde_json::from_value::<core::types::PreviewFrameParams>(r.params) {
                 Ok(p) => match captions::generate_preview_frame(p).await {
-                    Ok(v) => write_ok(serde_json::to_value(v).unwrap()),
-                    Err(e) => write_err(e.to_string()),
+                    Ok(v) => write_ok(&id, &v),
+                    Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(format!("Invalid params for generatePreviewFrame: {}", e)),
+                Err(e) => write_err(&id, format!("Invalid params for generatePreviewFrame: {}", e)),
             }
         }
-        _ => write_err(format!("Unknown method: {}", r.method)),
+        _ => write_err(&id, format!("Unknown method: {}", r.method)),
     }
 }

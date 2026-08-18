@@ -25,86 +25,91 @@ fn get_probe_cache() -> &'static RwLock<ProbeCacheMap> {
 
 
 
+static FFMPEG_SYNC_PATH: OnceLock<String> = OnceLock::new();
+
 /// Get FFmpeg binary path synchronously (for use in sync functions)
 pub fn get_ffmpeg_path_sync() -> String {
-    // Helper that respects architecture on macOS: if a candidate exists but
-    // can't run on this machine (e.g. x86_64 binary on arm64 without Rosetta),
-    // skip it and try the next candidate.
-    fn usable(path: &std::path::Path) -> bool {
-        path.exists() && crate::whisper::binary_runnable(path)
-    }
+    FFMPEG_SYNC_PATH
+        .get_or_init(|| {
+            // Helper that respects architecture on macOS: if a candidate exists but
+            // can't run on this machine (e.g. x86_64 binary on arm64 without Rosetta),
+            // skip it and try the next candidate.
+            fn usable(path: &std::path::Path) -> bool {
+                path.exists() && crate::whisper::binary_runnable(path)
+            }
 
-    // Try to use cached path or default to "ffmpeg"
-    // In sync context, we can't use the full async detection
-    if let Ok(ffmpeg_path) = std::env::var("FFMPEG_PATH") {
-        crate::debug_log!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
-        let path = std::path::Path::new(&ffmpeg_path);
-        if usable(path) {
-            return ffmpeg_path;
-        } else {
-            crate::debug_log!(
-                "DEBUG: FFMPEG_PATH points to non-existent or unrunnable file, falling back to auto-detection"
-            );
-        }
-    }
+            // Try to use cached path or default to "ffmpeg"
+            // In sync context, we can't use the full async detection
+            if let Ok(ffmpeg_path) = std::env::var("FFMPEG_PATH") {
+                crate::debug_log!("DEBUG: FFMPEG_PATH set to {}", ffmpeg_path);
+                let path = std::path::Path::new(&ffmpeg_path);
+                if usable(path) {
+                    return ffmpeg_path;
+                } else {
+                    crate::debug_log!(
+                        "DEBUG: FFMPEG_PATH points to non-existent or unrunnable file, falling back to auto-detection"
+                    );
+                }
+            }
 
-    // PRIORITY 1: Bundled binary in rust/bin (Development / bundled script)
-    // This matches the logic we added to whisper.rs
-    let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let bin_dir = project_root.join("bin");
-    let bundled_rust = bin_dir.join(if cfg!(target_os = "windows") {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    });
-
-    if usable(&bundled_rust) {
-        crate::debug_log!(
-            "DEBUG: Found bundled ffmpeg at rust/bin: {:?}",
-            bundled_rust
-        );
-        return bundled_rust.to_string_lossy().to_string();
-    }
-
-    // PRIORITY 2: Bundled path next to the executable (Production app bundle)
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            let bundled = exe_dir.join(if cfg!(target_os = "windows") {
-                "bin/ffmpeg.exe"
+            // PRIORITY 1: Bundled binary in rust/bin (Development / bundled script)
+            let project_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            let bin_dir = project_root.join("bin");
+            let bundled_rust = bin_dir.join(if cfg!(target_os = "windows") {
+                "ffmpeg.exe"
             } else {
-                "bin/ffmpeg"
+                "ffmpeg"
             });
-            if usable(&bundled) {
-                crate::debug_log!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
-                return bundled.to_string_lossy().to_string();
+
+            if usable(&bundled_rust) {
+                crate::debug_log!(
+                    "DEBUG: Found bundled ffmpeg at rust/bin: {:?}",
+                    bundled_rust
+                );
+                return bundled_rust.to_string_lossy().to_string();
             }
-        }
-    }
 
-    // Try common paths
-    let paths = vec![
-        "/opt/homebrew/bin/ffmpeg",
-        "/usr/local/bin/ffmpeg",
-        "/usr/bin/ffmpeg",
-        "ffmpeg",
-    ];
-
-    for path in paths {
-        if let Ok(which_path) = which::which(path) {
-            if usable(&which_path) {
-                crate::debug_log!("DEBUG: Found ffmpeg at {}", which_path.display());
-                return which_path.to_string_lossy().to_string();
+            // PRIORITY 2: Bundled path next to the executable (Production app bundle)
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    let bundled = exe_dir.join(if cfg!(target_os = "windows") {
+                        "bin/ffmpeg.exe"
+                    } else {
+                        "bin/ffmpeg"
+                    });
+                    if usable(&bundled) {
+                        crate::debug_log!("DEBUG: Found bundled ffmpeg at {:?}", bundled);
+                        return bundled.to_string_lossy().to_string();
+                    }
+                }
             }
-        }
-        let p = std::path::Path::new(path);
-        if p.is_file() && usable(p) {
-            crate::debug_log!("DEBUG: Found ffmpeg at {}", path);
-            return path.to_string();
-        }
-    }
 
-    crate::debug_log!("DEBUG: No ffmpeg found, falling back to 'ffmpeg'");
-    "ffmpeg".to_string() // Fallback
+            // Try common paths
+            let paths = vec![
+                "/opt/homebrew/bin/ffmpeg",
+                "/usr/local/bin/ffmpeg",
+                "/usr/bin/ffmpeg",
+                "ffmpeg",
+            ];
+
+            for path in paths {
+                if let Ok(which_path) = which::which(path) {
+                    if usable(&which_path) {
+                        crate::debug_log!("DEBUG: Found ffmpeg at {}", which_path.display());
+                        return which_path.to_string_lossy().to_string();
+                    }
+                }
+                let p = std::path::Path::new(path);
+                if p.is_file() && usable(p) {
+                    crate::debug_log!("DEBUG: Found ffmpeg at {}", path);
+                    return path.to_string();
+                }
+            }
+
+            crate::debug_log!("DEBUG: No ffmpeg found, falling back to 'ffmpeg'");
+            "ffmpeg".to_string() // Fallback
+        })
+        .clone()
 }
 
 /// Get the fonts directory path for subtitle rendering
