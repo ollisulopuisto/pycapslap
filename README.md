@@ -20,8 +20,7 @@ cd rust
 cargo build --release
 cd ..
 
-# 2. Run the native desktop app with uv
-cd pyside
+# 2. Run the native desktop app directly with uv
 uv run pycapslap
 ```
 

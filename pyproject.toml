@@ -1,0 +1,13 @@
+[tool.uv.workspace]
+members = ["pyside"]
+
+[tool.pytest.ini_options]
+pythonpath = ["pyside"]
+testpaths = ["pyside/tests"]
+
+[tool.ruff]
+src = ["pyside"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E402"]

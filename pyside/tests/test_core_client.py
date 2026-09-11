@@ -13,7 +13,8 @@ def test_core_client_check_model_exists(qapp):
 
 def test_core_client_extract_first_frame(qapp):
     from pathlib import Path
-    sample = str(Path("../rust/bin/test_input.mp4").resolve())
+    repo_root = Path(__file__).resolve().parents[2]
+    sample = str((repo_root / "rust" / "bin" / "test_input.mp4").resolve())
     client = CoreClient()
     try:
         fut = client.call("extractFirstFrame", {"videoPath": sample})

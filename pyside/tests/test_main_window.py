@@ -22,7 +22,8 @@ def test_main_window_init(qtbot):
 
 
 def test_main_window_load_1080p_video(qtbot):
-    sample = str(Path("../rust/bin/test_input.mp4").resolve())
+    repo_root = Path(__file__).resolve().parents[2]
+    sample = str((repo_root / "rust" / "bin" / "test_input.mp4").resolve())
     assert Path(sample).exists(), "Sample 1080p video must exist"
 
     window = MainWindow()
