@@ -30,7 +30,7 @@ from app.views.video_player import VideoPlayerWidget
 class MainWindow(QMainWindow):
     def __init__(self, core_client: CoreClient | None = None, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle("CapSlap — Native PySide6 Desktop")
+        self.setWindowTitle("PyCapSlap — High-Performance Native Video Captions")
         self.resize(1300, 850)
         self.setMinimumSize(1000, 650)
         self.setAcceptDrops(True)

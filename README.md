@@ -1,68 +1,38 @@
-# CapSlap - AI Video Caption Generator
+# PyCapSlap (formerly CapSlap) ⚡
 
-Automatically generate and burn captions into videos using AI transcription. **Works 100% offline** with local Whisper models.
+**PyCapSlap** is an AI video caption generator and editor that automatically transcribes audio, generates synchronized subtitles, and burns them into videos. **Works 100% offline** with local Whisper models.
 
-![CapSlap Screenshot](screenshot.png)
+Featuring a snappy native desktop GUI built with **PySide6 (Qt 6)** and a high-performance **Rust** processing core, PyCapSlap replaces the heavy Electron architecture with sub-millisecond video scrubbing and a -74% memory footprint.
 
-## ✨ Features
+---
 
-- **🔒 100% Local/Offline** - All transcription runs locally using whisper.cpp. No cloud API required, your video never leaves your machine
-- **👁️ Live Preview** - See exactly how your captions will look before exporting with real-time preview
-- **🎨 30+ Custom Fonts** - Choose from a curated library organized by style:
-  - **Modern / Sans** - Montserrat, Roboto, Open Sans, Lato, Raleway, Kanit, Poppins, WorkSans
-  - **Display / Impact** - THEBOLDFONT, Bebas Neue, Anton, Lilita One, Oswald, Bangers
-  - **Fun / Comic** - Komika Axis, Comic Neue, Fredoka, Chewy, Luckiest Guy
-  - **Serif / Elegant** - Playfair Display, Merriweather, Lora, Cinzel, Bodoni Moda
-  - **Handwritten / Script** - Permanent Marker, Patrick Hand, Amatic SC, Caveat Brush, Pacifico
-- **📐 Adjustable Font Size** - Fine-tune caption size to fit your video style
-- **🎬 Caption Templates** - Pre-built styles: Oneliner, Karaoke, Vibrant, Storyteller
-- **🎯 Word-Level Timing** - Karaoke-style highlighting with precise word synchronization
-- **📱 Export Formats** - 9:16 (TikTok/Reels), 16:9 (YouTube), 1:1 (Instagram), 4:5 (Feed posts)
-- **🎥 Wide Format Support** - Works with MP4, MOV, WebM, AVI, WMV, FLV, MKV, MPEG, 3GP, and more
-- **✏️ Caption Editor** - Full control over your captions before exporting:
-  - Edit transcribed text with live preview
-  - Shift words between segments to fix line breaks
-  - View and adjust word-level timing
-  - Double-click any segment to edit text directly
-- **🌍 Multilingual** - Transcribe in 99+ languages including English, Spanish, French, German, Finnish, Japanese, and more
+## 🚀 Quick Start (Native PyCapSlap)
 
-## Prerequisites
+### Prerequisites
+* **Rust**: https://rustup.rs/
+* **Python 3.12+** & [**uv**](https://github.com/astral-sh/uv)
+* **FFmpeg**
 
-- **Rust**: https://rustup.rs/
-- **Bun**: https://bun.sh/
-- **FFmpeg** (auto-installed on macOS)
+### Running PyCapSlap
+```bash
+# 1. Build the Rust core release binary
+cd rust
+cargo build --release
+cd ..
 
-## Quick Start
+# 2. Run the native desktop app with uv
+cd pyside
+uv run pycapslap
+```
 
-1. **Clone the repository**
+---
 
-   ```bash
-   git clone <repository-url>
-   cd capslap
-   ```
+## 📦 Legacy Electron Application (Optional)
 
-2. **Build Rust core**
+If you need the legacy Electron + React frontend:
 
-   ```bash
-   cd rust
-   cargo build
-   cd ..
-   ```
-
-3. **Install Electron dependencies**
-
-   ```bash
-   cd electron
-   bun install
-   ```
-
-   FFmpeg will be automatically downloaded on macOS during `bun install`.
-
-4. **Run the app**
-
-   ```bash
-   bun run dev
-   ```
+1. **Install dependencies**: `cd electron && bun install`
+2. **Run**: `bun run dev`
 
 ## Whisper Models (Local Transcription)
 

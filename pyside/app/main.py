@@ -13,8 +13,8 @@ from app.views.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("CapSlap")
-    app.setOrganizationName("CapSlap")
+    app.setApplicationName("PyCapSlap")
+    app.setOrganizationName("PyCapSlap")
 
     window = MainWindow()
     window.show()
