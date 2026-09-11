@@ -235,7 +235,9 @@ class MainWindow(QMainWindow):
         self.project.is_dirty = True
         self.timeline.update()
         if self.overlay.current_segment == seg:
-            self.overlay.update()
+            pos_ms = self.player.media_player.position()
+            anchor_y = self.project.get_anchor_y_for_segment(seg)
+            self.overlay.set_segment(seg, anchor_y, current_pos_ms=pos_ms)
 
     def _on_add_cue_requested(self) -> None:
         pos = self.player.media_player.position()
@@ -252,15 +254,23 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Added new caption cue.", 2500)
 
     def _on_save_requested(self) -> None:
-        success = self.project.save_sidecar()
+        self.caption_panel.commit_active_editor()
+        if not self.project.video_path:
+            return
+        sidecar_path = self.project.get_default_sidecar_path()
+        if not sidecar_path:
+            return
+
+        success = self.project.save_sidecar(sidecar_path)
         if success:
             self.status.showMessage(
-                "Captions saved successfully to sidecar (.capslap.json).", 3000
+                f"Saved {len(self.project.segments)} captions to sidecar.", 3000
             )
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
     def _on_render_video_requested(self) -> None:
+        self.caption_panel.commit_active_editor()
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
             QMessageBox.information(self, "Render Video", "Please load a video first.")

@@ -90,3 +90,40 @@ def test_set_override_for_active_segment():
     assert proj.position_overrides[0].y_pct == 35.0
     assert proj.position_overrides[0].start_ms == 1000
     assert proj.position_overrides[0].end_ms == 2000
+
+
+def test_caption_segment_update_text_synchronizes_words():
+    seg = CaptionSegment(
+        start_ms=1000,
+        end_ms=3000,
+        text="Original words here",
+        words=[
+            WordSpan(start_ms=1000, end_ms=1600, text="Original"),
+            WordSpan(start_ms=1600, end_ms=2300, text=" words"),
+            WordSpan(start_ms=2300, end_ms=3000, text=" here"),
+        ],
+    )
+
+    # 1. Edit with same word count: preserves timings
+    seg.update_text("Updated words now")
+    assert seg.text == "Updated words now"
+    assert len(seg.words) == 3
+    assert seg.words[0].text == "Updated"
+    assert seg.words[0].start_ms == 1000
+    assert seg.words[0].end_ms == 1600
+    assert seg.words[2].text == " now"
+    assert seg.words[2].end_ms == 3000
+
+    # 2. Edit with different word count: re-interpolates timings
+    seg.update_text("Completely rewritten sentence for testing")
+    assert seg.text == "Completely rewritten sentence for testing"
+    assert len(seg.words) == 5
+    assert seg.words[0].text == "Completely"
+    assert seg.words[0].start_ms == 1000
+    assert seg.words[-1].end_ms == 3000
+
+    # 3. Serialization to_dict includes updated words
+    d = seg.to_dict()
+    assert d["text"] == "Completely rewritten sentence for testing"
+    assert len(d["words"]) == 5
+    assert d["words"][0]["text"] == "Completely"

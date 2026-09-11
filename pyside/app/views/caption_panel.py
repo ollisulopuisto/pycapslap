@@ -443,6 +443,9 @@ class CaptionPanelWidget(QWidget):
                 self.selected_segment = seg
                 self.segment_selected.emit(seg)
 
+    def commit_active_editor(self) -> None:
+        self.cue_table.setCurrentItem(None)
+
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._block_signals:
             return
@@ -450,5 +453,5 @@ class CaptionPanelWidget(QWidget):
         col = item.column()
         if 0 <= row < len(self.segments) and col == 2:
             seg = self.segments[row]
-            seg.text = item.text()
+            seg.update_text(item.text())
             self.segment_updated.emit(seg)

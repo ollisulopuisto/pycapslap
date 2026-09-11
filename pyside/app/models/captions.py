@@ -40,6 +40,66 @@ class CaptionSegment:
     text: str
     words: list[WordSpan] = field(default_factory=list)
 
+    def update_text(self, new_text: str) -> None:
+        self.text = new_text
+        tokens = new_text.split()
+        if not tokens:
+            self.words = []
+            return
+
+        if not self.words:
+            return
+
+        if len(tokens) == len(self.words):
+            # Same word count: preserve exact timings, update token text
+            new_words = []
+            for i, tok in enumerate(tokens):
+                old_w = self.words[i]
+                lead_space = (
+                    " "
+                    if (
+                        i > 0
+                        and (old_w.text.startswith(" ") or not tok.startswith(" "))
+                    )
+                    else ""
+                )
+                clean_tok = tok.strip()
+                new_words.append(
+                    WordSpan(
+                        start_ms=old_w.start_ms,
+                        end_ms=old_w.end_ms,
+                        text=lead_space + clean_tok,
+                        glue_to_previous=(
+                            old_w.glue_to_previous
+                            if clean_tok == old_w.text.strip()
+                            else False
+                        ),
+                    )
+                )
+            self.words = new_words
+        else:
+            # Word count changed: re-interpolate word timings across segment duration
+            duration = max(1, self.end_ms - self.start_ms)
+            step = duration // len(tokens)
+            new_words = []
+            for i, tok in enumerate(tokens):
+                w_start = self.start_ms + i * step
+                w_end = (
+                    self.start_ms + (i + 1) * step
+                    if i < len(tokens) - 1
+                    else self.end_ms
+                )
+                lead_space = " " if i > 0 else ""
+                new_words.append(
+                    WordSpan(
+                        start_ms=w_start,
+                        end_ms=w_end,
+                        text=lead_space + tok.strip(),
+                        glue_to_previous=False,
+                    )
+                )
+            self.words = new_words
+
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "startMs": self.start_ms,
@@ -214,6 +274,13 @@ class ProjectState:
     position_overrides: list[PositionOverride] = field(default_factory=list)
     style: CaptionStyle = field(default_factory=CaptionStyle)
     is_dirty: bool = False
+
+    @property
+    def video_path(self) -> str | None:
+        return self.video.path if self.video else None
+
+    def get_default_sidecar_path(self) -> str | None:
+        return self.sidecar_path
 
     def load_video(self, path: str, probe_dict: dict[str, Any]) -> None:
         self.video = VideoMetadata(

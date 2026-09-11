@@ -1,4 +1,4 @@
-from app.models.captions import CaptionSegment
+from app.models.captions import CaptionSegment, WordSpan
 from app.views.caption_panel import CaptionPanelWidget
 
 
@@ -95,3 +95,36 @@ def test_caption_panel_style_collapsible(qtbot):
     panel.btn_toggle_style.click()
     assert not panel.style_content.isVisible()
     assert "▶" in panel.btn_toggle_style.text()
+
+
+def test_caption_panel_edit_cell_syncs_segment(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="Initial text",
+        words=[
+            WordSpan(start_ms=0, end_ms=1000, text="Initial"),
+            WordSpan(start_ms=1000, end_ms=2000, text=" text"),
+        ],
+    )
+    panel.set_segments([seg])
+
+    emitted_updates = []
+    panel.segment_updated.connect(emitted_updates.append)
+
+    # Edit text in table item
+    item = panel.cue_table.item(0, 2)
+    item.setText("Replaced caption here")
+
+    assert len(emitted_updates) == 1
+    assert seg.text == "Replaced caption here"
+    assert len(seg.words) == 3
+    assert seg.words[0].text == "Replaced"
+    assert seg.words[-1].text == " here"
+
+    # Verify commit_active_editor clears selection / finishes editing
+    panel.commit_active_editor()
+    assert panel.cue_table.currentItem() is None

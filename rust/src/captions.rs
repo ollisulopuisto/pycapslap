@@ -881,6 +881,39 @@ mod tests_persistence {
     }
 
     #[test]
+    fn test_coalesce_phrases_honors_edited_segment_text() {
+        // When s.text is edited and differs from s.words, coalesce_phrases must use s.text
+        let segments = vec![CaptionSegment {
+            start_ms: 0,
+            end_ms: 2000,
+            text: "Uusi muokattu teksti".to_string(), // edited by user
+            words: vec![
+                WordSpan {
+                    start_ms: 0,
+                    end_ms: 1000,
+                    text: "Vanha".to_string(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 1000,
+                    end_ms: 2000,
+                    text: "teksti".to_string(),
+                    glue_to_previous: false,
+                },
+            ],
+        }];
+
+        let phrases = coalesce_phrases(&segments);
+        let words: Vec<&str> = phrases
+            .iter()
+            .flat_map(|p| p.spans.iter())
+            .map(|s| s.text.as_str())
+            .collect();
+
+        assert_eq!(words, vec!["Uusi", "muokattu", "teksti"]);
+    }
+
+    #[test]
     fn test_resolve_anchor_y_uses_override_for_matching_cue() {
         let overrides = vec![PositionOverride {
             start_ms: 1000,
@@ -1455,39 +1488,55 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
     );
     let mut all: Vec<WordSpan> = Vec::new();
     for s in segments {
-        for w in &s.words {
-            let t = w.text.trim();
-            if t.is_empty() {
-                continue;
-            }
+        let words_joined = s
+            .words
+            .iter()
+            .map(|w| w.text.trim())
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("");
+        let seg_joined = s.text.split_whitespace().collect::<Vec<_>>().join("");
+        let use_words = !s.words.is_empty() && (words_joined == seg_joined);
 
-            // Put a word back together before anything measures or wraps it.
-            // Doing it here means line breaking, highlighting and karaoke all
-            // see one word, with no special cases of their own.
-            if w.glue_to_previous {
-                if let Some(previous) = all.last_mut() {
-                    previous.text.push_str(t);
-                    previous.end_ms = w.end_ms.max(previous.end_ms);
+        if use_words {
+            for w in &s.words {
+                let t = w.text.trim();
+                if t.is_empty() {
                     continue;
                 }
-            }
 
-            all.push(WordSpan {
-                start_ms: w.start_ms,
-                end_ms: w.end_ms,
-                text: t.to_string(),
-                glue_to_previous: false,
-            });
-        }
-        // Fallback: if a segment has text but no words, split evenly so nothing gets dropped
-        if s.words.is_empty() && !s.text.trim().is_empty() {
+                // Put a word back together before anything measures or wraps it.
+                // Doing it here means line breaking, highlighting and karaoke all
+                // see one word, with no special cases of their own.
+                if w.glue_to_previous {
+                    if let Some(previous) = all.last_mut() {
+                        previous.text.push_str(t);
+                        previous.end_ms = w.end_ms.max(previous.end_ms);
+                        continue;
+                    }
+                }
+
+                all.push(WordSpan {
+                    start_ms: w.start_ms,
+                    end_ms: w.end_ms,
+                    text: t.to_string(),
+                    glue_to_previous: false,
+                });
+            }
+        } else if !s.text.trim().is_empty() {
+            // User edited segment text (or words was empty) — always honor edited text
             let toks: Vec<_> = s.text.split_whitespace().collect();
             let total = (s.end_ms - s.start_ms).max(1);
-            let per = total / (toks.len().max(1) as u64);
+            let n_toks = toks.len();
+            let per = total / (n_toks.max(1) as u64);
             let mut t = s.start_ms;
-            for tok in toks {
+            for (idx, tok) in toks.iter().enumerate() {
                 let s0 = t;
-                let e0 = (t + per).min(s.end_ms);
+                let e0 = if idx == n_toks - 1 {
+                    s.end_ms
+                } else {
+                    (t + per).min(s.end_ms)
+                };
                 t = e0;
                 all.push(WordSpan {
                     start_ms: s0,
