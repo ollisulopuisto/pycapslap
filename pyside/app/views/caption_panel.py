@@ -30,6 +30,7 @@ class CaptionPanelWidget(QWidget):
     auto_place_requested = Signal()
     save_requested = Signal()
     transcribe_requested = Signal()
+    add_cue_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -51,6 +52,11 @@ class CaptionPanelWidget(QWidget):
         self.lbl_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #f4f4f5;")
         header_layout.addWidget(self.lbl_title)
         header_layout.addStretch()
+
+        self.btn_add_cue = QPushButton("+ Add")
+        self.btn_add_cue.setToolTip("Add a new caption cue at the current playback position")
+        self.btn_add_cue.clicked.connect(self.add_cue_requested.emit)
+        header_layout.addWidget(self.btn_add_cue)
 
         self.btn_transcribe = QPushButton("Transcribe")
         self.btn_transcribe.setToolTip("Run AI Whisper transcription on video audio")

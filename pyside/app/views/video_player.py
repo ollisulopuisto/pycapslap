@@ -9,9 +9,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
+    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
+
+from app.views.caption_overlay import CaptionOverlayWidget
 
 
 class VideoPlayerWidget(QWidget):
@@ -48,8 +51,18 @@ class VideoPlayerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Video Surface
-        layout.addWidget(self.video_widget, stretch=1)
+        # Video Surface with Stacked Caption Overlay
+        self.video_container = QWidget(self)
+        self.video_layout = QStackedLayout(self.video_container)
+        self.video_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self.video_layout.addWidget(self.video_widget)
+
+        self.overlay = CaptionOverlayWidget(self.video_container)
+        self.video_layout.addWidget(self.overlay)
+        self.overlay.show()
+        self.overlay.raise_()
+
+        layout.addWidget(self.video_container, stretch=1)
 
         # Controls Bar
         controls_layout = QHBoxLayout()

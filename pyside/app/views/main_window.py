@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
 
 from app.core_client import CoreClient
 from app.models.captions import CaptionSegment, ProjectState
-from app.views.caption_overlay import CaptionOverlayWidget
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.timeline import VisualTimelineWidget
 from app.views.video_player import VideoPlayerWidget
@@ -75,12 +74,10 @@ class MainWindow(QMainWindow):
         action_bar.addStretch()
         left_col.addLayout(action_bar)
 
-        # Video Player Widget
+        # Video Player Widget with embedded Caption Overlay
         self.player = VideoPlayerWidget(self)
         self.player.seek_latency_measured.connect(self._on_seek_latency)
-
-        # Overlay widget placed directly on top of video widget
-        self.overlay = CaptionOverlayWidget(self.player.video_widget)
+        self.overlay = self.player.overlay
         left_col.addWidget(self.player, stretch=1)
 
         # Visual Timeline Widget
@@ -154,6 +151,7 @@ class MainWindow(QMainWindow):
         self.caption_panel.save_requested.connect(self._on_save_requested)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
+        self.caption_panel.add_cue_requested.connect(self._on_add_cue_requested)
 
         # Core signals
         self.core.progress.connect(self._on_core_progress)
@@ -218,6 +216,18 @@ class MainWindow(QMainWindow):
         self.timeline.update()
         if self.overlay.current_segment == seg:
             self.overlay.update()
+
+    def _on_add_cue_requested(self) -> None:
+        pos = self.player.media_player.position()
+        start_ms = max(0, pos)
+        end_ms = start_ms + 2500
+        new_cue = CaptionSegment(start_ms=start_ms, end_ms=end_ms, text="New caption text")
+        self.project.segments.append(new_cue)
+        self.project.segments.sort(key=lambda s: s.start_ms)
+        self.project.is_dirty = True
+        self.set_caption_segments(self.project.segments)
+        self._on_segment_selected(new_cue)
+        self.status.showMessage("Added new caption cue.", 2500)
 
     def _on_save_requested(self) -> None:
         success = self.project.save_sidecar()
@@ -352,9 +362,20 @@ class MainWindow(QMainWindow):
 
         self.project.load_video(file_path, {})
         # Check if sidecar exists
-        if self.project.load_sidecar():
+        if self.project.load_sidecar() and self.project.segments:
             self.set_caption_segments(self.project.segments)
             self.status.showMessage(f"Loaded sidecar with {len(self.project.segments)} captions.")
+        else:
+            starter_cues = [
+                CaptionSegment(start_ms=0, end_ms=3000, text="Welcome to PyCapSlap ⚡"),
+                CaptionSegment(start_ms=3500, end_ms=6500, text="Drag this caption vertically to position it"),
+                CaptionSegment(start_ms=7000, end_ms=9500, text="High-performance native video captions"),
+            ]
+            self.set_caption_segments(starter_cues)
+            self.status.showMessage("Loaded video with starter captions. Drag on video or click + Add to edit.", 4000)
+
+        # Trigger initial position sync
+        self._on_position_changed(0)
 
         self.meta_lbl.setText(
             f"File: {os.path.basename(file_path)}\n"
