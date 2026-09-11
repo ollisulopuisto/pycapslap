@@ -118,8 +118,11 @@ class CoreClient(QObject):
             req_id = msg.get("id")
 
             if event == "progress":
-                status = msg.get("status", "")
-                val = float(msg.get("progress", 0.0))
+                status = str(msg.get("status", ""))
+                try:
+                    val = float(msg.get("progress", 0.0))
+                except (ValueError, TypeError):
+                    val = 0.0
                 self.progress.emit(str(req_id), status, val)
             elif event == "log":
                 message = msg.get("message", "")

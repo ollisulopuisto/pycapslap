@@ -445,8 +445,32 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
-    def _on_core_progress(self, req_id: str, pct: float, msg: str) -> None:
-        self.status.showMessage(f"Core [{req_id[:6]}]: {pct:.0f}% — {msg}")
+    def _on_core_progress(self, req_id: str, status: str, progress: float) -> None:
+        if isinstance(status, (int, float)) and isinstance(progress, str):
+            status, progress = progress, status
+
+        try:
+            val = float(progress)
+            if 0.0 < val <= 1.0:
+                val = val * 100.0
+            pct_str = f"{val:.0f}%"
+        except (ValueError, TypeError):
+            pct_str = ""
+
+        prefix = f"Core [{req_id[:6]}]" if req_id else "Core"
+        if pct_str and pct_str not in str(status):
+            display_msg = f"{prefix}: {pct_str} — {status}"
+        else:
+            display_msg = f"{prefix}: {status}"
+
+        self.status.showMessage(display_msg, 4000)
+
+        if (
+            not self.render_btn.isEnabled()
+            and "render" in self.render_btn.text().lower()
+            and pct_str
+        ):
+            self.render_btn.setText(f"Rendering ({pct_str})...")
 
     def _update_telemetry(self) -> None:
         process = psutil.Process(os.getpid())

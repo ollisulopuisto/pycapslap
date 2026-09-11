@@ -139,3 +139,31 @@ def test_main_window_clean_sidebar_layout(qtbot):
     # Check that style section in caption panel starts collapsed
     assert not window.caption_panel.style_content.isVisible()
     window.close()
+
+
+def test_main_window_core_progress_signal(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    # Normal progress event
+    window._on_core_progress("op-render-12345", "Exporting...", 0.45)
+    assert "45%" in window.status.currentMessage()
+    assert "Exporting..." in window.status.currentMessage()
+
+    # Inverted arguments safeguard
+    window._on_core_progress("op-render-12345", 0.75, "Encoding...")
+    assert "75%" in window.status.currentMessage()
+    assert "Encoding..." in window.status.currentMessage()
+
+    # String / invalid progress safeguard
+    window._on_core_progress("op-render-12345", "Analyzing frames", "invalid")
+    assert "Analyzing frames" in window.status.currentMessage()
+
+    # Active render button text update
+    window.render_btn.setEnabled(False)
+    window.render_btn.setText("Rendering...")
+    window._on_core_progress("op-render-12345", "Exporting...", 0.88)
+    assert "88%" in window.render_btn.text()
+
+    window.close()
