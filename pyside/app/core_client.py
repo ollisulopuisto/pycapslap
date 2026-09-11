@@ -65,9 +65,22 @@ class CoreClient(QObject):
 
         env = dict(os.environ)
         # Ensure FFMPEG_PATH and rust/bin are in environment
-        bin_dir = os.path.join(working_dir, "bin")
-        sep = ";" if os.name == "nt" else ":"
-        env["PATH"] = f"{bin_dir}{sep}{env.get('PATH', '')}"
+        rust_bin = Path(self.binary_path).resolve().parent.parent.parent / "bin"
+        ffmpeg_candidates = [
+            rust_bin / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"),
+            Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
+            Path("/opt/homebrew/bin/ffmpeg"),
+            Path("/usr/local/bin/ffmpeg"),
+        ]
+        ffmpeg_path = None
+        for candidate in ffmpeg_candidates:
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                ffmpeg_path = str(candidate)
+                break
+
+        if ffmpeg_path:
+            env["FFMPEG_PATH"] = ffmpeg_path
+            env["PATH"] = f"{os.path.dirname(ffmpeg_path)}{os.pathsep}{env.get('PATH', '')}"
 
         self.proc = subprocess.Popen(
             [self.binary_path],
@@ -121,7 +134,11 @@ class CoreClient(QObject):
                     fut.set_exception(RuntimeError(f"Rust core error: {err}"))
 
         exit_code = self.proc.poll() if self.proc else -1
-        self.core_exited.emit(exit_code or 0)
+        try:
+            if self._running:
+                self.core_exited.emit(exit_code or 0)
+        except RuntimeError:
+            pass
         self._fail_all_pending(RuntimeError(f"Rust core exited with code {exit_code}"))
 
     def _fail_all_pending(self, exc: Exception) -> None:

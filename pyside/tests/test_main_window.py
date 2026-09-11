@@ -15,6 +15,9 @@ def test_main_window_init(qtbot):
     assert window.overlay is not None
     assert window.timeline is not None
     assert window.caption_panel is not None
+    assert window.save_btn is not None
+    assert window.render_btn is not None
+    assert "Render" in window.render_btn.text()
     window.close()
 
 
@@ -28,6 +31,8 @@ def test_main_window_load_1080p_video(qtbot):
 
     window.load_video(sample)
     assert window.thumb_btn.isEnabled()
+    assert window.render_btn.isEnabled()
+    assert window.save_btn.isEnabled()
     assert "test_input.mp4" in window.meta_lbl.text()
 
     # Test seek
@@ -63,4 +68,23 @@ def test_main_window_caption_sync(qtbot):
     assert window.project.get_anchor_y_for_segment(seg1) == 45.0
     assert window.caption_panel.slider_anchor.value() == 45
 
+    window.close()
+
+
+def test_main_window_save_action(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    temp_video = tmp_path / "dummy.mp4"
+    temp_video.write_bytes(b"dummy")
+
+    window.load_video(str(temp_video))
+    seg = CaptionSegment(start_ms=0, end_ms=1000, text="Saved test")
+    window.set_caption_segments([seg])
+
+    window.save_btn.click()
+
+    expected_sidecar = tmp_path / "dummy.mp4.capslap.json"
+    assert expected_sidecar.exists()
+    assert "Saved test" in expected_sidecar.read_text()
     window.close()

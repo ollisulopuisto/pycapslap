@@ -4,11 +4,19 @@ from pathlib import Path
 
 import psutil
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPixmap
+from PySide6.QtGui import (
+    QDragEnterEvent,
+    QDropEvent,
+    QImage,
+    QKeySequence,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -66,6 +74,19 @@ class MainWindow(QMainWindow):
         self.open_btn.clicked.connect(self.open_file_dialog)
         action_bar.addWidget(self.open_btn)
 
+        self.save_btn = QPushButton("Save Project")
+        self.save_btn.setToolTip("Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]")
+        self.save_btn.clicked.connect(self._on_save_requested)
+        self.save_btn.setEnabled(False)
+        action_bar.addWidget(self.save_btn)
+
+        self.render_btn = QPushButton("Render Video")
+        self.render_btn.setToolTip("Render and export video with burned-in captions")
+        self.render_btn.setStyleSheet("background-color: #4f46e5; color: #ffffff; font-weight: bold; padding: 5px 14px;")
+        self.render_btn.clicked.connect(self._on_render_video_requested)
+        self.render_btn.setEnabled(False)
+        action_bar.addWidget(self.render_btn)
+
         self.thumb_btn = QPushButton("Extract Thumbnail")
         self.thumb_btn.clicked.connect(self.trigger_extract_thumbnail)
         self.thumb_btn.setEnabled(False)
@@ -73,6 +94,9 @@ class MainWindow(QMainWindow):
 
         action_bar.addStretch()
         left_col.addLayout(action_bar)
+
+        # Cmd+S / Ctrl+S shortcut for Save
+        QShortcut(QKeySequence.StandardKey.Save, self, activated=self._on_save_requested)
 
         # Video Player Widget with embedded Caption Overlay
         self.player = VideoPlayerWidget(self)
@@ -236,6 +260,82 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
+    def _on_render_video_requested(self) -> None:
+        source_file = self.player.media_player.source().toLocalFile()
+        if not source_file:
+            QMessageBox.information(self, "Render Video", "Please load a video first.")
+            return
+
+        if not self.project.segments:
+            QMessageBox.information(self, "Render Video", "No caption segments available to render.")
+            return
+
+        # Choose export aspect ratio format
+        default_fmt = "16:9"
+        if (
+            self.project.video
+            and self.project.video.width > 0
+            and self.project.video.height > self.project.video.width
+        ):
+            default_fmt = "9:16"
+
+        format_options = [
+            "16:9 (Landscape / YouTube)",
+            "9:16 (Portrait / TikTok / Reels)",
+            "1:1 (Square / Instagram)",
+            "4:5 (Vertical Feed)",
+        ]
+        default_idx = 0 if default_fmt == "16:9" else 1
+
+        chosen, ok = QInputDialog.getItem(
+            self,
+            "Render Video",
+            "Choose export format:",
+            format_options,
+            default_idx,
+            False,
+        )
+        if not ok or not chosen:
+            return
+
+        export_fmt = chosen.split()[0]
+
+        self.status.showMessage(f"Rendering {export_fmt} video with burned-in captions...")
+        self.render_btn.setEnabled(False)
+        self.render_btn.setText("Rendering...")
+
+        params = {
+            "inputVideo": str(Path(source_file).resolve()),
+            "segments": [s.to_dict() for s in self.project.segments],
+            "exportFormats": [export_fmt],
+            "karaoke": False,
+            "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
+        }
+
+        fut = self.core.call("burn", params)
+
+        def on_done(f):
+            try:
+                res = f.result()
+                output_path = ""
+                if isinstance(res, list) and res:
+                    output_path = res[0].get("captionedVideo", "")
+                QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
+                QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
+                QTimer.singleShot(0, lambda: self.status.showMessage(f"Render complete: {output_path}", 6000))
+                QTimer.singleShot(0, lambda: QMessageBox.information(
+                    self,
+                    "Export Complete",
+                    f"Video rendered successfully!\n\nOutput saved to:\n{output_path}",
+                ))
+            except (RuntimeError, ValueError, OSError) as err:
+                err_msg = str(err)
+                QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
+                QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
+                QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg))
+
+        fut.add_done_callback(on_done)
+
     def _on_auto_place_requested(self) -> None:
         if not self.project.segments:
             QMessageBox.information(self, "Auto Dodge", "No caption segments available to position.")
@@ -359,6 +459,8 @@ class MainWindow(QMainWindow):
         self.status.showMessage(f"Loading video: {os.path.basename(file_path)}...")
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
+        self.save_btn.setEnabled(True)
+        self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})
         # Check if sidecar exists
