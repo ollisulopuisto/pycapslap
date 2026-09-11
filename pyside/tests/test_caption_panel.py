@@ -53,3 +53,21 @@ def test_caption_panel_preset_position_buttons(qtbot):
     assert len(emitted_overrides) == 3
     assert emitted_overrides[-1] == (seg, 80.0)
     assert panel.slider_anchor.value() == 80
+
+
+def test_caption_panel_style_selection(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    emitted_styles = []
+    panel.style_changed.connect(emitted_styles.append)
+
+    # Change template preset to Karaoke
+    idx = panel.combo_template.findData("karaoke")
+    assert idx >= 0
+    panel.combo_template.setCurrentIndex(idx)
+
+    assert len(emitted_styles) > 0
+    current_style = panel.get_current_style()
+    assert current_style.karaoke is True
+    assert current_style.template_id == "karaoke"

@@ -85,14 +85,100 @@ class PositionOverride:
 
 
 @dataclass
+class CaptionStyle:
+    template_id: str = "oneliner"
+    font_name: str = "Montserrat Black"
+    font_size: int = 65
+    text_color: str = "#ffffff"
+    highlight_color: str = "#ffff00"
+    outline_color: str = "#000000"
+    outline_width: int = 3
+    karaoke: bool = False
+    glow_effect: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "templateId": self.template_id,
+            "fontName": self.font_name,
+            "fontSize": self.font_size,
+            "textColor": self.text_color,
+            "highlightColor": self.highlight_color,
+            "outlineColor": self.outline_color,
+            "outlineWidth": self.outline_width,
+            "karaoke": self.karaoke,
+            "glowEffect": self.glow_effect,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "CaptionStyle":
+        return cls(
+            template_id=str(d.get("templateId", "oneliner")),
+            font_name=str(d.get("fontName", "Montserrat Black")),
+            font_size=int(d.get("fontSize", 65)),
+            text_color=str(d.get("textColor", "#ffffff")),
+            highlight_color=str(d.get("highlightColor", "#ffff00")),
+            outline_color=str(d.get("outlineColor", "#000000")),
+            outline_width=int(d.get("outlineWidth", 3)),
+            karaoke=bool(d.get("karaoke", False)),
+            glow_effect=bool(d.get("glowEffect", True)),
+        )
+
+
+STYLE_PRESETS: dict[str, CaptionStyle] = {
+    "oneliner": CaptionStyle(
+        template_id="oneliner",
+        font_name="Montserrat Black",
+        font_size=65,
+        text_color="#ffffff",
+        highlight_color="#ffff00",
+        outline_color="#000000",
+        outline_width=3,
+        karaoke=False,
+    ),
+    "karaoke": CaptionStyle(
+        template_id="karaoke",
+        font_name="Komika Axis",
+        font_size=65,
+        text_color="#ffffff",
+        highlight_color="#00f924",
+        outline_color="#000000",
+        outline_width=3,
+        karaoke=True,
+    ),
+    "vibrant": CaptionStyle(
+        template_id="vibrant",
+        font_name="Roboto Bold",
+        font_size=65,
+        text_color="#eaeaea",
+        highlight_color="#7ef1c5",
+        outline_color="#000000",
+        outline_width=3,
+        karaoke=False,
+    ),
+    "storyteller": CaptionStyle(
+        template_id="storyteller",
+        font_name="Montserrat Black",
+        font_size=65,
+        text_color="#ffffff",
+        highlight_color="#f59e0b",
+        outline_color="#000000",
+        outline_width=3,
+        karaoke=False,
+    ),
+}
+
+
+@dataclass
 class CaptionsFile:
     segments: list[CaptionSegment] = field(default_factory=list)
     position_overrides: list[PositionOverride] = field(default_factory=list)
+    style: CaptionStyle = field(default_factory=CaptionStyle)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "segments": [s.to_dict() for s in self.segments],
             "positionOverrides": [o.to_dict() for o in self.position_overrides],
+            "style": self.style.to_dict(),
         }
 
     @classmethod
@@ -101,7 +187,9 @@ class CaptionsFile:
         segments = [CaptionSegment.from_dict(s) for s in segments_raw]
         overrides_raw = d.get("positionOverrides", [])
         overrides = [PositionOverride.from_dict(o) for o in overrides_raw]
-        return cls(segments=segments, position_overrides=overrides)
+        style_raw = d.get("style", {})
+        style = CaptionStyle.from_dict(style_raw) if style_raw else CaptionStyle()
+        return cls(segments=segments, position_overrides=overrides, style=style)
 
     @classmethod
     def from_json_str(cls, json_str: str) -> "CaptionsFile":
@@ -124,6 +212,7 @@ class ProjectState:
     sidecar_path: str | None = None
     segments: list[CaptionSegment] = field(default_factory=list)
     position_overrides: list[PositionOverride] = field(default_factory=list)
+    style: CaptionStyle = field(default_factory=CaptionStyle)
     is_dirty: bool = False
 
     def load_video(self, path: str, probe_dict: dict[str, Any]) -> None:
@@ -178,6 +267,7 @@ class ProjectState:
             cf = CaptionsFile.from_json_str(content)
             self.segments = cf.segments
             self.position_overrides = cf.position_overrides
+            self.style = cf.style
             self.is_dirty = False
             return True
         except (OSError, json.JSONDecodeError):
@@ -191,6 +281,7 @@ class ProjectState:
             cf = CaptionsFile(
                 segments=self.segments,
                 position_overrides=self.position_overrides,
+                style=self.style,
             )
             target.write_text(cf.to_json_str(), encoding="utf-8")
             self.is_dirty = False

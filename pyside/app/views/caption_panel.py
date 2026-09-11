@@ -1,6 +1,10 @@
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -12,7 +16,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.models.captions import CaptionSegment
+from app.fonts import init_app_fonts
+from app.models.captions import CaptionSegment, CaptionStyle, STYLE_PRESETS
 
 
 def format_timestamp(ms: int) -> str:
@@ -27,6 +32,7 @@ class CaptionPanelWidget(QWidget):
     segment_selected = Signal(object)
     segment_updated = Signal(object)
     position_override_changed = Signal(object, float)
+    style_changed = Signal(object)
     auto_place_requested = Signal()
     save_requested = Signal()
     transcribe_requested = Signal()
@@ -37,6 +43,7 @@ class CaptionPanelWidget(QWidget):
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
         self.active_anchor_pct: float = 80.0
+        self.current_style: CaptionStyle = CaptionStyle()
         self._block_signals: bool = False
 
         self._init_ui()
@@ -148,6 +155,141 @@ class CaptionPanelWidget(QWidget):
         pos_layout.addWidget(self.slider_anchor)
 
         layout.addWidget(pos_container)
+
+        # Style & Typography container
+        style_container = QWidget()
+        style_container.setStyleSheet("background-color: #27272a; border-radius: 6px; padding: 6px;")
+        style_layout = QVBoxLayout(style_container)
+        style_layout.setContentsMargins(8, 8, 8, 8)
+        style_layout.setSpacing(6)
+
+        style_header = QLabel("Caption Style & Typography")
+        style_header.setStyleSheet("font-weight: 600; font-size: 12px; color: #e4e4e7;")
+        style_layout.addWidget(style_header)
+
+        # Template preset dropdown
+        row_preset = QHBoxLayout()
+        row_preset.addWidget(QLabel("Preset:"))
+        self.combo_template = QComboBox()
+        self.combo_template.addItem("Oneliner (Modern Yellow)", "oneliner")
+        self.combo_template.addItem("Karaoke (Neon Green)", "karaoke")
+        self.combo_template.addItem("Vibrant (Mint / Teal)", "vibrant")
+        self.combo_template.addItem("Storyteller (Warm Amber)", "storyteller")
+        self.combo_template.addItem("Custom", "custom")
+        self.combo_template.currentIndexChanged.connect(self._on_template_changed)
+        row_preset.addWidget(self.combo_template, stretch=1)
+        style_layout.addLayout(row_preset)
+
+        # Font family dropdown
+        row_font = QHBoxLayout()
+        row_font.addWidget(QLabel("Font:"))
+        self.combo_font = QComboBox()
+        avail_fonts = init_app_fonts()
+        for f in (avail_fonts or ["Montserrat", "Komika Axis", "Roboto"]):
+            self.combo_font.addItem(f, f)
+        self.combo_font.currentIndexChanged.connect(self._on_style_field_changed)
+        row_font.addWidget(self.combo_font, stretch=1)
+        style_layout.addLayout(row_font)
+
+        # Font size slider
+        row_size = QHBoxLayout()
+        row_size.addWidget(QLabel("Size:"))
+        self.lbl_font_size = QLabel(f"{self.current_style.font_size} px")
+        self.slider_font_size = QSlider(Qt.Orientation.Horizontal)
+        self.slider_font_size.setRange(24, 96)
+        self.slider_font_size.setValue(self.current_style.font_size)
+        self.slider_font_size.valueChanged.connect(self._on_font_size_changed)
+        row_size.addWidget(self.slider_font_size, stretch=1)
+        row_size.addWidget(self.lbl_font_size)
+        style_layout.addLayout(row_size)
+
+        # Color controls row
+        row_colors = QHBoxLayout()
+        self.btn_text_color = QPushButton("Text")
+        self.btn_text_color.clicked.connect(lambda: self._pick_color("text"))
+        row_colors.addWidget(self.btn_text_color)
+
+        self.btn_hi_color = QPushButton("Highlight")
+        self.btn_hi_color.clicked.connect(lambda: self._pick_color("highlight"))
+        row_colors.addWidget(self.btn_hi_color)
+
+        self.chk_karaoke = QCheckBox("Karaoke")
+        self.chk_karaoke.setChecked(self.current_style.karaoke)
+        self.chk_karaoke.toggled.connect(self._on_karaoke_toggled)
+        row_colors.addWidget(self.chk_karaoke)
+        style_layout.addLayout(row_colors)
+
+        self._update_color_buttons()
+        layout.addWidget(style_container)
+
+    def _update_color_buttons(self) -> None:
+        tc = self.current_style.text_color
+        self.btn_text_color.setStyleSheet(f"background-color: {tc}; color: {'#000000' if tc.lower() in ('#ffffff', '#ffff00', '#eaeaea') else '#ffffff'}; font-weight: bold; border-radius: 4px;")
+        hc = self.current_style.highlight_color
+        self.btn_hi_color.setStyleSheet(f"background-color: {hc}; color: {'#000000' if hc.lower() in ('#ffffff', '#ffff00', '#7ef1c5', '#00f924') else '#ffffff'}; font-weight: bold; border-radius: 4px;")
+
+    def _on_template_changed(self, _idx: int) -> None:
+        tpl_id = self.combo_template.currentData()
+        if not tpl_id or tpl_id == "custom":
+            return
+        if tpl_id in STYLE_PRESETS:
+            preset = STYLE_PRESETS[tpl_id]
+            self.set_style(preset)
+
+    def _on_style_field_changed(self) -> None:
+        font_val = self.combo_font.currentData() or self.combo_font.currentText()
+        if font_val:
+            self.current_style.font_name = font_val
+        self.style_changed.emit(self.current_style)
+
+    def _on_font_size_changed(self, val: int) -> None:
+        self.current_style.font_size = val
+        self.lbl_font_size.setText(f"{val} px")
+        self.style_changed.emit(self.current_style)
+
+    def _on_karaoke_toggled(self, checked: bool) -> None:
+        self.current_style.karaoke = checked
+        self.style_changed.emit(self.current_style)
+
+    def _pick_color(self, target: str) -> None:
+        current_hex = self.current_style.text_color if target == "text" else self.current_style.highlight_color
+        chosen = QColorDialog.getColor(QColor(current_hex), self, f"Pick {target.title()} Color")
+        if chosen.isValid():
+            hex_val = chosen.name()
+            if target == "text":
+                self.current_style.text_color = hex_val
+            else:
+                self.current_style.highlight_color = hex_val
+            self._update_color_buttons()
+            self.style_changed.emit(self.current_style)
+
+    def get_current_style(self) -> CaptionStyle:
+        return self.current_style
+
+    def set_style(self, style: CaptionStyle) -> None:
+        self.current_style = style
+        self._block_signals = True
+
+        idx = self.combo_template.findData(style.template_id)
+        if idx >= 0:
+            self.combo_template.setCurrentIndex(idx)
+        else:
+            self.combo_template.setCurrentIndex(self.combo_template.findData("custom"))
+
+        # Find matching font
+        for i in range(self.combo_font.count()):
+            family = self.combo_font.itemText(i)
+            if family.lower() in style.font_name.lower() or style.font_name.lower() in family.lower():
+                self.combo_font.setCurrentIndex(i)
+                break
+
+        self.slider_font_size.setValue(style.font_size)
+        self.lbl_font_size.setText(f"{style.font_size} px")
+        self.chk_karaoke.setChecked(style.karaoke)
+        self._update_color_buttons()
+
+        self._block_signals = False
+        self.style_changed.emit(self.current_style)
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self._block_signals = True

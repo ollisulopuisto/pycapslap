@@ -3,23 +3,22 @@ import time
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
-    QStackedLayout,
     QVBoxLayout,
     QWidget,
 )
 
-from app.views.caption_overlay import CaptionOverlayWidget
+from app.views.video_canvas import VideoCanvasWidget
 
 
 class VideoPlayerWidget(QWidget):
     """
-    Native hardware-accelerated video player with seek latency instrumentation.
+    Native hardware-accelerated video player with seek latency instrumentation
+    and direct QVideoSink unified subtitle compositing.
     """
     seek_latency_measured = Signal(float)  # Latency in ms
     position_changed = Signal(int)         # Position in ms
@@ -40,8 +39,9 @@ class VideoPlayerWidget(QWidget):
         self.audio_output = QAudioOutput(self)
         self.media_player.setAudioOutput(self.audio_output)
 
-        self.video_widget = QVideoWidget(self)
-        self.media_player.setVideoOutput(self.video_widget)
+        self.canvas = VideoCanvasWidget(self)
+        self.overlay = self.canvas  # Alias for backward-compatible overlay access
+        self.media_player.setVideoSink(self.canvas.sink)
 
         self.media_player.positionChanged.connect(self._on_position_changed)
         self.media_player.durationChanged.connect(self._on_duration_changed)
@@ -51,18 +51,8 @@ class VideoPlayerWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Video Surface with Stacked Caption Overlay
-        self.video_container = QWidget(self)
-        self.video_layout = QStackedLayout(self.video_container)
-        self.video_layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        self.video_layout.addWidget(self.video_widget)
-
-        self.overlay = CaptionOverlayWidget(self.video_container)
-        self.video_layout.addWidget(self.overlay)
-        self.overlay.show()
-        self.overlay.raise_()
-
-        layout.addWidget(self.video_container, stretch=1)
+        # Video Canvas with direct subtitle rendering
+        layout.addWidget(self.canvas, stretch=1)
 
         # Controls Bar
         controls_layout = QHBoxLayout()
@@ -138,6 +128,8 @@ class VideoPlayerWidget(QWidget):
         self.seek_to_ms(self.slider.value())
 
     def _on_position_changed(self, pos_ms: int) -> None:
+        self.canvas.current_pos_ms = pos_ms
+        self.canvas.update()
         if not self._is_scrubbing:
             self.slider.setValue(pos_ms)
             self.time_lbl.setText(self._format_time(pos_ms))

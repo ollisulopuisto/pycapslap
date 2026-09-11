@@ -89,3 +89,28 @@ def test_main_window_save_action(qtbot, tmp_path):
     assert expected_sidecar.exists()
     assert "Saved test" in expected_sidecar.read_text()
     window.close()
+
+
+def test_main_window_style_selection_and_sidecar(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    temp_video = tmp_path / "styled.mp4"
+    temp_video.write_bytes(b"dummy")
+
+    window.load_video(str(temp_video))
+
+    # Switch template to karaoke
+    idx = window.caption_panel.combo_template.findData("karaoke")
+    window.caption_panel.combo_template.setCurrentIndex(idx)
+
+    assert window.project.style.karaoke is True
+    assert window.player.canvas.style.karaoke is True
+
+    # Save and verify style in sidecar
+    window.save_btn.click()
+    sidecar = tmp_path / "styled.mp4.capslap.json"
+    assert sidecar.exists()
+    content = sidecar.read_text()
+    assert "karaoke" in content
+    window.close()

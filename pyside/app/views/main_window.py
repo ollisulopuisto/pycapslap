@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core_client import CoreClient
-from app.models.captions import CaptionSegment, ProjectState
+from app.models.captions import CaptionSegment, CaptionStyle, ProjectState
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.timeline import VisualTimelineWidget
 from app.views.video_player import VideoPlayerWidget
@@ -172,6 +172,7 @@ class MainWindow(QMainWindow):
         self.caption_panel.segment_selected.connect(self._on_segment_selected)
         self.caption_panel.position_override_changed.connect(self._on_panel_override_changed)
         self.caption_panel.segment_updated.connect(self._on_segment_text_updated)
+        self.caption_panel.style_changed.connect(self._on_style_changed)
         self.caption_panel.save_requested.connect(self._on_save_requested)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
@@ -208,14 +209,19 @@ class MainWindow(QMainWindow):
         self.timeline.set_segments(self.project.segments)
         self.caption_panel.set_segments(self.project.segments)
 
+    def _on_style_changed(self, style: CaptionStyle) -> None:
+        self.project.style = style
+        self.project.is_dirty = True
+        self.player.canvas.set_style(style)
+
     def _on_position_changed(self, pos_ms: int) -> None:
         self.timeline.set_position(pos_ms)
         active = self.project.get_active_segment(pos_ms)
         if active:
             anchor_y = self.project.get_anchor_y_for_segment(active)
-            self.overlay.set_segment(active, anchor_y)
+            self.overlay.set_segment(active, anchor_y, current_pos_ms=pos_ms)
         else:
-            self.overlay.set_segment(None)
+            self.overlay.set_segment(None, current_pos_ms=pos_ms)
 
     def _on_segment_selected(self, seg: CaptionSegment) -> None:
         self.player.seek_to_ms(seg.start_ms)
@@ -308,7 +314,12 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "segments": [s.to_dict() for s in self.project.segments],
             "exportFormats": [export_fmt],
-            "karaoke": False,
+            "karaoke": self.project.style.karaoke,
+            "fontName": self.project.style.font_name,
+            "fontSize": self.project.style.font_size,
+            "textColor": self.project.style.text_color,
+            "highlightWordColor": self.project.style.highlight_color,
+            "outlineColor": self.project.style.outline_color,
             "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
         }
 
@@ -466,6 +477,9 @@ class MainWindow(QMainWindow):
         # Check if sidecar exists
         if self.project.load_sidecar() and self.project.segments:
             self.set_caption_segments(self.project.segments)
+            if self.project.style:
+                self.caption_panel.set_style(self.project.style)
+                self.player.canvas.set_style(self.project.style)
             self.status.showMessage(f"Loaded sidecar with {len(self.project.segments)} captions.")
         else:
             starter_cues = [
@@ -478,6 +492,7 @@ class MainWindow(QMainWindow):
 
         # Trigger initial position sync
         self._on_position_changed(0)
+        self.trigger_extract_thumbnail()
 
         self.meta_lbl.setText(
             f"File: {os.path.basename(file_path)}\n"
@@ -501,14 +516,19 @@ class MainWindow(QMainWindow):
                     b64 = data_uri.split(",", 1)[1]
                     raw_bytes = base64.b64decode(b64)
                     qimg = QImage.fromData(raw_bytes)
-                    pixmap = QPixmap.fromImage(qimg)
-                    scaled = pixmap.scaled(
-                        self.thumb_lbl.size(),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                    QTimer.singleShot(0, lambda: self.thumb_lbl.setPixmap(scaled))
-                    QTimer.singleShot(0, lambda: self.status.showMessage("Thumbnail loaded.", 2000))
+
+                    def update_ui(img=qimg):
+                        pixmap = QPixmap.fromImage(img)
+                        scaled = pixmap.scaled(
+                            self.thumb_lbl.size(),
+                            Qt.AspectRatioMode.KeepAspectRatio,
+                            Qt.TransformationMode.SmoothTransformation,
+                        )
+                        self.thumb_lbl.setPixmap(scaled)
+                        self.player.canvas.set_fallback_pixmap(pixmap)
+                        self.status.showMessage("Thumbnail loaded.", 2000)
+
+                    QTimer.singleShot(0, update_ui)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
                 QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Error", msg))
