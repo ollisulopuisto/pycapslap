@@ -22,6 +22,7 @@ class VideoCanvasWidget(QWidget):
     Renders video frames via QVideoSink and paints subtitles directly onto the
     same surface, eliminating native Cocoa/Metal layer occlusion on macOS.
     """
+
     anchor_changed = Signal(float)
 
     def __init__(self, parent: QWidget | None = None):
@@ -150,18 +151,27 @@ class VideoCanvasWidget(QWidget):
             painter.drawPixmap(video_rect.toRect(), self._fallback_pixmap)
 
         # 3. Dragging guidelines
-        anchor_y = video_rect.top() + (video_rect.height() * (self.anchor_y_pct / 100.0))
+        anchor_y = video_rect.top() + (
+            video_rect.height() * (self.anchor_y_pct / 100.0)
+        )
         if self.is_dragging:
             pen = QPen(QColor(99, 102, 241, 230), 1.5, Qt.PenStyle.DashLine)
             painter.setPen(pen)
-            painter.drawLine(int(video_rect.left()), int(anchor_y), int(video_rect.right()), int(anchor_y))
+            painter.drawLine(
+                int(video_rect.left()),
+                int(anchor_y),
+                int(video_rect.right()),
+                int(anchor_y),
+            )
 
             badge_text = f"{self.anchor_y_pct:.1f}%"
             badge_font = QFont("Helvetica Neue", 10, QFont.Weight.Bold)
             painter.setFont(badge_font)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(99, 102, 241, 220))
-            badge_rect = QRectF(video_rect.left() + 16, max(video_rect.top() + 8, anchor_y - 22), 52, 20)
+            badge_rect = QRectF(
+                video_rect.left() + 16, max(video_rect.top() + 8, anchor_y - 22), 52, 20
+            )
             painter.drawRoundedRect(badge_rect, 4, 4)
 
             painter.setPen(QColor(255, 255, 255))
@@ -171,13 +181,17 @@ class VideoCanvasWidget(QWidget):
         if self.current_segment and self.current_segment.text.strip():
             self._paint_caption(painter, video_rect, anchor_y)
 
-    def _paint_caption(self, painter: QPainter, video_rect: QRectF, anchor_y: float) -> None:
+    def _paint_caption(
+        self, painter: QPainter, video_rect: QRectF, anchor_y: float
+    ) -> None:
         text = self.current_segment.text.strip()
         if not text:
             return
 
         # Resolve font family
-        font_family = self.style.font_name.split()[0] if self.style.font_name else "Montserrat"
+        font_family = (
+            self.style.font_name.split()[0] if self.style.font_name else "Montserrat"
+        )
         # Scale font size relative to 1080p reference
         base_size = self.style.font_size or 65
         scaled_size = max(14, int(base_size * (video_rect.height() / 1080.0)))
@@ -214,7 +228,9 @@ class VideoCanvasWidget(QWidget):
             painter.drawPath(pill_path)
 
         outline_width = max(2, int(self.style.outline_width * (scaled_size / 24.0)))
-        outline_pen = QPen(QColor(self.style.outline_color or "#000000"), outline_width * 2)
+        outline_pen = QPen(
+            QColor(self.style.outline_color or "#000000"), outline_width * 2
+        )
         outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
 
         text_color = QColor(self.style.text_color or "#ffffff")
@@ -226,7 +242,7 @@ class VideoCanvasWidget(QWidget):
             text_y = box_y + baseline
             for word in words:
                 word_w = metrics.horizontalAdvance(word.text)
-                is_active = (word.start_ms <= self.current_pos_ms < word.end_ms)
+                is_active = word.start_ms <= self.current_pos_ms < word.end_ms
                 fill_color = highlight_color if is_active else text_color
 
                 wpath = QPainterPath()

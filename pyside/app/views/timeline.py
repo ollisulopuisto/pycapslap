@@ -131,7 +131,9 @@ class VisualTimelineWidget(QWidget):
                 mins = sec // 60
                 secs = sec % 60
                 label = f"{mins:02d}:{secs:02d}"
-                painter.drawText(QRectF(x + 2, 2, 40, 14), Qt.AlignmentFlag.AlignLeft, label)
+                painter.drawText(
+                    QRectF(x + 2, 2, 40, 14), Qt.AlignmentFlag.AlignLeft, label
+                )
 
         # Caption track section (from y=24 to y=h-6)
         track_y = ruler_h + 4
@@ -151,7 +153,9 @@ class VisualTimelineWidget(QWidget):
             path.addRoundedRect(block_rect, 4, 4)
 
             is_selected = seg == self.selected_segment
-            bg_color = QColor(49, 46, 129, 220) if is_selected else QColor(39, 39, 42, 220)
+            bg_color = (
+                QColor(49, 46, 129, 220) if is_selected else QColor(39, 39, 42, 220)
+            )
             border_color = QColor(129, 140, 248) if is_selected else QColor(82, 82, 91)
 
             painter.fillPath(path, bg_color)
@@ -161,10 +165,20 @@ class VisualTimelineWidget(QWidget):
             # Draw text inside block with clipping/elision
             if seg_w > 20:
                 text = seg.text.strip()
-                elided = metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(seg_w - 8))
-                painter.setPen(QColor(255, 255, 255) if is_selected else QColor(228, 228, 231))
-                text_rect = QRectF(x_start + 4, track_y + (track_h - 16) / 2, seg_w - 8, 16)
-                painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided)
+                elided = metrics.elidedText(
+                    text, Qt.TextElideMode.ElideRight, int(seg_w - 8)
+                )
+                painter.setPen(
+                    QColor(255, 255, 255) if is_selected else QColor(228, 228, 231)
+                )
+                text_rect = QRectF(
+                    x_start + 4, track_y + (track_h - 16) / 2, seg_w - 8, 16
+                )
+                painter.drawText(
+                    text_rect,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    elided,
+                )
 
         # Playhead scrubber needle
         if self.duration_ms > 0:
@@ -176,11 +190,13 @@ class VisualTimelineWidget(QWidget):
             painter.drawLine(int(needle_x), 0, int(needle_x), h)
 
             # Triangular scrubber head at the top
-            triangle = QPolygonF([
-                QPoint(int(needle_x) - 6, 0),
-                QPoint(int(needle_x) + 6, 0),
-                QPoint(int(needle_x), 10),
-            ])
+            triangle = QPolygonF(
+                [
+                    QPoint(int(needle_x) - 6, 0),
+                    QPoint(int(needle_x) + 6, 0),
+                    QPoint(int(needle_x), 10),
+                ]
+            )
             painter.setBrush(needle_color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPolygon(triangle)

@@ -234,7 +234,9 @@ class ProjectState:
                 return seg
         return None
 
-    def get_anchor_y_for_segment(self, seg: CaptionSegment, default_y: float = 80.0) -> float:
+    def get_anchor_y_for_segment(
+        self, seg: CaptionSegment, default_y: float = 80.0
+    ) -> float:
         midpoint = (seg.start_ms + seg.end_ms) // 2
         for ov in self.position_overrides:
             if ov.start_ms <= midpoint <= ov.end_ms:
@@ -245,7 +247,8 @@ class ProjectState:
         midpoint = (seg.start_ms + seg.end_ms) // 2
         # Remove any existing override covering this midpoint
         self.position_overrides = [
-            ov for ov in self.position_overrides
+            ov
+            for ov in self.position_overrides
             if not (ov.start_ms <= midpoint <= ov.end_ms)
         ]
         # Add new override covering this segment span
@@ -259,7 +262,11 @@ class ProjectState:
         self.is_dirty = True
 
     def load_sidecar(self, path: str | Path | None = None) -> bool:
-        target = Path(path) if path else (Path(self.sidecar_path) if self.sidecar_path else None)
+        target = (
+            Path(path)
+            if path
+            else (Path(self.sidecar_path) if self.sidecar_path else None)
+        )
         if not target or not target.exists():
             return False
         try:
@@ -274,7 +281,11 @@ class ProjectState:
             return False
 
     def save_sidecar(self, path: str | Path | None = None) -> bool:
-        target = Path(path) if path else (Path(self.sidecar_path) if self.sidecar_path else None)
+        target = (
+            Path(path)
+            if path
+            else (Path(self.sidecar_path) if self.sidecar_path else None)
+        )
         if not target:
             return False
         try:

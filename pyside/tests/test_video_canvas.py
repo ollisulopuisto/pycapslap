@@ -54,7 +54,10 @@ def test_video_canvas_paint_with_caption(qtbot):
         start_ms=0,
         end_ms=2000,
         text="Sample caption",
-        words=[WordSpan(start_ms=0, end_ms=1000, text="Sample"), WordSpan(start_ms=1000, end_ms=2000, text=" caption")],
+        words=[
+            WordSpan(start_ms=0, end_ms=1000, text="Sample"),
+            WordSpan(start_ms=1000, end_ms=2000, text=" caption"),
+        ],
     )
     style = CaptionStyle(template_id="karaoke", highlight_color="#00ff00", karaoke=True)
     canvas.set_style(style)

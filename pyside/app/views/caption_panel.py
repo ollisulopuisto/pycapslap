@@ -56,12 +56,16 @@ class CaptionPanelWidget(QWidget):
         # Header with actions
         header_layout = QHBoxLayout()
         self.lbl_title = QLabel("Captions")
-        self.lbl_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #f4f4f5;")
+        self.lbl_title.setStyleSheet(
+            "font-weight: bold; font-size: 14px; color: #f4f4f5;"
+        )
         header_layout.addWidget(self.lbl_title)
         header_layout.addStretch()
 
         self.btn_add_cue = QPushButton("+ Add")
-        self.btn_add_cue.setToolTip("Add a new caption cue at the current playback position")
+        self.btn_add_cue.setToolTip(
+            "Add a new caption cue at the current playback position"
+        )
         self.btn_add_cue.clicked.connect(self.add_cue_requested.emit)
         header_layout.addWidget(self.btn_add_cue)
 
@@ -71,7 +75,9 @@ class CaptionPanelWidget(QWidget):
         header_layout.addWidget(self.btn_transcribe)
 
         self.btn_autoplace = QPushButton("Auto Dodge")
-        self.btn_autoplace.setToolTip("Analyze video frame activity and automatically dodge faces/busy areas")
+        self.btn_autoplace.setToolTip(
+            "Analyze video frame activity and automatically dodge faces/busy areas"
+        )
         self.btn_autoplace.clicked.connect(self.auto_place_requested.emit)
         header_layout.addWidget(self.btn_autoplace)
 
@@ -85,10 +91,18 @@ class CaptionPanelWidget(QWidget):
         # Table of cues
         self.cue_table = QTableWidget(0, 3)
         self.cue_table.setHorizontalHeaderLabels(["Start", "End", "Text"])
-        self.cue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.cue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self.cue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.cue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.cue_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.cue_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.cue_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Stretch
+        )
+        self.cue_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
         self.cue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.cue_table.verticalHeader().setVisible(False)
         self.cue_table.setStyleSheet("""
@@ -115,57 +129,99 @@ class CaptionPanelWidget(QWidget):
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
         layout.addWidget(self.cue_table, stretch=1)
 
-        # Position inspector controls
+        # Compact Position controls
         pos_container = QWidget()
-        pos_container.setStyleSheet("background-color: #27272a; border-radius: 6px; padding: 6px;")
+        pos_container.setStyleSheet("background-color: #27272a; border-radius: 6px;")
         pos_layout = QVBoxLayout(pos_container)
-        pos_layout.setContentsMargins(8, 8, 8, 8)
-        pos_layout.setSpacing(6)
+        pos_layout.setContentsMargins(8, 6, 8, 6)
+        pos_layout.setSpacing(4)
 
         pos_header = QHBoxLayout()
-        pos_lbl = QLabel("Caption Position (Y Anchor)")
-        pos_lbl.setStyleSheet("font-weight: 600; font-size: 12px; color: #e4e4e7;")
-        self.lbl_anchor_value = QLabel("80.0%")
-        self.lbl_anchor_value.setStyleSheet("font-weight: bold; color: #818cf8;")
+        pos_header.setSpacing(6)
+        pos_lbl = QLabel("Position:")
+        pos_lbl.setStyleSheet("font-weight: 600; font-size: 11px; color: #a1a1aa;")
         pos_header.addWidget(pos_lbl)
+
+        btn_style = (
+            "QPushButton { font-size: 11px; padding: 2px 6px; border-radius: 3px; "
+            "background-color: #3f3f46; color: #f4f4f5; } "
+            "QPushButton:hover { background-color: #52525b; }"
+        )
+        self.btn_top = QPushButton("Top (15%)")
+        self.btn_top.setStyleSheet(btn_style)
+        self.btn_top.setFixedHeight(22)
+        self.btn_top.clicked.connect(
+            lambda: self.set_anchor_pct(15.0, user_action=True)
+        )
+        pos_header.addWidget(self.btn_top)
+
+        self.btn_middle = QPushButton("Mid (50%)")
+        self.btn_middle.setStyleSheet(btn_style)
+        self.btn_middle.setFixedHeight(22)
+        self.btn_middle.clicked.connect(
+            lambda: self.set_anchor_pct(50.0, user_action=True)
+        )
+        pos_header.addWidget(self.btn_middle)
+
+        self.btn_bottom = QPushButton("Bot (80%)")
+        self.btn_bottom.setStyleSheet(btn_style)
+        self.btn_bottom.setFixedHeight(22)
+        self.btn_bottom.clicked.connect(
+            lambda: self.set_anchor_pct(80.0, user_action=True)
+        )
+        pos_header.addWidget(self.btn_bottom)
+
         pos_header.addStretch()
+
+        self.lbl_anchor_value = QLabel("80.0%")
+        self.lbl_anchor_value.setStyleSheet(
+            "font-weight: bold; font-size: 11px; color: #818cf8;"
+        )
         pos_header.addWidget(self.lbl_anchor_value)
         pos_layout.addLayout(pos_header)
-
-        # Preset buttons: Top (15%), Middle (50%), Bottom (80%)
-        presets_layout = QHBoxLayout()
-        self.btn_top = QPushButton("Top (15%)")
-        self.btn_top.clicked.connect(lambda: self.set_anchor_pct(15.0, user_action=True))
-        presets_layout.addWidget(self.btn_top)
-
-        self.btn_middle = QPushButton("Middle (50%)")
-        self.btn_middle.clicked.connect(lambda: self.set_anchor_pct(50.0, user_action=True))
-        presets_layout.addWidget(self.btn_middle)
-
-        self.btn_bottom = QPushButton("Bottom (80%)")
-        self.btn_bottom.clicked.connect(lambda: self.set_anchor_pct(80.0, user_action=True))
-        presets_layout.addWidget(self.btn_bottom)
-        pos_layout.addLayout(presets_layout)
 
         # Precision slider
         self.slider_anchor = QSlider(Qt.Orientation.Horizontal)
         self.slider_anchor.setRange(5, 95)
         self.slider_anchor.setValue(80)
+        self.slider_anchor.setFixedHeight(18)
         self.slider_anchor.valueChanged.connect(self._on_slider_changed)
         pos_layout.addWidget(self.slider_anchor)
 
         layout.addWidget(pos_container)
 
-        # Style & Typography container
+        # Collapsible Style & Typography section
         style_container = QWidget()
-        style_container.setStyleSheet("background-color: #27272a; border-radius: 6px; padding: 6px;")
+        style_container.setStyleSheet(
+            "background-color: #27272a; border-radius: 6px; padding: 4px;"
+        )
         style_layout = QVBoxLayout(style_container)
-        style_layout.setContentsMargins(8, 8, 8, 8)
-        style_layout.setSpacing(6)
+        style_layout.setContentsMargins(6, 4, 6, 6)
+        style_layout.setSpacing(4)
 
-        style_header = QLabel("Caption Style & Typography")
-        style_header.setStyleSheet("font-weight: 600; font-size: 12px; color: #e4e4e7;")
-        style_layout.addWidget(style_header)
+        self.btn_toggle_style = QPushButton("▶ Style & Typography")
+        self.btn_toggle_style.setCheckable(True)
+        self.btn_toggle_style.setChecked(False)
+        self.btn_toggle_style.setStyleSheet("""
+            QPushButton {
+                text-align: left;
+                font-weight: 600;
+                font-size: 12px;
+                color: #e4e4e7;
+                background: transparent;
+                border: none;
+                padding: 4px;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+            }
+        """)
+        style_layout.addWidget(self.btn_toggle_style)
+
+        self.style_content = QWidget()
+        content_layout = QVBoxLayout(self.style_content)
+        content_layout.setContentsMargins(2, 4, 2, 2)
+        content_layout.setSpacing(6)
 
         # Template preset dropdown
         row_preset = QHBoxLayout()
@@ -178,18 +234,18 @@ class CaptionPanelWidget(QWidget):
         self.combo_template.addItem("Custom", "custom")
         self.combo_template.currentIndexChanged.connect(self._on_template_changed)
         row_preset.addWidget(self.combo_template, stretch=1)
-        style_layout.addLayout(row_preset)
+        content_layout.addLayout(row_preset)
 
         # Font family dropdown
         row_font = QHBoxLayout()
         row_font.addWidget(QLabel("Font:"))
         self.combo_font = QComboBox()
         avail_fonts = init_app_fonts()
-        for f in (avail_fonts or ["Montserrat", "Komika Axis", "Roboto"]):
+        for f in avail_fonts or ["Montserrat", "Komika Axis", "Roboto"]:
             self.combo_font.addItem(f, f)
         self.combo_font.currentIndexChanged.connect(self._on_style_field_changed)
         row_font.addWidget(self.combo_font, stretch=1)
-        style_layout.addLayout(row_font)
+        content_layout.addLayout(row_font)
 
         # Font size slider
         row_size = QHBoxLayout()
@@ -201,7 +257,7 @@ class CaptionPanelWidget(QWidget):
         self.slider_font_size.valueChanged.connect(self._on_font_size_changed)
         row_size.addWidget(self.slider_font_size, stretch=1)
         row_size.addWidget(self.lbl_font_size)
-        style_layout.addLayout(row_size)
+        content_layout.addLayout(row_size)
 
         # Color controls row
         row_colors = QHBoxLayout()
@@ -217,16 +273,32 @@ class CaptionPanelWidget(QWidget):
         self.chk_karaoke.setChecked(self.current_style.karaoke)
         self.chk_karaoke.toggled.connect(self._on_karaoke_toggled)
         row_colors.addWidget(self.chk_karaoke)
-        style_layout.addLayout(row_colors)
+        content_layout.addLayout(row_colors)
 
+        # Initially collapsed
+        self.style_content.setVisible(False)
+
+        def _on_style_toggle(checked: bool) -> None:
+            self.style_content.setVisible(checked)
+            self.btn_toggle_style.setText(
+                "▼ Style & Typography" if checked else "▶ Style & Typography"
+            )
+
+        self.btn_toggle_style.toggled.connect(_on_style_toggle)
+
+        style_layout.addWidget(self.style_content)
         self._update_color_buttons()
         layout.addWidget(style_container)
 
     def _update_color_buttons(self) -> None:
         tc = self.current_style.text_color
-        self.btn_text_color.setStyleSheet(f"background-color: {tc}; color: {'#000000' if tc.lower() in ('#ffffff', '#ffff00', '#eaeaea') else '#ffffff'}; font-weight: bold; border-radius: 4px;")
+        self.btn_text_color.setStyleSheet(
+            f"background-color: {tc}; color: {'#000000' if tc.lower() in ('#ffffff', '#ffff00', '#eaeaea') else '#ffffff'}; font-weight: bold; border-radius: 4px;"
+        )
         hc = self.current_style.highlight_color
-        self.btn_hi_color.setStyleSheet(f"background-color: {hc}; color: {'#000000' if hc.lower() in ('#ffffff', '#ffff00', '#7ef1c5', '#00f924') else '#ffffff'}; font-weight: bold; border-radius: 4px;")
+        self.btn_hi_color.setStyleSheet(
+            f"background-color: {hc}; color: {'#000000' if hc.lower() in ('#ffffff', '#ffff00', '#7ef1c5', '#00f924') else '#ffffff'}; font-weight: bold; border-radius: 4px;"
+        )
 
     def _on_template_changed(self, _idx: int) -> None:
         tpl_id = self.combo_template.currentData()
@@ -252,8 +324,14 @@ class CaptionPanelWidget(QWidget):
         self.style_changed.emit(self.current_style)
 
     def _pick_color(self, target: str) -> None:
-        current_hex = self.current_style.text_color if target == "text" else self.current_style.highlight_color
-        chosen = QColorDialog.getColor(QColor(current_hex), self, f"Pick {target.title()} Color")
+        current_hex = (
+            self.current_style.text_color
+            if target == "text"
+            else self.current_style.highlight_color
+        )
+        chosen = QColorDialog.getColor(
+            QColor(current_hex), self, f"Pick {target.title()} Color"
+        )
         if chosen.isValid():
             hex_val = chosen.name()
             if target == "text":
@@ -279,7 +357,10 @@ class CaptionPanelWidget(QWidget):
         # Find matching font
         for i in range(self.combo_font.count()):
             family = self.combo_font.itemText(i)
-            if family.lower() in style.font_name.lower() or style.font_name.lower() in family.lower():
+            if (
+                family.lower() in style.font_name.lower()
+                or style.font_name.lower() in family.lower()
+            ):
                 self.combo_font.setCurrentIndex(i)
                 break
 
@@ -298,13 +379,19 @@ class CaptionPanelWidget(QWidget):
 
         for row, seg in enumerate(self.segments):
             item_start = QTableWidgetItem(format_timestamp(seg.start_ms))
-            item_start.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item_start.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
 
             item_end = QTableWidgetItem(format_timestamp(seg.end_ms))
             item_end.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
 
             item_text = QTableWidgetItem(seg.text)
-            item_text.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable)
+            item_text.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsEditable
+            )
 
             self.cue_table.setItem(row, 0, item_start)
             self.cue_table.setItem(row, 1, item_end)
@@ -312,7 +399,9 @@ class CaptionPanelWidget(QWidget):
 
         self._block_signals = False
 
-    def select_segment(self, segment: CaptionSegment | None, anchor_y_pct: float = 80.0) -> None:
+    def select_segment(
+        self, segment: CaptionSegment | None, anchor_y_pct: float = 80.0
+    ) -> None:
         self.selected_segment = segment
         self.set_anchor_pct(anchor_y_pct, user_action=False)
 
@@ -336,7 +425,9 @@ class CaptionPanelWidget(QWidget):
         self.slider_anchor.blockSignals(False)
 
         if user_action and self.selected_segment:
-            self.position_override_changed.emit(self.selected_segment, self.active_anchor_pct)
+            self.position_override_changed.emit(
+                self.selected_segment, self.active_anchor_pct
+            )
 
     def _on_slider_changed(self, val: int) -> None:
         self.set_anchor_pct(float(val), user_action=True)

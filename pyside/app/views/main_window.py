@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
@@ -14,7 +14,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QFileDialog,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -35,7 +34,9 @@ from app.views.video_player import VideoPlayerWidget
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, core_client: CoreClient | None = None, parent: QWidget | None = None):
+    def __init__(
+        self, core_client: CoreClient | None = None, parent: QWidget | None = None
+    ):
         super().__init__(parent)
         self.setWindowTitle("PyCapSlap — High-Performance Native Video Captions")
         self.resize(1300, 850)
@@ -75,14 +76,18 @@ class MainWindow(QMainWindow):
         action_bar.addWidget(self.open_btn)
 
         self.save_btn = QPushButton("Save Project")
-        self.save_btn.setToolTip("Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]")
+        self.save_btn.setToolTip(
+            "Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]"
+        )
         self.save_btn.clicked.connect(self._on_save_requested)
         self.save_btn.setEnabled(False)
         action_bar.addWidget(self.save_btn)
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
-        self.render_btn.setStyleSheet("background-color: #4f46e5; color: #ffffff; font-weight: bold; padding: 5px 14px;")
+        self.render_btn.setStyleSheet(
+            "background-color: #4f46e5; color: #ffffff; font-weight: bold; padding: 5px 14px;"
+        )
         self.render_btn.clicked.connect(self._on_render_video_requested)
         self.render_btn.setEnabled(False)
         action_bar.addWidget(self.render_btn)
@@ -96,7 +101,9 @@ class MainWindow(QMainWindow):
         left_col.addLayout(action_bar)
 
         # Cmd+S / Ctrl+S shortcut for Save
-        QShortcut(QKeySequence.StandardKey.Save, self, activated=self._on_save_requested)
+        QShortcut(
+            QKeySequence.StandardKey.Save, self, activated=self._on_save_requested
+        )
 
         # Video Player Widget with embedded Caption Overlay
         self.player = VideoPlayerWidget(self)
@@ -110,41 +117,20 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left_widget)
 
-        # Right Column: Captions Panel + Metadata & Telemetry
+        # Right Column: Captions Panel (takes maximum space for caption text editing)
         right_widget = QWidget()
         right_col = QVBoxLayout(right_widget)
         right_col.setContentsMargins(4, 4, 4, 4)
-        right_col.setSpacing(8)
+        right_col.setSpacing(4)
 
         # Caption Editor & Inspector Panel
         self.caption_panel = CaptionPanelWidget(self)
-        right_col.addWidget(self.caption_panel, stretch=2)
+        right_col.addWidget(self.caption_panel, stretch=1)
 
-        # Video Metadata Box
-        meta_box = QGroupBox("Video Metadata")
-        meta_layout = QVBoxLayout(meta_box)
+        # Internal labels retained for telemetry & unit tests without cluttering UI
         self.meta_lbl = QLabel("No video loaded\nDrop a file or click Open Video.")
-        self.meta_lbl.setWordWrap(True)
-        meta_layout.addWidget(self.meta_lbl)
-        right_col.addWidget(meta_box)
-
-        # Thumbnail Preview Box
-        thumb_box = QGroupBox("Rust Thumbnail Preview")
-        thumb_layout = QVBoxLayout(thumb_box)
         self.thumb_lbl = QLabel("No thumbnail generated yet")
-        self.thumb_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.thumb_lbl.setMinimumHeight(120)
-        self.thumb_lbl.setStyleSheet("background-color: #1a1a1a; border-radius: 4px;")
-        thumb_layout.addWidget(self.thumb_lbl)
-        right_col.addWidget(thumb_box)
-
-        # Live Performance Telemetry
-        perf_box = QGroupBox("Live Memory & Latency Telemetry")
-        perf_layout = QVBoxLayout(perf_box)
         self.perf_lbl = QLabel("Measuring...")
-        self.perf_lbl.setStyleSheet("font-family: monospace; font-size: 11px; color: #4ade80;")
-        perf_layout.addWidget(self.perf_lbl)
-        right_col.addWidget(perf_box)
 
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 3)
@@ -170,7 +156,9 @@ class MainWindow(QMainWindow):
 
         # Caption Panel signals
         self.caption_panel.segment_selected.connect(self._on_segment_selected)
-        self.caption_panel.position_override_changed.connect(self._on_panel_override_changed)
+        self.caption_panel.position_override_changed.connect(
+            self._on_panel_override_changed
+        )
         self.caption_panel.segment_updated.connect(self._on_segment_text_updated)
         self.caption_panel.style_changed.connect(self._on_style_changed)
         self.caption_panel.save_requested.connect(self._on_save_requested)
@@ -236,7 +224,9 @@ class MainWindow(QMainWindow):
             self.project.set_segment_position_override(seg, anchor_pct)
             self.caption_panel.set_anchor_pct(anchor_pct, user_action=False)
 
-    def _on_panel_override_changed(self, seg: CaptionSegment, anchor_pct: float) -> None:
+    def _on_panel_override_changed(
+        self, seg: CaptionSegment, anchor_pct: float
+    ) -> None:
         self.project.set_segment_position_override(seg, anchor_pct)
         if self.overlay.current_segment == seg:
             self.overlay.set_segment(seg, anchor_pct)
@@ -251,7 +241,9 @@ class MainWindow(QMainWindow):
         pos = self.player.media_player.position()
         start_ms = max(0, pos)
         end_ms = start_ms + 2500
-        new_cue = CaptionSegment(start_ms=start_ms, end_ms=end_ms, text="New caption text")
+        new_cue = CaptionSegment(
+            start_ms=start_ms, end_ms=end_ms, text="New caption text"
+        )
         self.project.segments.append(new_cue)
         self.project.segments.sort(key=lambda s: s.start_ms)
         self.project.is_dirty = True
@@ -262,7 +254,9 @@ class MainWindow(QMainWindow):
     def _on_save_requested(self) -> None:
         success = self.project.save_sidecar()
         if success:
-            self.status.showMessage("Captions saved successfully to sidecar (.capslap.json).", 3000)
+            self.status.showMessage(
+                "Captions saved successfully to sidecar (.capslap.json).", 3000
+            )
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
@@ -273,7 +267,9 @@ class MainWindow(QMainWindow):
             return
 
         if not self.project.segments:
-            QMessageBox.information(self, "Render Video", "No caption segments available to render.")
+            QMessageBox.information(
+                self, "Render Video", "No caption segments available to render."
+            )
             return
 
         # Choose export aspect ratio format
@@ -306,7 +302,9 @@ class MainWindow(QMainWindow):
 
         export_fmt = chosen.split()[0]
 
-        self.status.showMessage(f"Rendering {export_fmt} video with burned-in captions...")
+        self.status.showMessage(
+            f"Rendering {export_fmt} video with burned-in captions..."
+        )
         self.render_btn.setEnabled(False)
         self.render_btn.setText("Rendering...")
 
@@ -333,23 +331,36 @@ class MainWindow(QMainWindow):
                     output_path = res[0].get("captionedVideo", "")
                 QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
                 QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
-                QTimer.singleShot(0, lambda: self.status.showMessage(f"Render complete: {output_path}", 6000))
-                QTimer.singleShot(0, lambda: QMessageBox.information(
-                    self,
-                    "Export Complete",
-                    f"Video rendered successfully!\n\nOutput saved to:\n{output_path}",
-                ))
+                QTimer.singleShot(
+                    0,
+                    lambda: self.status.showMessage(
+                        f"Render complete: {output_path}", 6000
+                    ),
+                )
+                QTimer.singleShot(
+                    0,
+                    lambda: QMessageBox.information(
+                        self,
+                        "Export Complete",
+                        f"Video rendered successfully!\n\nOutput saved to:\n{output_path}",
+                    ),
+                )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
                 QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
                 QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
-                QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg))
+                QTimer.singleShot(
+                    0,
+                    lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg),
+                )
 
         fut.add_done_callback(on_done)
 
     def _on_auto_place_requested(self) -> None:
         if not self.project.segments:
-            QMessageBox.information(self, "Auto Dodge", "No caption segments available to position.")
+            QMessageBox.information(
+                self, "Auto Dodge", "No caption segments available to position."
+            )
             return
 
         source_file = self.player.media_player.source().toLocalFile()
@@ -371,13 +382,26 @@ class MainWindow(QMainWindow):
                 overrides_data = res.get("positionOverrides", [])
                 moved = res.get("moved", 0)
                 from app.models.captions import PositionOverride
-                self.project.position_overrides = [PositionOverride.from_dict(o) for o in overrides_data]
+
+                self.project.position_overrides = [
+                    PositionOverride.from_dict(o) for o in overrides_data
+                ]
                 self.project.is_dirty = True
-                QTimer.singleShot(0, lambda: self.status.showMessage(f"Auto Dodge complete: moved {moved} captions.", 4000))
+                QTimer.singleShot(
+                    0,
+                    lambda: self.status.showMessage(
+                        f"Auto Dodge complete: moved {moved} captions.", 4000
+                    ),
+                )
                 QTimer.singleShot(0, self.overlay.update)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Auto Dodge Error", msg))
+                QTimer.singleShot(
+                    0,
+                    lambda msg=err_msg: QMessageBox.warning(
+                        self, "Auto Dodge Error", msg
+                    ),
+                )
 
         fut.add_done_callback(on_done)
 
@@ -404,10 +428,20 @@ class MainWindow(QMainWindow):
                 segments_raw = transcription.get("segments", [])
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 QTimer.singleShot(0, lambda: self.set_caption_segments(new_segs))
-                QTimer.singleShot(0, lambda: self.status.showMessage(f"Transcription finished: {len(new_segs)} segments.", 4000))
+                QTimer.singleShot(
+                    0,
+                    lambda: self.status.showMessage(
+                        f"Transcription finished: {len(new_segs)} segments.", 4000
+                    ),
+                )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Transcription Error", msg))
+                QTimer.singleShot(
+                    0,
+                    lambda msg=err_msg: QMessageBox.warning(
+                        self, "Transcription Error", msg
+                    ),
+                )
 
         fut.add_done_callback(on_done)
 
@@ -480,24 +514,38 @@ class MainWindow(QMainWindow):
             if self.project.style:
                 self.caption_panel.set_style(self.project.style)
                 self.player.canvas.set_style(self.project.style)
-            self.status.showMessage(f"Loaded sidecar with {len(self.project.segments)} captions.")
+            self.status.showMessage(
+                f"Loaded sidecar with {len(self.project.segments)} captions."
+            )
         else:
             starter_cues = [
                 CaptionSegment(start_ms=0, end_ms=3000, text="Welcome to PyCapSlap ⚡"),
-                CaptionSegment(start_ms=3500, end_ms=6500, text="Drag this caption vertically to position it"),
-                CaptionSegment(start_ms=7000, end_ms=9500, text="High-performance native video captions"),
+                CaptionSegment(
+                    start_ms=3500,
+                    end_ms=6500,
+                    text="Drag this caption vertically to position it",
+                ),
+                CaptionSegment(
+                    start_ms=7000,
+                    end_ms=9500,
+                    text="High-performance native video captions",
+                ),
             ]
             self.set_caption_segments(starter_cues)
-            self.status.showMessage("Loaded video with starter captions. Drag on video or click + Add to edit.", 4000)
+            self.status.showMessage(
+                "Loaded video with starter captions. Drag on video or click + Add to edit.",
+                4000,
+            )
 
         # Trigger initial position sync
         self._on_position_changed(0)
         self.trigger_extract_thumbnail()
 
+        self.setWindowTitle(f"PyCapSlap — {os.path.basename(file_path)}")
         self.meta_lbl.setText(
             f"File: {os.path.basename(file_path)}\n"
             f"Path: {file_path}\n"
-            f"Size: {os.path.getsize(file_path) / (1024*1024):.1f} MB"
+            f"Size: {os.path.getsize(file_path) / (1024 * 1024):.1f} MB"
         )
 
     def trigger_extract_thumbnail(self) -> None:
@@ -506,7 +554,9 @@ class MainWindow(QMainWindow):
             return
         self.status.showMessage("Extracting thumbnail via Rust core...")
 
-        fut = self.core.call("extractFirstFrame", {"videoPath": str(Path(video_path).resolve())})
+        fut = self.core.call(
+            "extractFirstFrame", {"videoPath": str(Path(video_path).resolve())}
+        )
 
         def on_done(f):
             try:
@@ -519,8 +569,14 @@ class MainWindow(QMainWindow):
 
                     def update_ui(img=qimg):
                         pixmap = QPixmap.fromImage(img)
+                        thumb_sz = self.thumb_lbl.size()
+                        target_size = (
+                            thumb_sz
+                            if (thumb_sz.width() > 0 and thumb_sz.height() > 0)
+                            else QSize(320, 180)
+                        )
                         scaled = pixmap.scaled(
-                            self.thumb_lbl.size(),
+                            target_size,
                             Qt.AspectRatioMode.KeepAspectRatio,
                             Qt.TransformationMode.SmoothTransformation,
                         )
@@ -531,7 +587,9 @@ class MainWindow(QMainWindow):
                     QTimer.singleShot(0, update_ui)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, lambda msg=err_msg: QMessageBox.warning(self, "Error", msg))
+                QTimer.singleShot(
+                    0, lambda msg=err_msg: QMessageBox.warning(self, "Error", msg)
+                )
 
         fut.add_done_callback(on_done)
 

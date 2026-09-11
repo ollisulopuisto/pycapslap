@@ -9,4 +9,3 @@ if str(pyside_root) not in sys.path:
 from app.main import main
 
 __all__ = ["main"]
-

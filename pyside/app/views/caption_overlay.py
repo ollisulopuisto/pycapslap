@@ -36,7 +36,9 @@ class CaptionOverlayWidget(QWidget):
             self.resize(event.size())
         return super().eventFilter(watched, event)
 
-    def set_segment(self, segment: CaptionSegment | None, anchor_y_pct: float = 80.0) -> None:
+    def set_segment(
+        self, segment: CaptionSegment | None, anchor_y_pct: float = 80.0
+    ) -> None:
         self.current_segment = segment
         self.anchor_y_pct = float(anchor_y_pct)
         self.update()

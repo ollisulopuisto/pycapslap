@@ -18,6 +18,7 @@ class CoreClient(QObject):
     Asynchronous JSON-RPC bridge to the long-lived Rust `core` executable.
     Emits Qt signals on the main thread for progress and logging.
     """
+
     # Signals: (id: str, status: str, progress: float 0.0..1.0)
     progress = Signal(str, str, float)
     # Signals: (id: str, message: str)
@@ -80,7 +81,9 @@ class CoreClient(QObject):
 
         if ffmpeg_path:
             env["FFMPEG_PATH"] = ffmpeg_path
-            env["PATH"] = f"{os.path.dirname(ffmpeg_path)}{os.pathsep}{env.get('PATH', '')}"
+            env["PATH"] = (
+                f"{os.path.dirname(ffmpeg_path)}{os.pathsep}{env.get('PATH', '')}"
+            )
 
         self.proc = subprocess.Popen(
             [self.binary_path],

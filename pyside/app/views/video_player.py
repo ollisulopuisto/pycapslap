@@ -20,9 +20,10 @@ class VideoPlayerWidget(QWidget):
     Native hardware-accelerated video player with seek latency instrumentation
     and direct QVideoSink unified subtitle compositing.
     """
+
     seek_latency_measured = Signal(float)  # Latency in ms
-    position_changed = Signal(int)         # Position in ms
-    duration_changed = Signal(int)         # Duration in ms
+    position_changed = Signal(int)  # Position in ms
+    duration_changed = Signal(int)  # Duration in ms
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -89,9 +90,19 @@ class VideoPlayerWidget(QWidget):
         layout.addLayout(controls_layout)
 
         # Keyboard shortcuts: Space = Play/Pause, Left/Right = Seek 1 sec
-        QShortcut(QKeySequence(Qt.Key.Key_Space), self, activated=self.toggle_play_pause)
-        QShortcut(QKeySequence(Qt.Key.Key_Left), self, activated=lambda: self.seek_relative(-1000))
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self, activated=lambda: self.seek_relative(1000))
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Space), self, activated=self.toggle_play_pause
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Left),
+            self,
+            activated=lambda: self.seek_relative(-1000),
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Right),
+            self,
+            activated=lambda: self.seek_relative(1000),
+        )
 
     def load_video(self, file_path: str) -> None:
         url = QUrl.fromLocalFile(file_path)

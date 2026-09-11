@@ -34,7 +34,9 @@ def test_caption_panel_preset_position_buttons(qtbot):
     panel.select_segment(seg, anchor_y_pct=80.0)
 
     emitted_overrides = []
-    panel.position_override_changed.connect(lambda s, y: emitted_overrides.append((s, y)))
+    panel.position_override_changed.connect(
+        lambda s, y: emitted_overrides.append((s, y))
+    )
 
     # Click 'Top' button (15%)
     panel.btn_top.click()
@@ -71,3 +73,25 @@ def test_caption_panel_style_selection(qtbot):
     current_style = panel.get_current_style()
     assert current_style.karaoke is True
     assert current_style.template_id == "karaoke"
+
+
+def test_caption_panel_style_collapsible(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    panel.show()
+
+    # Style content should be collapsed by default
+    assert hasattr(panel, "btn_toggle_style")
+    assert hasattr(panel, "style_content")
+    assert not panel.style_content.isVisible()
+    assert "▶" in panel.btn_toggle_style.text()
+
+    # Click toggle to expand
+    panel.btn_toggle_style.click()
+    assert panel.style_content.isVisible()
+    assert "▼" in panel.btn_toggle_style.text()
+
+    # Click toggle to collapse again
+    panel.btn_toggle_style.click()
+    assert not panel.style_content.isVisible()
+    assert "▶" in panel.btn_toggle_style.text()

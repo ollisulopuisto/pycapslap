@@ -41,9 +41,7 @@ def test_captions_file_roundtrip():
 
 
 def test_load_legacy_bare_array_sidecar():
-    legacy_json = json.dumps([
-        {"startMs": 0, "endMs": 1500, "text": "Legacy cue"}
-    ])
+    legacy_json = json.dumps([{"startMs": 0, "endMs": 1500, "text": "Legacy cue"}])
     loaded = CaptionsFile.from_json_str(legacy_json)
     assert len(loaded.segments) == 1
     assert loaded.segments[0].text == "Legacy cue"
@@ -65,8 +63,12 @@ def test_project_state_get_active_segment():
 
 def test_position_override_for_segment():
     seg = CaptionSegment(start_ms=1000, end_ms=2000, text="Midpoint is 1500")
-    ov1 = PositionOverride(start_ms=500, end_ms=1200, y_pct=20.0) # does not cover midpoint 1500
-    ov2 = PositionOverride(start_ms=1200, end_ms=1800, y_pct=75.0) # covers midpoint 1500
+    ov1 = PositionOverride(
+        start_ms=500, end_ms=1200, y_pct=20.0
+    )  # does not cover midpoint 1500
+    ov2 = PositionOverride(
+        start_ms=1200, end_ms=1800, y_pct=75.0
+    )  # covers midpoint 1500
 
     proj = ProjectState(segments=[seg], position_overrides=[ov1, ov2])
     # Default is 80.0

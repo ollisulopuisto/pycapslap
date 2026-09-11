@@ -39,7 +39,9 @@ def measure_pyside(video_path: str):
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
-    print(f"[PySide6] Cold Startup Time       : {startup_sec * 1000:.1f} ms ({startup_sec:.3f} s)")
+    print(
+        f"[PySide6] Cold Startup Time       : {startup_sec * 1000:.1f} ms ({startup_sec:.3f} s)"
+    )
     print(f"[PySide6] GUI Process Idle RSS    : {idle_rss_mb:.2f} MB")
     print(f"[PySide6] Rust Core Subprocess RSS: {core_rss_mb:.2f} MB")
     print(f"[PySide6] Total Idle Footprint    : {idle_rss_mb + core_rss_mb:.2f} MB")
@@ -68,7 +70,9 @@ def measure_pyside(video_path: str):
 
     print(f"[PySide6] Video Load Time         : {load_latency_ms:.1f} ms")
     print(f"[PySide6] GUI RSS (Video Loaded)  : {video_loaded_rss:.2f} MB")
-    print(f"[PySide6] Total RSS (Video Loaded): {video_loaded_rss + core_rss_mb:.2f} MB")
+    print(
+        f"[PySide6] Total RSS (Video Loaded): {video_loaded_rss + core_rss_mb:.2f} MB"
+    )
 
     # 4. Measure Seek Latencies across 10 points
     duration_ms = window.player.media_player.duration() or 10000
@@ -96,14 +100,20 @@ def measure_pyside(video_path: str):
         QTimer.singleShot(500, seek_loop.quit)
         seek_loop.exec()
 
-        lat = measured_lat if measured_lat is not None else (time.perf_counter() - t0) * 1000
+        lat = (
+            measured_lat
+            if measured_lat is not None
+            else (time.perf_counter() - t0) * 1000
+        )
         seek_latencies.append(lat)
         window.player.media_player.positionChanged.disconnect(on_pos_changed)
 
     avg_seek = sum(seek_latencies) / len(seek_latencies)
     min_seek = min(seek_latencies)
     max_seek = max(seek_latencies)
-    print(f"[PySide6] Seek Latencies (10 runs) : min={min_seek:.1f}ms, avg={avg_seek:.1f}ms, max={max_seek:.1f}ms")
+    print(
+        f"[PySide6] Seek Latencies (10 runs) : min={min_seek:.1f}ms, avg={avg_seek:.1f}ms, max={max_seek:.1f}ms"
+    )
 
     # 5. Measure Playback CPU & Memory
     window.player.media_player.play()
@@ -148,7 +158,11 @@ def measure_electron():
     startup_sec = time.perf_counter() - t0
 
     # Inspect process tree
-    out = subprocess.check_output(["ps", "-A", "-o", "pid,ppid,rss,command"]).decode().splitlines()
+    out = (
+        subprocess.check_output(["ps", "-A", "-o", "pid,ppid,rss,command"])
+        .decode()
+        .splitlines()
+    )
     procs = []
     total_rss = 0.0
     gui_rss = 0.0
@@ -159,7 +173,11 @@ def measure_electron():
         if len(parts) >= 4:
             pid, _ppid, rss, cmd = int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
             if "capslap" in cmd.lower() or "electron" in cmd.lower() or pid == p.pid:
-                if "discord" in cmd.lower() or "slack" in cmd.lower() or "beeper" in cmd.lower():
+                if (
+                    "discord" in cmd.lower()
+                    or "slack" in cmd.lower()
+                    or "beeper" in cmd.lower()
+                ):
                     continue
                 rss_mb = rss / 1024
                 procs.append((pid, rss_mb, cmd))
@@ -201,16 +219,36 @@ def main():
     print("=" * 65)
     print(f"{'Metric':<30} | {'Electron (Current)':<16} | {'PySide6 (Spike)':<14}")
     print("-" * 65)
-    print(f"{'Process Architecture':<30} | {'Multi-Process (5)':<16} | {'Single Process':<14}")
-    print(f"{'Cold Startup Time':<30} | {electron_metrics['startup_sec']:<14.2f} s | {pyside_metrics['startup_sec']:<12.2f} s")
-    print(f"{'GUI Idle RSS':<30} | {electron_metrics['gui_rss']:<13.1f} MB | {pyside_metrics['idle_gui_rss']:<11.1f} MB")
-    print(f"{'Total Idle RSS (inc. Rust)':<30} | {electron_metrics['total_rss']:<13.1f} MB | {pyside_metrics['idle_total_rss']:<11.1f} MB")
-    print(f"{'1080p Video Loaded RSS':<30} | {'~485 MB':<16} | {pyside_metrics['video_loaded_rss']:<11.1f} MB")
-    print(f"{'Active Playback RSS':<30} | {'~520 MB':<16} | {pyside_metrics['playback_rss']:<11.1f} MB")
-    print(f"{'Seek Latency (Average)':<30} | {'~120 - 250 ms':<16} | {pyside_metrics['avg_seek_ms']:<11.1f} ms")
-    print(f"{'Seek Latency (Min)':<30} | {'~90 ms':<16} | {pyside_metrics['min_seek_ms']:<11.1f} ms")
-    print(f"{'Seek Latency (Max)':<30} | {'~350 ms':<16} | {pyside_metrics['max_seek_ms']:<11.1f} ms")
-    print(f"{'Active Playback CPU':<30} | {'~15 - 35 %':<16} | {pyside_metrics['playback_cpu']:<11.1f} %")
+    print(
+        f"{'Process Architecture':<30} | {'Multi-Process (5)':<16} | {'Single Process':<14}"
+    )
+    print(
+        f"{'Cold Startup Time':<30} | {electron_metrics['startup_sec']:<14.2f} s | {pyside_metrics['startup_sec']:<12.2f} s"
+    )
+    print(
+        f"{'GUI Idle RSS':<30} | {electron_metrics['gui_rss']:<13.1f} MB | {pyside_metrics['idle_gui_rss']:<11.1f} MB"
+    )
+    print(
+        f"{'Total Idle RSS (inc. Rust)':<30} | {electron_metrics['total_rss']:<13.1f} MB | {pyside_metrics['idle_total_rss']:<11.1f} MB"
+    )
+    print(
+        f"{'1080p Video Loaded RSS':<30} | {'~485 MB':<16} | {pyside_metrics['video_loaded_rss']:<11.1f} MB"
+    )
+    print(
+        f"{'Active Playback RSS':<30} | {'~520 MB':<16} | {pyside_metrics['playback_rss']:<11.1f} MB"
+    )
+    print(
+        f"{'Seek Latency (Average)':<30} | {'~120 - 250 ms':<16} | {pyside_metrics['avg_seek_ms']:<11.1f} ms"
+    )
+    print(
+        f"{'Seek Latency (Min)':<30} | {'~90 ms':<16} | {pyside_metrics['min_seek_ms']:<11.1f} ms"
+    )
+    print(
+        f"{'Seek Latency (Max)':<30} | {'~350 ms':<16} | {pyside_metrics['max_seek_ms']:<11.1f} ms"
+    )
+    print(
+        f"{'Active Playback CPU':<30} | {'~15 - 35 %':<16} | {pyside_metrics['playback_cpu']:<11.1f} %"
+    )
     print("=" * 65)
 
 

@@ -114,3 +114,28 @@ def test_main_window_style_selection_and_sidecar(qtbot, tmp_path):
     content = sidecar.read_text()
     assert "karaoke" in content
     window.close()
+
+
+def test_main_window_clean_sidebar_layout(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    # The right sidebar widget should contain caption_panel as its primary child
+    # and should NOT contain meta_box, thumb_box, or perf_box in its visible layout
+    right_widget = window.caption_panel.parentWidget()
+    assert right_widget is not None
+    layout = right_widget.layout()
+    assert layout is not None
+
+    # Verify only caption_panel is added to the layout
+    layout_widgets = [
+        layout.itemAt(i).widget()
+        for i in range(layout.count())
+        if layout.itemAt(i).widget() is not None
+    ]
+    assert layout_widgets == [window.caption_panel]
+
+    # Check that style section in caption panel starts collapsed
+    assert not window.caption_panel.style_content.isVisible()
+    window.close()
