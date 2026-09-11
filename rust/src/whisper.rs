@@ -17,6 +17,65 @@ static CACHED_FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
 static CACHED_FFPROBE_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 
+/// Bounded buffer for subprocess log collection that retains head lines (for startup logs)
+/// and a rolling tail (for error reporting), avoiding unbounded memory growth on long runs.
+#[derive(Debug)]
+pub struct BoundedLogBuffer {
+    head: String,
+    tail_lines: std::collections::VecDeque<String>,
+    max_head_bytes: usize,
+    max_tail_bytes: usize,
+    tail_bytes: usize,
+}
+
+impl BoundedLogBuffer {
+    pub fn new(max_head_bytes: usize, max_tail_bytes: usize) -> Self {
+        Self {
+            head: String::new(),
+            tail_lines: std::collections::VecDeque::new(),
+            max_head_bytes,
+            max_tail_bytes,
+            tail_bytes: 0,
+        }
+    }
+
+    pub fn push_line(&mut self, line: &str) {
+        if self.head.len() < self.max_head_bytes {
+            let available = self.max_head_bytes - self.head.len();
+            if line.len() < available {
+                self.head.push_str(line);
+                self.head.push('\n');
+            } else {
+                let end = line.floor_char_boundary(available.min(line.len()));
+                self.head.push_str(&line[..end]);
+            }
+        }
+
+        let line_len = line.len() + 1;
+        while self.tail_bytes + line_len > self.max_tail_bytes && !self.tail_lines.is_empty() {
+            if let Some(removed) = self.tail_lines.pop_front() {
+                self.tail_bytes = self.tail_bytes.saturating_sub(removed.len() + 1);
+            }
+        }
+
+        self.tail_bytes += line_len;
+        self.tail_lines.push_back(line.to_string());
+    }
+
+    pub fn head_chars(&self, count: usize) -> String {
+        self.head.chars().take(count).collect()
+    }
+
+    pub fn error_summary(&self, count: usize) -> String {
+        if !self.tail_lines.is_empty() {
+            let tail: String = self.tail_lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
+            tail.chars().take(count).collect()
+        } else {
+            self.head.chars().take(count).collect()
+        }
+    }
+}
+
 /// Transcribe audio using whisper.cpp CLI (preferred method)
 pub async fn transcribe_with_whisper_cpp(
     id: &str,
@@ -117,23 +176,33 @@ pub async fn transcribe_with_whisper_cpp(
 
     let mut child = cmd.spawn()?;
 
-    // Collect stdout on a background task (whisper.cpp writes the transcript
-    // there, which can exceed the pipe buffer for long files) while we read
-    // stderr for progress.
+    // Drain stdout on a background task so child cannot deadlock, while capturing
+    // only a bounded prefix for diagnostic logging (the full transcript is written to JSON file).
     let stdout_stream = child.stdout.take();
     let stdout_task = tokio::spawn(async move {
         use tokio::io::AsyncReadExt;
         if let Some(mut stream) = stdout_stream {
-            let mut buf = Vec::new();
-            let _ = stream.read_to_end(&mut buf).await;
-            return String::from_utf8_lossy(&buf).into_owned();
+            let mut prefix = vec![0u8; 1024];
+            let mut total_read = 0;
+            while total_read < prefix.len() {
+                match stream.read(&mut prefix[total_read..]).await {
+                    Ok(0) => break,
+                    Ok(n) => total_read += n,
+                    Err(_) => break,
+                }
+            }
+            prefix.truncate(total_read);
+            // Drain remaining stdout to sink to prevent child process buffer deadlock
+            let _ = tokio::io::copy(&mut stream, &mut tokio::io::sink()).await;
+            return String::from_utf8_lossy(&prefix).into_owned();
         }
         String::new()
     });
 
-    // Stream whisper.cpp's stderr so we can report real transcription
-    // progress instead of leaving the UI at 0% for minutes.
-    let mut stderr_all = String::new();
+    // Stream whisper.cpp's stderr with a bounded buffer so memory stays strictly
+    // bounded during long transcriptions, while still reporting real progress and
+    // capturing diagnostics / error details.
+    let mut stderr_buf = BoundedLogBuffer::new(1024, 4096);
     if let Some(stderr) = child.stderr.take() {
         use tokio::io::AsyncBufReadExt;
         let mut lines = tokio::io::BufReader::new(stderr).lines();
@@ -153,15 +222,13 @@ pub async fn transcribe_with_whisper_cpp(
                     }
                 }
             }
-            stderr_all.push_str(&line);
-            stderr_all.push('\n');
+            stderr_buf.push_line(&line);
         }
     }
 
     let status = child.wait().await?;
     let stdout = stdout_task.await.unwrap_or_default();
 
-    let stderr = stderr_all.clone();
     emit(RpcEvent::Log {
         id: id.into(),
         message: format!(
@@ -173,7 +240,7 @@ pub async fn transcribe_with_whisper_cpp(
         id: id.into(),
         message: format!(
             "whisper.cpp stderr: {}",
-            stderr.chars().take(500).collect::<String>()
+            stderr_buf.head_chars(500)
         ),
     });
 
@@ -181,7 +248,7 @@ pub async fn transcribe_with_whisper_cpp(
         return Err(anyhow::anyhow!(
             "whisper.cpp failed with status {}: {}",
             status,
-            stderr.chars().take(2000).collect::<String>()
+            stderr_buf.error_summary(2000)
         ));
     }
 
@@ -2787,5 +2854,25 @@ mod tests {
         assert!(cache_dir
             .to_string_lossy()
             .contains("capslap_whisper_cache"));
+    }
+
+    #[test]
+    fn test_bounded_log_buffer_bounds_and_summary() {
+        let mut buf = BoundedLogBuffer::new(50, 100);
+
+        // Push 100 lines to verify head and tail stay bounded
+        for i in 0..100 {
+            buf.push_line(&format!("Line {:03}: processing step", i));
+        }
+
+        let head = buf.head_chars(500);
+        // Head should contain the earliest lines and be bounded
+        assert!(head.starts_with("Line 000:"));
+        assert!(head.len() <= 60);
+
+        // Error summary should contain the latest lines
+        let err = buf.error_summary(500);
+        assert!(err.contains("Line 099:"));
+        assert!(err.len() <= 120);
     }
 }

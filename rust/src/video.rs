@@ -14,19 +14,82 @@ static FFMPEG_WHISPER_AVAIL: OnceLock<bool> = OnceLock::new();
 static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
 static BEST_HW_ENCODER: OnceLock<HardwareEncoder> = OnceLock::new();
 
-type ProbeCacheMap = HashMap<String, (Option<std::time::SystemTime>, u64, ProbeResult)>;
-type FrameCacheMap = HashMap<String, (Option<std::time::SystemTime>, u64, String)>;
-
-// In-memory ProbeResult cache keyed by file path and (mtime, size)
-static PROBE_CACHE: OnceLock<RwLock<ProbeCacheMap>> = OnceLock::new();
-static FIRST_FRAME_CACHE: OnceLock<RwLock<FrameCacheMap>> = OnceLock::new();
-
-fn get_probe_cache() -> &'static RwLock<ProbeCacheMap> {
-    PROBE_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+/// Thread-safe friendly bounded cache with FIFO eviction to prevent unbounded memory growth.
+#[derive(Debug)]
+pub struct BoundedCache<K, V> {
+    capacity: usize,
+    map: HashMap<K, V>,
+    order: std::collections::VecDeque<K>,
 }
 
-fn get_frame_cache() -> &'static RwLock<FrameCacheMap> {
-    FIRST_FRAME_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+impl<K: std::hash::Hash + Eq + Clone, V> BoundedCache<K, V> {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            map: HashMap::new(),
+            order: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
+    where
+        K: std::borrow::Borrow<Q>,
+        Q: std::hash::Hash + Eq + ?Sized,
+    {
+        self.map.get(key)
+    }
+
+    pub fn insert(&mut self, key: K, value: V) {
+        if let std::collections::hash_map::Entry::Occupied(mut e) = self.map.entry(key.clone()) {
+            e.insert(value);
+            return;
+        }
+
+        while self.map.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            } else {
+                break;
+            }
+        }
+
+        self.order.push_back(key.clone());
+        self.map.insert(key, value);
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
+type ProbeCacheEntry = (Option<std::time::SystemTime>, u64, ProbeResult);
+type ProbeCache = BoundedCache<String, ProbeCacheEntry>;
+
+type FrameCacheEntry = (Option<std::time::SystemTime>, u64, std::sync::Arc<str>);
+type FrameCache = BoundedCache<String, FrameCacheEntry>;
+
+const PROBE_CACHE_CAPACITY: usize = 64;
+const FRAME_CACHE_CAPACITY: usize = 16;
+
+// In-memory ProbeResult cache keyed by file path and (mtime, size)
+static PROBE_CACHE: OnceLock<RwLock<ProbeCache>> = OnceLock::new();
+static FIRST_FRAME_CACHE: OnceLock<RwLock<FrameCache>> = OnceLock::new();
+
+fn get_probe_cache() -> &'static RwLock<ProbeCache> {
+    PROBE_CACHE.get_or_init(|| RwLock::new(BoundedCache::new(PROBE_CACHE_CAPACITY)))
+}
+
+fn get_frame_cache() -> &'static RwLock<FrameCache> {
+    FIRST_FRAME_CACHE.get_or_init(|| RwLock::new(BoundedCache::new(FRAME_CACHE_CAPACITY)))
 }
 
 
@@ -1590,7 +1653,7 @@ fn parse_fps(s: &str) -> Option<f64> {
     }
 }
 
-/// Extract the first frame of a video as a base64 encoded PNG
+/// Extract the first frame of a video as a base64 encoded data URI (JPEG format, bounded to UI preview dimensions)
 pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     // Check in-memory cache first
     let metadata = std::fs::metadata(video_path).ok();
@@ -1601,18 +1664,18 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| video_path.to_string());
 
-    {
-        let cache = get_frame_cache().read().unwrap();
+    if let Ok(cache) = get_frame_cache().read() {
         if let Some((cached_mtime, cached_size, cached_data)) = cache.get(&canonical) {
             if *cached_size == size && *cached_mtime == mtime {
-                return Ok(cached_data.clone());
+                return Ok(cached_data.to_string());
             }
         }
     }
 
     let ffmpeg_path = get_ffmpeg_path_sync();
 
-    // Fast input seeking with -ss 0 before -i
+    // Fast input seeking with -ss 0 before -i, bound dimensions to max 1080p,
+    // and produce MJPEG directly so we avoid multi-megabyte PNG allocations and copies.
     let output = Command::new(&ffmpeg_path)
         .arg("-ss")
         .arg("0")
@@ -1622,10 +1685,14 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
         .arg("1")
         .arg("-threads")
         .arg("2")
+        .arg("-vf")
+        .arg("scale='min(1080,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease:flags=fast_bilinear")
         .arg("-f")
         .arg("image2")
         .arg("-c:v")
-        .arg("png") // Use PNG for high quality and transparency support (if applicable)
+        .arg("mjpeg")
+        .arg("-q:v")
+        .arg("3")
         .arg("-") // Output to stdout
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}", e))?;
@@ -1642,12 +1709,11 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     let encoded = general_purpose::STANDARD.encode(&output.stdout);
 
     // Return with data URI scheme
-    let result = format!("data:image/png;base64,{}", encoded);
+    let result = format!("data:image/jpeg;base64,{}", encoded);
 
     // Update cache
-    {
-        let mut cache = get_frame_cache().write().unwrap();
-        cache.insert(canonical, (mtime, size, result.clone()));
+    if let Ok(mut cache) = get_frame_cache().write() {
+        cache.insert(canonical, (mtime, size, std::sync::Arc::from(result.as_str())));
     }
 
     Ok(result)
@@ -2057,5 +2123,67 @@ mod tests {
         );
         assert!(filter.contains("pad="));
         assert!(filter.contains("force_original_aspect_ratio=decrease"));
+    }
+
+    #[test]
+    fn test_bounded_cache_capacity_and_eviction() {
+        let mut cache = BoundedCache::new(3);
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+
+        cache.insert("a".to_string(), 1);
+        cache.insert("b".to_string(), 2);
+        cache.insert("c".to_string(), 3);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get(&"a".to_string()), Some(&1));
+
+        // Inserting 4th item should evict oldest "a"
+        cache.insert("d".to_string(), 4);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get(&"a".to_string()), None);
+        assert_eq!(cache.get(&"b".to_string()), Some(&2));
+        assert_eq!(cache.get(&"c".to_string()), Some(&3));
+        assert_eq!(cache.get(&"d".to_string()), Some(&4));
+
+        // Updating existing key "b" shouldn't change len or evict anything
+        cache.insert("b".to_string(), 20);
+        assert_eq!(cache.len(), 3);
+        assert_eq!(cache.get(&"b".to_string()), Some(&20));
+
+        // Clear
+        cache.clear();
+        assert_eq!(cache.len(), 0);
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn test_extract_first_frame_jpeg_and_cache() {
+        let sample = "../electron/app/assets/oneliner.mp4";
+        if !std::path::Path::new(sample).exists() {
+            return;
+        }
+
+        let first = extract_first_frame(sample).expect("extract_first_frame failed");
+        assert!(
+            first.starts_with("data:image/jpeg;base64,"),
+            "Expected data:image/jpeg;base64 prefix, got {}",
+            &first[..first.len().min(30)]
+        );
+
+        // Verify base64 decode
+        use base64::{engine::general_purpose, Engine as _};
+        let b64_part = first.strip_prefix("data:image/jpeg;base64,").unwrap();
+        let decoded = general_purpose::STANDARD.decode(b64_part).expect("valid base64");
+        assert!(!decoded.is_empty());
+        // JPEG magic header bytes: 0xFF, 0xD8
+        assert_eq!(decoded[0], 0xFF);
+        assert_eq!(decoded[1], 0xD8);
+
+        // Verify it is compact (< 250 KB)
+        assert!(first.len() < 250_000, "thumbnail data URI should be compact, was {}", first.len());
+
+        // Cache hit test
+        let second = extract_first_frame(sample).expect("cached extract failed");
+        assert_eq!(first, second);
     }
 }

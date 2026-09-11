@@ -544,8 +544,10 @@ async fn render_caption_layer(
     let mut out_buffer = vec![0u8; total_pixels * 4];
 
     for (out_px, (b_px, w_px)) in out_buffer
-        .chunks_exact_mut(4)
-        .zip(black_slice.chunks_exact(3).zip(white_slice.chunks_exact(3)))
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(black_slice.as_chunks::<3>().0.iter().zip(white_slice.as_chunks::<3>().0.iter()))
     {
         let diff0 = w_px[0].saturating_sub(b_px[0]);
         let diff1 = w_px[1].saturating_sub(b_px[1]);

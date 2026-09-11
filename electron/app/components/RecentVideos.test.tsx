@@ -6,7 +6,14 @@ import { RecentVideos } from './RecentVideos'
 describe('RecentVideos', () => {
   beforeEach(() => {
     localStorage.clear()
-    ;(window as unknown as { rust: { filesExist: (paths: string[]) => Promise<boolean[]>; call: (method: string, params?: unknown) => Promise<unknown> } }).rust = {
+    ;(
+      window as unknown as {
+        rust: {
+          filesExist: (paths: string[]) => Promise<boolean[]>
+          call: (method: string, params?: unknown) => Promise<unknown>
+        }
+      }
+    ).rust = {
       filesExist: vi.fn(async (paths: string[]) => paths.map(() => true)),
       call: vi.fn(async () => ({ imageData: 'data:image/png;base64,thumb' })),
     }

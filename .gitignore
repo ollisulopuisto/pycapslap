@@ -37,4 +37,6 @@ rust/check_output.txt
 *~
 *.backup
 *.swp
-
+.venv/
+__pycache__/
+*.pyc
