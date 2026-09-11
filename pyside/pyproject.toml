@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-capslap-pyside = "capslap_pyside:main"
+capslap = "app.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.12,<0.13.0"]

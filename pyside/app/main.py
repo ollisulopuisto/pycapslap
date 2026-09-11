@@ -1,6 +1,11 @@
 import sys
 from pathlib import Path
 
+# Ensure pyside root is in sys.path when executed directly as `python app/main.py`
+pyside_dir = Path(__file__).resolve().parent.parent
+if str(pyside_dir) not in sys.path:
+    sys.path.insert(0, str(pyside_dir))
+
 from PySide6.QtWidgets import QApplication
 
 from app.views.main_window import MainWindow
