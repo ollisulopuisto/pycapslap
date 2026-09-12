@@ -156,3 +156,19 @@ def test_video_canvas_karaoke_wrapping_keeps_syllables_together(qtbot):
     assert len(lines[1]) == 2
     assert lines[1][0].text == " pitkä"
     assert lines[1][1].text == "sana"
+
+
+def test_video_canvas_safe_platforms(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(360, 640)
+    canvas.show()
+
+    assert hasattr(canvas, "set_active_safe_platforms")
+    assert canvas.active_safe_platforms == set()
+
+    canvas.set_active_safe_platforms({"tiktok", "reels", "shorts"})
+    assert canvas.active_safe_platforms == {"tiktok", "reels", "shorts"}
+
+    # Paint event with safe platforms enabled
+    canvas.repaint()

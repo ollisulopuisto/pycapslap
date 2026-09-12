@@ -283,3 +283,27 @@ def test_caption_panel_shift_start_and_end(qtbot):
     panel.btn_shift_next.click()
     assert panel.segments[0].text == "First"
     assert panel.segments[1].text == "Second Third"
+
+
+def test_caption_panel_safe_area_toggles(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    assert hasattr(panel, "btn_safe_tiktok")
+    assert hasattr(panel, "btn_safe_reels")
+    assert hasattr(panel, "btn_safe_shorts")
+
+    emitted = []
+    panel.safe_platforms_changed.connect(emitted.append)
+
+    panel.btn_safe_tiktok.click()
+    assert "tiktok" in panel.active_safe_platforms
+    assert emitted[-1] == {"tiktok"}
+
+    panel.btn_safe_reels.click()
+    assert "reels" in panel.active_safe_platforms
+    assert emitted[-1] == {"tiktok", "reels"}
+
+    panel.btn_safe_tiktok.click()
+    assert "tiktok" not in panel.active_safe_platforms
+    assert emitted[-1] == {"reels"}

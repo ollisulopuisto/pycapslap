@@ -42,3 +42,4 @@ rust/check_output.txt
 .venv/
 __pycache__/
 *.pyc
+Näyttökuva*.png

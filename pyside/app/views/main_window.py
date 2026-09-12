@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -36,6 +37,7 @@ from app.models.captions import (
 )
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.timeline import VisualTimelineWidget
+from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
 
 
@@ -146,6 +148,31 @@ class MainWindow(QMainWindow):
         # Status Bar
         self.status = QStatusBar()
         self.setStatusBar(self.status)
+
+        self.progress_bar = QProgressBar(self)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFixedHeight(14)
+        self.progress_bar.setFixedWidth(160)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #27272a;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                text-align: center;
+                color: #e4e4e7;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QProgressBar::chunk {
+                background-color: #6366f1;
+                border-radius: 3px;
+            }
+        """)
+        self.progress_bar.setVisible(False)
+        self.status.addPermanentWidget(self.progress_bar)
+
         self.status.showMessage("Ready. Drop a 1080p video or click Open Video.")
 
     def _setup_connections(self) -> None:
@@ -172,6 +199,9 @@ class MainWindow(QMainWindow):
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
         self.caption_panel.add_cue_requested.connect(self._on_add_cue_requested)
+        self.caption_panel.safe_platforms_changed.connect(
+            self.player.canvas.set_active_safe_platforms
+        )
 
         # Core signals
         self.core.progress.connect(self._on_core_progress)
@@ -336,6 +366,9 @@ class MainWindow(QMainWindow):
         )
         self.render_btn.setEnabled(False)
         self.render_btn.setText("Rendering...")
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
 
         params = {
             "inputVideo": str(Path(source_file).resolve()),
@@ -358,16 +391,21 @@ class MainWindow(QMainWindow):
                 output_path = ""
                 if isinstance(res, list) and res:
                     output_path = res[0].get("captionedVideo", "")
-                QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
+                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
+                QTimer.singleShot(
+                    0, self, lambda: self.render_btn.setText("Render Video")
+                )
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda: self.status.showMessage(
                         f"Render complete: {output_path}", 6000
                     ),
                 )
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda: QMessageBox.information(
                         self,
                         "Export Complete",
@@ -376,10 +414,14 @@ class MainWindow(QMainWindow):
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(0, lambda: self.render_btn.setText("Render Video"))
+                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
+                QTimer.singleShot(
+                    0, self, lambda: self.render_btn.setText("Render Video")
+                )
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg),
                 )
 
@@ -396,11 +438,37 @@ class MainWindow(QMainWindow):
         if not source_file:
             return
 
+        blocked_bands: list[tuple[float, float]] = []
+        for plat_id in self.caption_panel.active_safe_platforms:
+            plat = SAFE_PLATFORMS.get(plat_id)
+            if plat:
+                for reg in plat.regions:
+                    blocked_bands.append((reg.top, reg.top + reg.height))
+
+        export_fmt = (
+            "9:16"
+            if (
+                self.project.video
+                and self.project.video.height > self.project.video.width
+            )
+            else "16:9"
+        )
+
         self.status.showMessage("Running automatic caption placement via Rust core...")
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+
         params = {
-            "videoPath": str(Path(source_file).resolve()),
+            "inputVideo": str(Path(source_file).resolve()),
             "segments": [s.to_dict() for s in self.project.segments],
-            "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
+            "exportFormat": export_fmt,
+            "karaoke": self.project.style.karaoke,
+            "fontName": self.project.style.font_name,
+            "fontSize": self.project.style.font_size,
+            "textColor": self.project.style.text_color,
+            "highlightWordColor": self.project.style.highlight_color,
+            "outlineColor": self.project.style.outline_color,
+            "blockedBands": blocked_bands,
         }
 
         fut = self.core.call("autoPlaceCaptions", params)
@@ -416,17 +484,21 @@ class MainWindow(QMainWindow):
                     PositionOverride.from_dict(o) for o in overrides_data
                 ]
                 self.project.is_dirty = True
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda: self.status.showMessage(
                         f"Auto Dodge complete: moved {moved} captions.", 4000
                     ),
                 )
-                QTimer.singleShot(0, self.overlay.update)
+                QTimer.singleShot(0, self, self.overlay.update)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Auto Dodge Error", msg
                     ),
@@ -441,6 +513,9 @@ class MainWindow(QMainWindow):
             return
 
         self.status.showMessage("Transcribing audio via Rust core...")
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+
         params = {
             "inputVideo": str(Path(source_file).resolve()),
             "splitByWords": True,
@@ -458,17 +533,21 @@ class MainWindow(QMainWindow):
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
-                QTimer.singleShot(0, lambda: self.set_caption_segments(new_segs))
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
+                QTimer.singleShot(0, self, lambda: self.set_caption_segments(new_segs))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda: self.status.showMessage(
                         f"Transcription finished: {len(new_segs)} segments.", 4000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
+                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
                 QTimer.singleShot(
                     0,
+                    self,
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Transcription Error", msg
                     ),
@@ -484,7 +563,11 @@ class MainWindow(QMainWindow):
             val = float(progress)
             if 0.0 < val <= 1.0:
                 val = val * 100.0
-            pct_str = f"{val:.0f}%"
+            pct_val = max(0, min(100, int(round(val))))
+            pct_str = f"{pct_val}%"
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(pct_val)
+            self.progress_bar.setVisible(True)
         except (ValueError, TypeError):
             pct_str = ""
 
@@ -578,23 +661,10 @@ class MainWindow(QMainWindow):
                 self.caption_panel.set_style(def_style)
                 self.player.canvas.set_style(def_style)
                 self.project.style = def_style
-            starter_cues = [
-                CaptionSegment(start_ms=0, end_ms=3000, text="Welcome to PyCapSlap ⚡"),
-                CaptionSegment(
-                    start_ms=3500,
-                    end_ms=6500,
-                    text="Drag this caption vertically to position it",
-                ),
-                CaptionSegment(
-                    start_ms=7000,
-                    end_ms=9500,
-                    text="High-performance native video captions",
-                ),
-            ]
-            self.set_caption_segments(starter_cues)
+            self.set_caption_segments([])
             self.status.showMessage(
-                "Loaded video with starter captions. Drag on video or click + Add to edit.",
-                4000,
+                "Video loaded. Click 'Transcribe Audio' or '+ Add' to create captions.",
+                5000,
             )
 
         # Trigger initial position sync
@@ -610,9 +680,15 @@ class MainWindow(QMainWindow):
 
     def trigger_extract_thumbnail(self) -> None:
         video_path = self.player.media_player.source().toLocalFile()
+        if not video_path and self.project.video_path:
+            video_path = self.project.video_path
         if not video_path:
             return
         self.status.showMessage("Extracting thumbnail via Rust core...")
+        self.thumb_btn.setEnabled(False)
+        self.thumb_btn.setText("Extracting...")
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
 
         fut = self.core.call(
             "extractFirstFrame", {"videoPath": str(Path(video_path).resolve())}
@@ -642,14 +718,34 @@ class MainWindow(QMainWindow):
                         )
                         self.thumb_lbl.setPixmap(scaled)
                         self.player.canvas.set_fallback_pixmap(pixmap)
+                        self.thumb_btn.setEnabled(True)
+                        self.thumb_btn.setText("Extract Thumbnail")
+                        self.progress_bar.setRange(0, 100)
+                        self.progress_bar.setValue(100)
+                        self.progress_bar.setVisible(False)
                         self.status.showMessage("Thumbnail loaded.", 2000)
 
-                    QTimer.singleShot(0, update_ui)
+                    QTimer.singleShot(0, self, update_ui)
+                else:
+
+                    def reset_no_img():
+                        self.thumb_btn.setEnabled(True)
+                        self.thumb_btn.setText("Extract Thumbnail")
+                        self.progress_bar.setRange(0, 100)
+                        self.progress_bar.setVisible(False)
+
+                    QTimer.singleShot(0, self, reset_no_img)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(
-                    0, lambda msg=err_msg: QMessageBox.warning(self, "Error", msg)
-                )
+
+                def reset_err(msg=err_msg):
+                    self.thumb_btn.setEnabled(True)
+                    self.thumb_btn.setText("Extract Thumbnail")
+                    self.progress_bar.setRange(0, 100)
+                    self.progress_bar.setVisible(False)
+                    QMessageBox.warning(self, "Error", msg)
+
+                QTimer.singleShot(0, self, reset_err)
 
         fut.add_done_callback(on_done)
 

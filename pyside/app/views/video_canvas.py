@@ -1,5 +1,8 @@
+from dataclasses import dataclass
+
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QFont,
     QFontMetrics,
@@ -14,6 +17,60 @@ from PySide6.QtWidgets import QWidget
 
 from app.fonts import init_app_fonts
 from app.models.captions import CaptionSegment, CaptionStyle, WordSpan
+
+
+@dataclass
+class SafeAreaRegion:
+    label: str
+    top: float
+    left: float
+    width: float
+    height: float
+
+
+@dataclass
+class PlatformSafeArea:
+    id: str
+    name: str
+    color: str
+    regions: list[SafeAreaRegion]
+
+
+SAFE_PLATFORMS: dict[str, PlatformSafeArea] = {
+    "tiktok": PlatformSafeArea(
+        id="tiktok",
+        name="TikTok",
+        color="#22d3ee",
+        regions=[
+            SafeAreaRegion("Tabs", top=0.0, left=0.0, width=100.0, height=8.0),
+            SafeAreaRegion("Actions", top=42.0, left=84.0, width=16.0, height=46.0),
+            SafeAreaRegion("Caption", top=78.0, left=0.0, width=80.0, height=17.0),
+            SafeAreaRegion("Nav", top=95.0, left=0.0, width=100.0, height=5.0),
+        ],
+    ),
+    "reels": PlatformSafeArea(
+        id="reels",
+        name="Instagram Reels",
+        color="#e879f9",
+        regions=[
+            SafeAreaRegion("Header", top=0.0, left=0.0, width=100.0, height=8.0),
+            SafeAreaRegion("Actions", top=45.0, left=84.0, width=16.0, height=40.0),
+            SafeAreaRegion("Caption", top=80.0, left=0.0, width=82.0, height=12.0),
+            SafeAreaRegion("Nav", top=92.0, left=0.0, width=100.0, height=8.0),
+        ],
+    ),
+    "shorts": PlatformSafeArea(
+        id="shorts",
+        name="YouTube Shorts",
+        color="#fb923c",
+        regions=[
+            SafeAreaRegion("Search", top=0.0, left=0.0, width=100.0, height=7.0),
+            SafeAreaRegion("Actions", top=40.0, left=85.0, width=15.0, height=48.0),
+            SafeAreaRegion("Title", top=82.0, left=0.0, width=84.0, height=11.0),
+            SafeAreaRegion("Nav", top=93.0, left=0.0, width=100.0, height=7.0),
+        ],
+    ),
+}
 
 
 class VideoCanvasWidget(QWidget):
@@ -42,9 +99,14 @@ class VideoCanvasWidget(QWidget):
         self.anchor_y_pct: float = 80.0
         self.is_dragging: bool = False
         self.style: CaptionStyle = CaptionStyle()
+        self.active_safe_platforms: set[str] = set()
 
         # Initialize fonts database
         init_app_fonts()
+
+    def set_active_safe_platforms(self, platforms: set[str]) -> None:
+        self.active_safe_platforms = set(platforms)
+        self.update()
 
     def set_style(self, style: CaptionStyle) -> None:
         self.style = style
@@ -150,7 +212,11 @@ class VideoCanvasWidget(QWidget):
         elif self._fallback_pixmap and not self._fallback_pixmap.isNull():
             painter.drawPixmap(video_rect.toRect(), self._fallback_pixmap)
 
-        # 3. Dragging guidelines
+        # 3. Render Platform UI Safe Areas (TikTok, Reels, Shorts)
+        if self.active_safe_platforms:
+            self._paint_safe_areas(painter, video_rect)
+
+        # 4. Dragging guidelines
         anchor_y = video_rect.top() + (
             video_rect.height() * (self.anchor_y_pct / 100.0)
         )
@@ -177,9 +243,51 @@ class VideoCanvasWidget(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        # 4. Render Active Subtitle
+        # 5. Render Active Subtitle
         if self.current_segment and self.current_segment.text.strip():
             self._paint_caption(painter, video_rect, anchor_y)
+
+    def _paint_safe_areas(self, painter: QPainter, video_rect: QRectF) -> None:
+        """Paint UI safe area boundary overlays for selected platforms (TikTok, Reels, Shorts)."""
+        painter.save()
+        for plat_id in self.active_safe_platforms:
+            platform = SAFE_PLATFORMS.get(plat_id)
+            if not platform:
+                continue
+
+            base_color = QColor(platform.color)
+            fill_color = QColor(
+                base_color.red(), base_color.green(), base_color.blue(), 35
+            )
+            pen_color = QColor(
+                base_color.red(), base_color.green(), base_color.blue(), 220
+            )
+
+            pen = QPen(pen_color, 1.5, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(QBrush(fill_color))
+
+            font = QFont("Helvetica Neue", 8, QFont.Weight.Bold)
+            painter.setFont(font)
+
+            for region in platform.regions:
+                rx = video_rect.left() + video_rect.width() * (region.left / 100.0)
+                ry = video_rect.top() + video_rect.height() * (region.top / 100.0)
+                rw = video_rect.width() * (region.width / 100.0)
+                rh = video_rect.height() * (region.height / 100.0)
+                r_rect = QRectF(rx, ry, rw, rh)
+
+                painter.drawRect(r_rect)
+
+                badge_w = min(rw, 56.0)
+                badge_h = 15.0
+                badge_rect = QRectF(rx, ry, badge_w, badge_h)
+                painter.fillRect(badge_rect, base_color)
+                painter.setPen(QColor(0, 0, 0))
+                painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, region.label)
+                painter.setPen(pen)
+
+        painter.restore()
 
     @staticmethod
     def _word_display_text(word: WordSpan, is_first: bool) -> str:

@@ -50,6 +50,7 @@ class CaptionPanelWidget(QWidget):
     save_requested = Signal()
     transcribe_requested = Signal()
     add_cue_requested = Signal()
+    safe_platforms_changed = Signal(object)
 
     def __init__(
         self,
@@ -63,6 +64,7 @@ class CaptionPanelWidget(QWidget):
         self.preset_manager = preset_manager or PresetManager()
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
+        self.active_safe_platforms: set[str] = set()
         self.active_anchor_pct: float = 80.0
         self.current_style: CaptionStyle = (
             self.preset_manager.get_default_style() or CaptionStyle()
@@ -253,6 +255,45 @@ class CaptionPanelWidget(QWidget):
         self.slider_anchor.setFixedHeight(18)
         self.slider_anchor.valueChanged.connect(self._on_slider_changed)
         pos_layout.addWidget(self.slider_anchor)
+
+        # Safe area platform overlays (TikTok, Reels, Shorts)
+        safe_row = QHBoxLayout()
+        safe_row.setSpacing(6)
+        safe_lbl = QLabel("Safe Zones:")
+        safe_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #a1a1aa;")
+        safe_row.addWidget(safe_lbl)
+
+        btn_safe_base = (
+            "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+            "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
+            "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
+        )
+        self.btn_safe_tiktok = QPushButton("TikTok")
+        self.btn_safe_tiktok.setCheckable(True)
+        self.btn_safe_tiktok.setFixedHeight(22)
+        self.btn_safe_tiktok.setStyleSheet(btn_safe_base)
+        self.btn_safe_tiktok.clicked.connect(
+            lambda: self._toggle_safe_platform("tiktok")
+        )
+        safe_row.addWidget(self.btn_safe_tiktok)
+
+        self.btn_safe_reels = QPushButton("Reels")
+        self.btn_safe_reels.setCheckable(True)
+        self.btn_safe_reels.setFixedHeight(22)
+        self.btn_safe_reels.setStyleSheet(btn_safe_base)
+        self.btn_safe_reels.clicked.connect(lambda: self._toggle_safe_platform("reels"))
+        safe_row.addWidget(self.btn_safe_reels)
+
+        self.btn_safe_shorts = QPushButton("Shorts")
+        self.btn_safe_shorts.setCheckable(True)
+        self.btn_safe_shorts.setFixedHeight(22)
+        self.btn_safe_shorts.setStyleSheet(btn_safe_base)
+        self.btn_safe_shorts.clicked.connect(
+            lambda: self._toggle_safe_platform("shorts")
+        )
+        safe_row.addWidget(self.btn_safe_shorts)
+        safe_row.addStretch()
+        pos_layout.addLayout(safe_row)
 
         layout.addWidget(pos_container)
 
@@ -681,3 +722,35 @@ class CaptionPanelWidget(QWidget):
             seg = self.segments[row]
             seg.update_text(item.text())
             self.segment_updated.emit(seg)
+
+    def _toggle_safe_platform(self, platform_id: str) -> None:
+        if platform_id in self.active_safe_platforms:
+            self.active_safe_platforms.remove(platform_id)
+        else:
+            self.active_safe_platforms.add(platform_id)
+        self._update_safe_button_styles()
+        self.safe_platforms_changed.emit(set(self.active_safe_platforms))
+
+    def _update_safe_button_styles(self) -> None:
+        colors = {"tiktok": "#22d3ee", "reels": "#e879f9", "shorts": "#fb923c"}
+        buttons = {
+            "tiktok": self.btn_safe_tiktok,
+            "reels": self.btn_safe_reels,
+            "shorts": self.btn_safe_shorts,
+        }
+        for plat_id, btn in buttons.items():
+            is_active = plat_id in self.active_safe_platforms
+            btn.setChecked(is_active)
+            c = colors[plat_id]
+            if is_active:
+                btn.setStyleSheet(
+                    f"QPushButton {{ font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 3px; "
+                    f"border: 1px solid {c}; background-color: {c}33; color: {c}; }} "
+                    f"QPushButton:hover {{ background-color: {c}55; }}"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+                    "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
+                    "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
+                )

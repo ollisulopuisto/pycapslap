@@ -31,7 +31,7 @@ def test_main_window_load_1080p_video(qtbot):
     window.show()
 
     window.load_video(sample)
-    assert window.thumb_btn.isEnabled()
+    qtbot.waitUntil(lambda: window.thumb_btn.isEnabled(), timeout=5000)
     assert window.render_btn.isEnabled()
     assert window.save_btn.isEnabled()
     assert "test_input.mp4" in window.meta_lbl.text()
@@ -166,4 +166,22 @@ def test_main_window_core_progress_signal(qtbot):
     window._on_core_progress("op-render-12345", "Exporting...", 0.88)
     assert "88%" in window.render_btn.text()
 
+    window.close()
+
+
+def test_main_window_progress_bar_and_empty_segments_on_load(qtbot, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    assert hasattr(window, "progress_bar")
+    assert not window.progress_bar.isVisible()
+
+    temp_video = tmp_path / "fresh_video.mp4"
+    temp_video.write_bytes(b"dummy")
+
+    window.load_video(str(temp_video))
+    # Fresh video with no sidecar must start with clean empty segments!
+    assert window.project.segments == []
+    assert window.caption_panel.segments == []
     window.close()
