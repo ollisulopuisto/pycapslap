@@ -122,6 +122,143 @@ class CaptionSegment:
         )
 
 
+def combine_separated_syllables(
+    segments: list[CaptionSegment],
+) -> list[CaptionSegment]:
+    """
+    Combines separated syllables into full words both within segments and across segment boundaries.
+    Prevents words from being split in the middle.
+    """
+    if not segments:
+        return []
+
+    # 1. Process each segment internally: merge adjacent syllable tokens
+    cleaned_segments: list[CaptionSegment] = []
+    for seg in segments:
+        new_words: list[WordSpan] = []
+        for w in seg.words:
+            w_clean = w.text.strip()
+            if not w_clean:
+                continue
+            if not new_words:
+                new_words.append(
+                    WordSpan(
+                        start_ms=w.start_ms,
+                        end_ms=w.end_ms,
+                        text=w_clean,
+                        glue_to_previous=w.glue_to_previous,
+                    )
+                )
+            else:
+                prev = new_words[-1]
+                prev_clean = prev.text.strip()
+                should_glue = w.glue_to_previous or prev_clean.endswith("-")
+                if should_glue:
+                    combined_text = (
+                        prev_clean.rstrip("-") + w_clean.lstrip()
+                        if prev_clean.endswith("-")
+                        else prev_clean + w_clean.lstrip()
+                    )
+                    prev.text = combined_text
+                    prev.end_ms = max(prev.end_ms, w.end_ms)
+                else:
+                    new_words.append(
+                        WordSpan(
+                            start_ms=w.start_ms,
+                            end_ms=w.end_ms,
+                            text=w_clean,
+                            glue_to_previous=False,
+                        )
+                    )
+
+        text_parts = [w.text for w in new_words]
+        new_text = " ".join(text_parts) if new_words else seg.text
+        cleaned_segments.append(
+            CaptionSegment(
+                start_ms=seg.start_ms,
+                end_ms=seg.end_ms,
+                text=new_text,
+                words=new_words,
+            )
+        )
+
+    # 2. Process across segment boundaries:
+    i = 0
+    while i < len(cleaned_segments) - 1:
+        seg_cur = cleaned_segments[i]
+        seg_next = cleaned_segments[i + 1]
+
+        if seg_cur.words and seg_next.words:
+            first_next = seg_next.words[0]
+            last_cur = seg_cur.words[-1]
+
+            if first_next.glue_to_previous or last_cur.text.endswith("-"):
+                merged_text = (
+                    last_cur.text.rstrip("-") + first_next.text.lstrip()
+                    if last_cur.text.endswith("-")
+                    else last_cur.text + first_next.text.lstrip()
+                )
+                last_cur.text = merged_text
+                last_cur.end_ms = max(last_cur.end_ms, first_next.end_ms)
+                seg_cur.end_ms = max(seg_cur.end_ms, last_cur.end_ms)
+                seg_cur.text = " ".join(w.text for w in seg_cur.words)
+
+                seg_next.words.pop(0)
+                if seg_next.words:
+                    seg_next.start_ms = seg_next.words[0].start_ms
+                    seg_next.text = " ".join(w.text for w in seg_next.words)
+                else:
+                    cleaned_segments.pop(i + 1)
+                    continue
+        i += 1
+
+    return cleaned_segments
+
+
+def shift_word_to_prev(segments: list[CaptionSegment], index: int) -> None:
+    """Move the first word of segments[index] to the end of segments[index - 1]."""
+    if index <= 0 or index >= len(segments):
+        return
+    prev_seg = segments[index - 1]
+    cur_seg = segments[index]
+    if not cur_seg.words:
+        return
+
+    word = cur_seg.words.pop(0)
+    prev_seg.words.append(word)
+    prev_seg.end_ms = word.end_ms
+    prev_seg.text = " ".join(w.text.strip() for w in prev_seg.words)
+
+    if cur_seg.words:
+        cur_seg.start_ms = cur_seg.words[0].start_ms
+        cur_seg.text = " ".join(w.text.strip() for w in cur_seg.words)
+    else:
+        cur_seg.start_ms = cur_seg.end_ms
+        cur_seg.text = ""
+
+
+def shift_word_to_next(segments: list[CaptionSegment], index: int) -> None:
+    """Move the last word of segments[index] to the beginning of segments[index + 1]."""
+    if index < 0 or index >= len(segments) - 1:
+        return
+    cur_seg = segments[index]
+    next_seg = segments[index + 1]
+    if not cur_seg.words:
+        return
+
+    word = cur_seg.words.pop()
+    next_seg.words.insert(0, word)
+    next_seg.start_ms = word.start_ms
+    next_seg.text = " ".join(w.text.strip() for w in next_seg.words)
+
+    if cur_seg.words:
+        cur_seg.end_ms = cur_seg.words[-1].end_ms
+        cur_seg.text = " ".join(w.text.strip() for w in cur_seg.words)
+    else:
+        cur_seg.end_ms = cur_seg.start_ms
+        cur_seg.text = ""
+
+
 @dataclass
 class PositionOverride:
     start_ms: int

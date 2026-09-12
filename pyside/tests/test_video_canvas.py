@@ -129,3 +129,30 @@ def test_video_canvas_plain_text_wrapping(qtbot):
     assert len(lines) >= 2
     for line in lines:
         assert metrics.horizontalAdvance(line) <= max_w
+
+
+def test_video_canvas_karaoke_wrapping_keeps_syllables_together(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+
+    from PySide6.QtGui import QFont, QFontMetrics
+
+    font = QFont("Montserrat", 18, QFont.Weight.Black)
+    metrics = QFontMetrics(font)
+
+    words = [
+        WordSpan(start_ms=0, end_ms=500, text="Lyhyt"),
+        WordSpan(start_ms=500, end_ms=1000, text=" alku"),
+        WordSpan(start_ms=1000, end_ms=1500, text=" pitkä"),
+        WordSpan(start_ms=1500, end_ms=2000, text="sana", glue_to_previous=True),
+    ]
+    adv_prefix = metrics.horizontalAdvance("Lyhyt alku")
+    adv_pitka = metrics.horizontalAdvance(" pitkä")
+    max_w = adv_prefix + adv_pitka - 5
+
+    lines = canvas._wrap_karaoke_words(words, metrics, max_w)
+    assert len(lines) == 2
+    # Second line must hold both parts of the glued word together
+    assert len(lines[1]) == 2
+    assert lines[1][0].text == " pitkä"
+    assert lines[1][1].text == "sana"

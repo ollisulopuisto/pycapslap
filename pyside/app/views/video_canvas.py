@@ -202,19 +202,33 @@ class VideoCanvasWidget(QWidget):
     def _wrap_karaoke_words(
         self, words: list[WordSpan], metrics: QFontMetrics, max_width: float
     ) -> list[list[WordSpan]]:
+        if not words:
+            return []
+
+        # 1. Group words and glued syllables into atomic word units
+        units: list[list[WordSpan]] = []
+        for w in words:
+            if units and (
+                w.glue_to_previous or units[-1][-1].text.strip().endswith("-")
+            ):
+                units[-1].append(w)
+            else:
+                units.append([w])
+
+        # 2. Wrap atomic units without breaking in the middle
         lines: list[list[WordSpan]] = []
         cur_line: list[WordSpan] = []
 
-        for w in words:
+        for unit in units:
             if not cur_line:
-                cur_line.append(w)
+                cur_line.extend(unit)
             else:
-                candidate = cur_line + [w]
+                candidate = cur_line + unit
                 if self._measure_word_span_line(candidate, metrics) <= max_width:
-                    cur_line.append(w)
+                    cur_line.extend(unit)
                 else:
                     lines.append(cur_line)
-                    cur_line = [w]
+                    cur_line = list(unit)
 
         if cur_line:
             lines.append(cur_line)

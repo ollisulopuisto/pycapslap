@@ -160,6 +160,7 @@ class MainWindow(QMainWindow):
             self._on_panel_override_changed
         )
         self.caption_panel.segment_updated.connect(self._on_segment_text_updated)
+        self.caption_panel.segments_updated.connect(self._on_segments_updated)
         self.caption_panel.style_changed.connect(self._on_style_changed)
         self.caption_panel.save_requested.connect(self._on_save_requested)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
@@ -238,6 +239,13 @@ class MainWindow(QMainWindow):
             pos_ms = self.player.media_player.position()
             anchor_y = self.project.get_anchor_y_for_segment(seg)
             self.overlay.set_segment(seg, anchor_y, current_pos_ms=pos_ms)
+
+    def _on_segments_updated(self, segments: list[CaptionSegment]) -> None:
+        self.project.segments = list(segments)
+        self.project.is_dirty = True
+        self.timeline.set_segments(self.project.segments)
+        pos_ms = self.player.media_player.position()
+        self._on_position_changed(pos_ms)
 
     def _on_add_cue_requested(self) -> None:
         pos = self.player.media_player.position()
@@ -552,6 +560,11 @@ class MainWindow(QMainWindow):
                 f"Loaded sidecar with {len(self.project.segments)} captions."
             )
         else:
+            def_style = self.caption_panel.preset_manager.get_default_style()
+            if def_style:
+                self.caption_panel.set_style(def_style)
+                self.player.canvas.set_style(def_style)
+                self.project.style = def_style
             starter_cues = [
                 CaptionSegment(start_ms=0, end_ms=3000, text="Welcome to PyCapSlap ⚡"),
                 CaptionSegment(

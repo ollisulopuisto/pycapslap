@@ -6,6 +6,9 @@ from app.models.captions import (
     PositionOverride,
     ProjectState,
     WordSpan,
+    combine_separated_syllables,
+    shift_word_to_next,
+    shift_word_to_prev,
 )
 
 
@@ -127,3 +130,119 @@ def test_caption_segment_update_text_synchronizes_words():
     assert d["text"] == "Completely rewritten sentence for testing"
     assert len(d["words"]) == 5
     assert d["words"][0]["text"] == "Completely"
+
+
+def test_combine_separated_syllables_within_segment():
+    # Syllables with trailing hyphens or glue_to_previous should merge into one word
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="sep- a- rat- ed syllables",
+        words=[
+            WordSpan(start_ms=0, end_ms=300, text="sep-"),
+            WordSpan(start_ms=300, end_ms=600, text="a-"),
+            WordSpan(start_ms=600, end_ms=900, text="rat-"),
+            WordSpan(start_ms=900, end_ms=1300, text="ed"),
+            WordSpan(start_ms=1400, end_ms=2000, text="syllables"),
+        ],
+    )
+    result = combine_separated_syllables([seg])
+    assert len(result) == 1
+    assert len(result[0].words) == 2
+    assert result[0].words[0].text == "separated"
+    assert result[0].words[0].start_ms == 0
+    assert result[0].words[0].end_ms == 1300
+    assert result[0].words[1].text == "syllables"
+    assert result[0].text == "separated syllables"
+
+
+def test_combine_separated_syllables_with_glue_to_previous():
+    # Finnish word pieces with glue_to_previous
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="kaup pa kes kus",
+        words=[
+            WordSpan(start_ms=0, end_ms=400, text="kaup"),
+            WordSpan(start_ms=400, end_ms=800, text="pa", glue_to_previous=True),
+            WordSpan(start_ms=800, end_ms=1200, text="kes", glue_to_previous=True),
+            WordSpan(start_ms=1200, end_ms=1800, text="kus", glue_to_previous=True),
+        ],
+    )
+    result = combine_separated_syllables([seg])
+    assert len(result) == 1
+    assert len(result[0].words) == 1
+    assert result[0].words[0].text == "kauppakeskus"
+    assert result[0].words[0].start_ms == 0
+    assert result[0].words[0].end_ms == 1800
+    assert result[0].text == "kauppakeskus"
+
+
+def test_combine_separated_syllables_across_segment_boundaries():
+    # Word broken across segment boundary: seg0 ends with 'korke', seg1 starts with 'alla' (glue)
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="tarpeeksi korke",
+        words=[
+            WordSpan(start_ms=0, end_ms=500, text="tarpeeksi"),
+            WordSpan(start_ms=500, end_ms=1000, text="korke"),
+        ],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2500,
+        text="alla birtsille",
+        words=[
+            WordSpan(start_ms=1000, end_ms=1500, text="alla", glue_to_previous=True),
+            WordSpan(start_ms=1500, end_ms=2500, text="birtsille"),
+        ],
+    )
+    result = combine_separated_syllables([seg1, seg2])
+    assert len(result) == 2
+    # seg1 ends with full word 'korkealla'
+    assert result[0].text == "tarpeeksi korkealla"
+    assert result[0].words[-1].text == "korkealla"
+    assert result[0].words[-1].end_ms == 1500
+    assert result[0].end_ms == 1500
+    # seg2 starts with 'birtsille'
+    assert result[1].text == "birtsille"
+    assert result[1].words[0].text == "birtsille"
+    assert result[1].start_ms == 1500
+
+
+def test_shift_word_to_prev_and_next():
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="Hello",
+        words=[WordSpan(start_ms=0, end_ms=1000, text="Hello")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1100,
+        end_ms=2500,
+        text="world again",
+        words=[
+            WordSpan(start_ms=1100, end_ms=1800, text="world"),
+            WordSpan(start_ms=1900, end_ms=2500, text="again"),
+        ],
+    )
+    segments = [seg1, seg2]
+
+    # Shift 'world' from seg2 to seg1
+    shift_word_to_prev(segments, 1)
+    assert len(segments[0].words) == 2
+    assert segments[0].text == "Hello world"
+    assert segments[0].end_ms == 1800
+    assert len(segments[1].words) == 1
+    assert segments[1].text == "again"
+    assert segments[1].start_ms == 1900
+
+    # Shift 'world' back from seg1 to seg2
+    shift_word_to_next(segments, 0)
+    assert len(segments[0].words) == 1
+    assert segments[0].text == "Hello"
+    assert segments[0].end_ms == 1000
+    assert len(segments[1].words) == 2
+    assert segments[1].text == "world again"
+    assert segments[1].start_ms == 1100

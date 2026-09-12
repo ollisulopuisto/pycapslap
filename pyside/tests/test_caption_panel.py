@@ -128,3 +128,108 @@ def test_caption_panel_edit_cell_syncs_segment(qtbot):
     # Verify commit_active_editor clears selection / finishes editing
     panel.commit_active_editor()
     assert panel.cue_table.currentItem() is None
+
+
+def test_caption_panel_hierarchical_font_menu(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    assert hasattr(panel, "btn_font")
+    assert hasattr(panel, "font_menu")
+    actions = panel.font_menu.actions()
+    assert len(actions) > 0
+
+    emitted = []
+    panel.style_changed.connect(emitted.append)
+    panel.set_font_name("Komika Axis")
+    assert panel.current_style.font_name == "Komika Axis"
+    assert "Komika Axis" in panel.btn_font.text()
+    assert len(emitted) > 0
+
+
+def test_caption_panel_custom_preset_saving(qtbot, tmp_path, monkeypatch):
+    preset_file = tmp_path / "panel_presets.json"
+    from PySide6.QtWidgets import QInputDialog
+    from app.services.preset_manager import PresetManager
+
+    manager = PresetManager(storage_path=preset_file)
+
+    panel = CaptionPanelWidget(preset_manager=manager)
+    qtbot.addWidget(panel)
+
+    panel.set_font_name("Komika Axis")
+    panel.slider_font_size.setValue(77)
+
+    monkeypatch.setattr(
+        QInputDialog, "getText", lambda *args, **kwargs: ("Podcast Show", True)
+    )
+
+    panel.btn_save_preset.click()
+
+    assert "Podcast Show" in manager.list_presets()
+    idx = panel.combo_template.findData("Podcast Show")
+    assert idx >= 0
+
+
+def test_caption_panel_combine_syllables_button(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="kaup",
+        words=[WordSpan(0, 1000, "kaup")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="pa kes kus",
+        words=[
+            WordSpan(1000, 1500, "pa", glue_to_previous=True),
+            WordSpan(1500, 2000, "kes kus"),
+        ],
+    )
+    panel.set_segments([seg1, seg2])
+
+    emitted = []
+    panel.segments_updated.connect(emitted.append)
+
+    panel.btn_combine_syllables.click()
+    assert len(emitted) == 1
+    assert len(panel.segments) == 2
+    assert panel.segments[0].text == "kauppa"
+    assert panel.segments[1].text == "kes kus"
+
+
+def test_caption_panel_shift_start_and_end(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="First",
+        words=[WordSpan(0, 1000, "First")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2500,
+        text="Second Third",
+        words=[WordSpan(1000, 1800, "Second"), WordSpan(1800, 2500, "Third")],
+    )
+    panel.set_segments([seg1, seg2])
+
+    # Select second segment
+    panel.cue_table.selectRow(1)
+
+    # Shift first word ("Second") to previous segment
+    panel.btn_shift_prev.click()
+    assert panel.segments[0].text == "First Second"
+    assert panel.segments[1].text == "Third"
+
+    # Shift it back
+    panel.cue_table.selectRow(0)
+    panel.btn_shift_next.click()
+    assert panel.segments[0].text == "First"
+    assert panel.segments[1].text == "Second Third"

@@ -7,7 +7,9 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QMenu,
     QPushButton,
     QSlider,
     QTableWidget,
@@ -16,8 +18,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.fonts import init_app_fonts
-from app.models.captions import CaptionSegment, CaptionStyle, STYLE_PRESETS
+from app.fonts import get_categorized_fonts, init_app_fonts
+from app.models.captions import (
+    STYLE_PRESETS,
+    CaptionSegment,
+    CaptionStyle,
+    combine_separated_syllables,
+    shift_word_to_next,
+    shift_word_to_prev,
+)
+from app.services.preset_manager import PresetManager
 
 
 def format_timestamp(ms: int) -> str:
@@ -31,6 +41,7 @@ def format_timestamp(ms: int) -> str:
 class CaptionPanelWidget(QWidget):
     segment_selected = Signal(object)
     segment_updated = Signal(object)
+    segments_updated = Signal(object)
     position_override_changed = Signal(object, float)
     style_changed = Signal(object)
     auto_place_requested = Signal()
@@ -38,12 +49,22 @@ class CaptionPanelWidget(QWidget):
     transcribe_requested = Signal()
     add_cue_requested = Signal()
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        preset_manager: PresetManager | None = None,
+    ):
+        if isinstance(parent, PresetManager):
+            preset_manager = parent
+            parent = None
         super().__init__(parent)
+        self.preset_manager = preset_manager or PresetManager()
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
         self.active_anchor_pct: float = 80.0
-        self.current_style: CaptionStyle = CaptionStyle()
+        self.current_style: CaptionStyle = (
+            self.preset_manager.get_default_style() or CaptionStyle()
+        )
         self._block_signals: bool = False
 
         self._init_ui()
@@ -80,6 +101,13 @@ class CaptionPanelWidget(QWidget):
         )
         self.btn_autoplace.clicked.connect(self.auto_place_requested.emit)
         header_layout.addWidget(self.btn_autoplace)
+
+        self.btn_combine_syllables = QPushButton("Fix Syllables")
+        self.btn_combine_syllables.setToolTip(
+            "Combine separated syllables and fix broken words across segments"
+        )
+        self.btn_combine_syllables.clicked.connect(self._on_combine_syllables_clicked)
+        header_layout.addWidget(self.btn_combine_syllables)
 
         self.btn_save = QPushButton("Save")
         self.btn_save.setToolTip("Save captions to sidecar file (.capslap.json)")
@@ -128,6 +156,35 @@ class CaptionPanelWidget(QWidget):
         self.cue_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
         layout.addWidget(self.cue_table, stretch=1)
+
+        # Row for word-level shifting
+        row_shift = QHBoxLayout()
+        row_shift.setSpacing(6)
+        lbl_shift = QLabel("Adjust words:")
+        lbl_shift.setStyleSheet("font-size: 11px; color: #a1a1aa;")
+        row_shift.addWidget(lbl_shift)
+
+        self.btn_shift_prev = QPushButton("◀ Shift Start")
+        self.btn_shift_prev.setToolTip(
+            "Move first word of selected segment to previous segment"
+        )
+        self.btn_shift_prev.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_shift_prev.clicked.connect(self._on_shift_prev_clicked)
+        row_shift.addWidget(self.btn_shift_prev)
+
+        self.btn_shift_next = QPushButton("Shift End ▶")
+        self.btn_shift_next.setToolTip(
+            "Move last word of selected segment to next segment"
+        )
+        self.btn_shift_next.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_shift_next.clicked.connect(self._on_shift_next_clicked)
+        row_shift.addWidget(self.btn_shift_next)
+        row_shift.addStretch()
+        layout.addLayout(row_shift)
 
         # Compact Position controls
         pos_container = QWidget()
@@ -223,28 +280,56 @@ class CaptionPanelWidget(QWidget):
         content_layout.setContentsMargins(2, 4, 2, 2)
         content_layout.setSpacing(6)
 
-        # Template preset dropdown
+        # Template preset dropdown and Save Preset button
         row_preset = QHBoxLayout()
         row_preset.addWidget(QLabel("Preset:"))
         self.combo_template = QComboBox()
-        self.combo_template.addItem("Oneliner (Modern Yellow)", "oneliner")
-        self.combo_template.addItem("Karaoke (Neon Green)", "karaoke")
-        self.combo_template.addItem("Vibrant (Mint / Teal)", "vibrant")
-        self.combo_template.addItem("Storyteller (Warm Amber)", "storyteller")
-        self.combo_template.addItem("Custom", "custom")
         self.combo_template.currentIndexChanged.connect(self._on_template_changed)
         row_preset.addWidget(self.combo_template, stretch=1)
-        content_layout.addLayout(row_preset)
 
-        # Font family dropdown
+        self.btn_save_preset = QPushButton("Save Preset...")
+        self.btn_save_preset.setToolTip(
+            "Save current style preference (font, color, size, etc.) for this show"
+        )
+        self.btn_save_preset.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_save_preset.clicked.connect(self._on_save_preset_clicked)
+        row_preset.addWidget(self.btn_save_preset)
+
+        self.btn_delete_preset = QPushButton("✕")
+        self.btn_delete_preset.setToolTip("Delete selected custom preset")
+        self.btn_delete_preset.setFixedWidth(24)
+        self.btn_delete_preset.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 4px; }"
+        )
+        self.btn_delete_preset.clicked.connect(self._on_delete_preset_clicked)
+        row_preset.addWidget(self.btn_delete_preset)
+
+        content_layout.addLayout(row_preset)
+        self._rebuild_template_combo()
+
+        # Hierarchical Font family dropdown menu
         row_font = QHBoxLayout()
         row_font.addWidget(QLabel("Font:"))
+
+        self.btn_font = QPushButton(f"Font: {self.current_style.font_name} ▾")
+        self.btn_font.setStyleSheet(
+            "QPushButton { text-align: left; padding: 3px 8px; font-size: 11px; }"
+        )
+        self.font_menu = QMenu(self)
+        self._rebuild_font_menu()
+        self.btn_font.setMenu(self.font_menu)
+        row_font.addWidget(self.btn_font, stretch=1)
+
+        # Retain combo_font for backward compatibility with existing tests
         self.combo_font = QComboBox()
+        self.combo_font.setVisible(False)
         avail_fonts = init_app_fonts()
         for f in avail_fonts or ["Montserrat", "Komika Axis", "Roboto"]:
             self.combo_font.addItem(f, f)
         self.combo_font.currentIndexChanged.connect(self._on_style_field_changed)
-        row_font.addWidget(self.combo_font, stretch=1)
+        row_font.addWidget(self.combo_font)
         content_layout.addLayout(row_font)
 
         # Font size slider
@@ -300,6 +385,58 @@ class CaptionPanelWidget(QWidget):
             f"background-color: {hc}; color: {'#000000' if hc.lower() in ('#ffffff', '#ffff00', '#7ef1c5', '#00f924') else '#ffffff'}; font-weight: bold; border-radius: 4px;"
         )
 
+    def _rebuild_template_combo(self) -> None:
+        prev_data = self.combo_template.currentData()
+        self.combo_template.blockSignals(True)
+        self.combo_template.clear()
+
+        self.combo_template.addItem("Oneliner (Modern Yellow)", "oneliner")
+        self.combo_template.addItem("Karaoke (Neon Green)", "karaoke")
+        self.combo_template.addItem("Vibrant (Mint / Teal)", "vibrant")
+        self.combo_template.addItem("Storyteller (Warm Amber)", "storyteller")
+
+        custom_presets = self.preset_manager.list_presets()
+        if custom_presets:
+            self.combo_template.insertSeparator(self.combo_template.count())
+            for name in custom_presets:
+                self.combo_template.addItem(f"★ {name}", name)
+
+        self.combo_template.addItem("Custom", "custom")
+
+        if prev_data:
+            idx = self.combo_template.findData(prev_data)
+            if idx >= 0:
+                self.combo_template.setCurrentIndex(idx)
+        self.combo_template.blockSignals(False)
+
+    def _rebuild_font_menu(self) -> None:
+        self.font_menu.clear()
+        categorized = get_categorized_fonts()
+        for cat_name, fonts in categorized.items():
+            if not fonts:
+                continue
+            sub_menu = self.font_menu.addMenu(cat_name)
+            for f in fonts:
+                act = sub_menu.addAction(f)
+                act.triggered.connect(
+                    lambda checked=False, fname=f: self.set_font_name(fname)
+                )
+
+    def set_font_name(self, font_name: str) -> None:
+        self.current_style.font_name = font_name
+        if hasattr(self, "btn_font"):
+            self.btn_font.setText(f"Font: {font_name} ▾")
+        if hasattr(self, "combo_font"):
+            for i in range(self.combo_font.count()):
+                item_txt = self.combo_font.itemText(i)
+                if (
+                    font_name.lower() in item_txt.lower()
+                    or item_txt.lower() in font_name.lower()
+                ):
+                    self.combo_font.setCurrentIndex(i)
+                    break
+        self.style_changed.emit(self.current_style)
+
     def _on_template_changed(self, _idx: int) -> None:
         tpl_id = self.combo_template.currentData()
         if not tpl_id or tpl_id == "custom":
@@ -307,11 +444,44 @@ class CaptionPanelWidget(QWidget):
         if tpl_id in STYLE_PRESETS:
             preset = STYLE_PRESETS[tpl_id]
             self.set_style(preset)
+        else:
+            custom_preset = self.preset_manager.get_preset(tpl_id)
+            if custom_preset:
+                self.set_style(custom_preset)
+
+    def _on_save_preset_clicked(self) -> None:
+        name, ok = QInputDialog.getText(
+            self,
+            "Save Style Preset",
+            "Enter a preset name for this show (e.g. show title):",
+            text="My Show Style",
+        )
+        if ok and name and name.strip():
+            preset_name = name.strip()
+            self.preset_manager.save_preset(preset_name, self.current_style)
+            self.preset_manager.save_default_style(self.current_style)
+            self._rebuild_template_combo()
+            idx = self.combo_template.findData(preset_name)
+            if idx >= 0:
+                self.combo_template.setCurrentIndex(idx)
+
+    def _on_delete_preset_clicked(self) -> None:
+        tpl_id = self.combo_template.currentData()
+        if (
+            tpl_id
+            and tpl_id not in STYLE_PRESETS
+            and tpl_id != "custom"
+            and not tpl_id.startswith("__")
+        ):
+            self.preset_manager.delete_preset(tpl_id)
+            self._rebuild_template_combo()
 
     def _on_style_field_changed(self) -> None:
         font_val = self.combo_font.currentData() or self.combo_font.currentText()
         if font_val:
             self.current_style.font_name = font_val
+            if hasattr(self, "btn_font"):
+                self.btn_font.setText(f"Font: {font_val} ▾")
         self.style_changed.emit(self.current_style)
 
     def _on_font_size_changed(self, val: int) -> None:
@@ -354,7 +524,10 @@ class CaptionPanelWidget(QWidget):
         else:
             self.combo_template.setCurrentIndex(self.combo_template.findData("custom"))
 
-        # Find matching font
+        if hasattr(self, "btn_font"):
+            self.btn_font.setText(f"Font: {style.font_name} ▾")
+
+        # Find matching font in combo_font
         for i in range(self.combo_font.count()):
             family = self.combo_font.itemText(i)
             if (
@@ -371,6 +544,30 @@ class CaptionPanelWidget(QWidget):
 
         self._block_signals = False
         self.style_changed.emit(self.current_style)
+
+    def _on_combine_syllables_clicked(self) -> None:
+        self.commit_active_editor()
+        self.segments = combine_separated_syllables(self.segments)
+        self.set_segments(self.segments)
+        self.segments_updated.emit(self.segments)
+
+    def _on_shift_prev_clicked(self) -> None:
+        row = self.cue_table.currentRow()
+        if row > 0:
+            self.commit_active_editor()
+            shift_word_to_prev(self.segments, row)
+            self.set_segments(self.segments)
+            self.cue_table.selectRow(row)
+            self.segments_updated.emit(self.segments)
+
+    def _on_shift_next_clicked(self) -> None:
+        row = self.cue_table.currentRow()
+        if 0 <= row < len(self.segments) - 1:
+            self.commit_active_editor()
+            shift_word_to_next(self.segments, row)
+            self.set_segments(self.segments)
+            self.cue_table.selectRow(row)
+            self.segments_updated.emit(self.segments)
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self._block_signals = True
