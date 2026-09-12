@@ -31,6 +31,7 @@ rust/bin/lib/libinternal/*.1.8.2.dylib
 *.1.8.2.dylib
 electron/out/
 electron/dist/
+dist/
 node_modules/
 electron/package-lock.json
 *.tsbuildinfo
