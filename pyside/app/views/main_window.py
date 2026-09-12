@@ -516,8 +516,19 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
 
+        export_fmt = (
+            "9:16"
+            if (
+                self.project.video
+                and self.project.video.height > self.project.video.width
+            )
+            else "16:9"
+        )
+
         params = {
             "inputVideo": str(Path(source_file).resolve()),
+            "exportFormats": [export_fmt],
+            "karaoke": self.project.style.karaoke,
             "splitByWords": True,
             "model": "tiny",
             "language": None,

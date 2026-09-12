@@ -133,17 +133,24 @@ pub struct ExtractAudioResult {
     pub audio: String, // Path to the extracted audio file
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateCaptionsParams {
     pub input_video: String,         // Path to input video file
+    #[serde(default)]
     pub export_formats: Vec<String>, // List of aspect ratios to export (e.g., ["9:16", "16:9"])
+    #[serde(default)]
     pub karaoke: bool,               // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
     pub font_name: Option<String>,   // Font name for captions (defaults to "Montserrat Black")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size (at 1080p reference)
+    #[serde(default = "default_true")]
     pub split_by_words: bool,        // Whether to split transcription by words or segments
     pub model: Option<String>,       // Whisper model to use (default: "whisper-1")
     pub language: Option<String>,    // Language hint for better accuracy
@@ -445,4 +452,20 @@ pub struct AutoPlaceResult {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewFrameResult {
     pub image_data: String, // Base64 encoded image data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_captions_params_deserialization_defaults() {
+        let json = r#"{"inputVideo": "test.mp4"}"#;
+        let params: GenerateCaptionsParams =
+            serde_json::from_str(json).expect("should deserialize with defaults");
+        assert_eq!(params.input_video, "test.mp4");
+        assert!(params.export_formats.is_empty());
+        assert!(!params.karaoke);
+        assert!(params.split_by_words);
+    }
 }

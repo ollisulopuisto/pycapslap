@@ -185,3 +185,39 @@ def test_main_window_progress_bar_and_empty_segments_on_load(qtbot, tmp_path):
     assert window.project.segments == []
     assert window.caption_panel.segments == []
     window.close()
+
+
+def test_main_window_transcribe_params(qtbot, tmp_path):
+    temp_video = tmp_path / "video.mp4"
+    temp_video.write_bytes(b"dummy")
+
+    called_method = None
+    called_params = None
+
+    from PySide6.QtCore import QObject, Signal
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+
+        def call(self, method, params):
+            nonlocal called_method, called_params
+            called_method = method
+            called_params = params
+            from concurrent.futures import Future
+
+            f = Future()
+            f.set_result({"transcription": {"segments": []}})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    window.load_video(str(temp_video))
+
+    window._on_transcribe_requested()
+    assert called_method == "transcribe"
+    assert "exportFormats" in called_params
+    assert isinstance(called_params["exportFormats"], list)
+    window.close()
