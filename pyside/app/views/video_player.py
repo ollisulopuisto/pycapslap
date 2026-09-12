@@ -82,6 +82,31 @@ class VideoPlayerWidget(QWidget):
         self.duration_lbl = QLabel("00:00")
         controls_layout.addWidget(self.duration_lbl)
 
+        # Playback speed button (e.g. 1.0x, 1.25x, 1.5x, 2.0x)
+        self.playback_rate: float = 1.0
+        self.speed_btn = QPushButton("1.0x")
+        self.speed_btn.setFixedWidth(52)
+        self.speed_btn.setToolTip(
+            "Playback speed: click to cycle (1.0x, 1.25x, 1.5x, 2.0x)"
+        )
+        self.speed_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27272a;
+                color: #e4e4e7;
+                border: 1px solid #3f3f46;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 2px 4px;
+            }
+            QPushButton:hover {
+                background-color: #3f3f46;
+                color: #ffffff;
+            }
+        """)
+        self.speed_btn.clicked.connect(self._cycle_playback_speed)
+        controls_layout.addWidget(self.speed_btn)
+
         # Seek latency indicator
         self.latency_lbl = QLabel("Seek: -- ms")
         self.latency_lbl.setStyleSheet("color: #888888; font-size: 11px;")
@@ -89,7 +114,7 @@ class VideoPlayerWidget(QWidget):
 
         layout.addLayout(controls_layout)
 
-        # Keyboard shortcuts: Space = Play/Pause, Left/Right = Seek 1 sec
+        # Keyboard shortcuts: Space = Play/Pause, Left/Right = Seek 1 sec, ]/[ = Speed
         QShortcut(
             QKeySequence(Qt.Key.Key_Space), self, activated=self.toggle_play_pause
         )
@@ -103,6 +128,48 @@ class VideoPlayerWidget(QWidget):
             self,
             activated=lambda: self.seek_relative(1000),
         )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_BracketRight),
+            self,
+            activated=self._increase_playback_speed,
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_BracketLeft),
+            self,
+            activated=self._decrease_playback_speed,
+        )
+
+    def set_playback_rate(self, rate: float) -> None:
+        """Set the media player playback rate (e.g. 1.0, 1.25, 1.5, 2.0)."""
+        self.playback_rate = float(rate)
+        self.media_player.setPlaybackRate(self.playback_rate)
+        self.speed_btn.setText(f"{self.playback_rate}x")
+
+    def _cycle_playback_speed(self) -> None:
+        """Cycle through common playback speeds: 1.0x -> 1.25x -> 1.5x -> 2.0x -> 1.0x."""
+        cycle_rates = [1.0, 1.25, 1.5, 2.0]
+        try:
+            cur_idx = cycle_rates.index(self.playback_rate)
+            next_idx = (cur_idx + 1) % len(cycle_rates)
+            self.set_playback_rate(cycle_rates[next_idx])
+        except ValueError:
+            self.set_playback_rate(1.0)
+
+    def _increase_playback_speed(self) -> None:
+        """Increase playback speed to next preset step."""
+        presets = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+        for p in presets:
+            if p > self.playback_rate + 0.01:
+                self.set_playback_rate(p)
+                return
+
+    def _decrease_playback_speed(self) -> None:
+        """Decrease playback speed to previous preset step."""
+        presets = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+        for p in reversed(presets):
+            if p < self.playback_rate - 0.01:
+                self.set_playback_rate(p)
+                return
 
     def load_video(self, file_path: str) -> None:
         url = QUrl.fromLocalFile(file_path)

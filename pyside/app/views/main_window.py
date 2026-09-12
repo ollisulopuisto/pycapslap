@@ -27,7 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from app.core_client import CoreClient
-from app.models.captions import CaptionSegment, CaptionStyle, ProjectState
+from app.models.captions import (
+    CaptionSegment,
+    CaptionStyle,
+    ProjectState,
+    apply_orphan_rules,
+    combine_separated_syllables,
+)
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.timeline import VisualTimelineWidget
 from app.views.video_player import VideoPlayerWidget
@@ -263,6 +269,7 @@ class MainWindow(QMainWindow):
 
     def _on_save_requested(self) -> None:
         self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
         if not self.project.video_path:
             return
         sidecar_path = self.project.get_default_sidecar_path()
@@ -279,6 +286,10 @@ class MainWindow(QMainWindow):
 
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        # Keep sidecar file on disk synchronized so output and sidecar never diverge
+        if self.project.get_default_sidecar_path():
+            self.project.save_sidecar()
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
             QMessageBox.information(self, "Render Video", "Please load a video first.")
@@ -445,6 +456,8 @@ class MainWindow(QMainWindow):
                 transcription = res.get("transcription", {})
                 segments_raw = transcription.get("segments", [])
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
+                new_segs = combine_separated_syllables(new_segs)
+                new_segs = apply_orphan_rules(new_segs)
                 QTimer.singleShot(0, lambda: self.set_caption_segments(new_segs))
                 QTimer.singleShot(
                     0,

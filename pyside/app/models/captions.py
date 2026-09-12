@@ -48,6 +48,27 @@ class CaptionSegment:
             return
 
         if not self.words:
+            # Populate words from scratch across segment duration
+            duration = max(1, self.end_ms - self.start_ms)
+            step = duration // len(tokens)
+            new_words = []
+            for i, tok in enumerate(tokens):
+                w_start = self.start_ms + i * step
+                w_end = (
+                    self.start_ms + (i + 1) * step
+                    if i < len(tokens) - 1
+                    else self.end_ms
+                )
+                lead_space = " " if i > 0 else ""
+                new_words.append(
+                    WordSpan(
+                        start_ms=w_start,
+                        end_ms=w_end,
+                        text=lead_space + tok.strip(),
+                        glue_to_previous=False,
+                    )
+                )
+            self.words = new_words
             return
 
         if len(tokens) == len(self.words):
@@ -247,6 +268,7 @@ def shift_word_to_next(segments: list[CaptionSegment], index: int) -> None:
         return
 
     word = cur_seg.words.pop()
+    word.text = word.text.strip()
     next_seg.words.insert(0, word)
     next_seg.start_ms = word.start_ms
     next_seg.text = " ".join(w.text.strip() for w in next_seg.words)
@@ -257,6 +279,74 @@ def shift_word_to_next(segments: list[CaptionSegment], index: int) -> None:
     else:
         cur_seg.end_ms = cur_seg.start_ms
         cur_seg.text = ""
+
+
+FINNISH_ORPHAN_WORDS: set[str] = {
+    "ja",
+    "tai",
+    "vai",
+    "sekä",
+    "eli",
+    "mutta",
+    "vaan",
+    "jotta",
+    "koska",
+    "kun",
+    "jos",
+    "vaikka",
+    "kuin",
+    "niin",
+    "että",
+}
+
+
+def apply_orphan_rules(segments: list[CaptionSegment]) -> list[CaptionSegment]:
+    """
+    Apply orphan prevention rules across caption segments:
+    1. Words like 'tai', 'ja' shouldn't be the last word in a caption, but should start a new caption.
+    2. After a comma, do not leave just one single word at the end of a caption cue; break that single word off onto the next caption.
+    """
+    if len(segments) <= 1:
+        return segments
+
+    # Ensure all segments have words populated
+    for s in segments:
+        if not s.words and s.text.strip():
+            s.update_text(s.text)
+
+    changed = True
+    passes = 0
+    max_passes = 10
+
+    while changed and passes < max_passes:
+        changed = False
+        passes += 1
+
+        for i in range(len(segments) - 1):
+            cur_seg = segments[i]
+
+            if len(cur_seg.words) <= 1:
+                continue
+
+            last_word_text = cur_seg.words[-1].text.strip()
+            clean_last = last_word_text.strip(".,!?:;-\"'\u201d\u201c\u2019").lower()
+
+            # Rule 1: Trailing conjunction / orphan word
+            is_orphan = clean_last in FINNISH_ORPHAN_WORDS
+
+            # Rule 2: Post-comma single word
+            # If the second-to-last word ends with a comma/semicolon, leaving a single trailing word
+            has_trailing_single_after_comma = False
+            if len(cur_seg.words) >= 2:
+                sec_last_text = cur_seg.words[-2].text.strip()
+                if sec_last_text.endswith(",") or sec_last_text.endswith(";"):
+                    has_trailing_single_after_comma = True
+
+            if is_orphan or has_trailing_single_after_comma:
+                shift_word_to_next(segments, i)
+                changed = True
+
+    return segments
 
 
 @dataclass

@@ -1,6 +1,7 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QAbstractItemView,
     QCheckBox,
     QColorDialog,
@@ -23,6 +24,7 @@ from app.models.captions import (
     STYLE_PRESETS,
     CaptionSegment,
     CaptionStyle,
+    apply_orphan_rules,
     combine_separated_syllables,
     shift_word_to_next,
     shift_word_to_prev,
@@ -108,6 +110,13 @@ class CaptionPanelWidget(QWidget):
         )
         self.btn_combine_syllables.clicked.connect(self._on_combine_syllables_clicked)
         header_layout.addWidget(self.btn_combine_syllables)
+
+        self.btn_fix_orphans = QPushButton("Fix Orphans")
+        self.btn_fix_orphans.setToolTip(
+            "Prevent trailing conjunctions ('tai', 'ja') and lone words after commas"
+        )
+        self.btn_fix_orphans.clicked.connect(self._on_fix_orphans_clicked)
+        header_layout.addWidget(self.btn_fix_orphans)
 
         self.btn_save = QPushButton("Save")
         self.btn_save.setToolTip("Save captions to sidecar file (.capslap.json)")
@@ -548,6 +557,13 @@ class CaptionPanelWidget(QWidget):
     def _on_combine_syllables_clicked(self) -> None:
         self.commit_active_editor()
         self.segments = combine_separated_syllables(self.segments)
+        self.segments = apply_orphan_rules(self.segments)
+        self.set_segments(self.segments)
+        self.segments_updated.emit(self.segments)
+
+    def _on_fix_orphans_clicked(self) -> None:
+        self.commit_active_editor()
+        self.segments = apply_orphan_rules(self.segments)
         self.set_segments(self.segments)
         self.segments_updated.emit(self.segments)
 
@@ -641,7 +657,20 @@ class CaptionPanelWidget(QWidget):
                 self.segment_selected.emit(seg)
 
     def commit_active_editor(self) -> None:
+        # Force any active delegate editor to submit its data and close
+        for child in self.cue_table.viewport().children():
+            if isinstance(child, QWidget):
+                self.cue_table.commitData(child)
+                self.cue_table.closeEditor(
+                    child, QAbstractItemDelegate.EndEditHint.SubmitModelCache
+                )
         self.cue_table.setCurrentItem(None)
+        # Ensure any edited text in table items is completely synchronized to the segment objects
+        for row in range(min(self.cue_table.rowCount(), len(self.segments))):
+            item = self.cue_table.item(row, 2)
+            if item and item.text() != self.segments[row].text:
+                self.segments[row].update_text(item.text())
+                self.segment_updated.emit(self.segments[row])
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._block_signals:

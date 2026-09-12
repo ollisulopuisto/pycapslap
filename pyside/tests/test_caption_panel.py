@@ -130,6 +130,56 @@ def test_caption_panel_edit_cell_syncs_segment(qtbot):
     assert panel.cue_table.currentItem() is None
 
 
+def test_caption_panel_commit_active_editor_with_open_lineedit(qtbot):
+    from PySide6.QtWidgets import QLineEdit
+
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    panel.show()
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="Original text",
+        words=[
+            WordSpan(start_ms=0, end_ms=1000, text="Original"),
+            WordSpan(start_ms=1000, end_ms=2000, text=" text"),
+        ],
+    )
+    panel.set_segments([seg])
+
+    item = panel.cue_table.item(0, 2)
+    panel.cue_table.editItem(item)
+
+    editor = None
+    for child in panel.cue_table.viewport().children():
+        if isinstance(child, QLineEdit):
+            editor = child
+            break
+
+    assert editor is not None
+    editor.setText("Editor edited text")
+
+    panel.commit_active_editor()
+    assert seg.text == "Editor edited text"
+    assert panel.cue_table.item(0, 2).text() == "Editor edited text"
+
+
+def test_caption_panel_fix_orphans_button(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(start_ms=0, end_ms=2000, text="Tämä on lause ja")
+    seg2 = CaptionSegment(start_ms=2000, end_ms=4000, text="toinen tässä")
+    panel.set_segments([seg1, seg2])
+
+    assert hasattr(panel, "btn_fix_orphans")
+    panel.btn_fix_orphans.click()
+
+    assert panel.segments[0].text == "Tämä on lause"
+    assert panel.segments[1].text == "ja toinen tässä"
+
+
 def test_caption_panel_hierarchical_font_menu(qtbot):
     panel = CaptionPanelWidget()
     qtbot.addWidget(panel)

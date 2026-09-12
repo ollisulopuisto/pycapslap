@@ -6,6 +6,7 @@ from app.models.captions import (
     PositionOverride,
     ProjectState,
     WordSpan,
+    apply_orphan_rules,
     combine_separated_syllables,
     shift_word_to_next,
     shift_word_to_prev,
@@ -246,3 +247,95 @@ def test_shift_word_to_prev_and_next():
     assert len(segments[1].words) == 2
     assert segments[1].text == "world again"
     assert segments[1].start_ms == 1100
+
+
+def test_caption_segment_update_text_when_words_empty():
+    seg = CaptionSegment(start_ms=1000, end_ms=3000, text="Initial", words=[])
+    seg.update_text("Three new words")
+    assert seg.text == "Three new words"
+    assert len(seg.words) == 3
+    assert seg.words[0].text == "Three"
+    assert seg.words[0].start_ms == 1000
+    assert seg.words[-1].end_ms == 3000
+
+
+def test_apply_orphan_rules_trailing_conjunction():
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="Tämä on ensimmäinen lause ja",
+        words=[
+            WordSpan(start_ms=0, end_ms=500, text="Tämä"),
+            WordSpan(start_ms=500, end_ms=800, text=" on"),
+            WordSpan(start_ms=800, end_ms=1500, text=" ensimmäinen"),
+            WordSpan(start_ms=1500, end_ms=1800, text=" lause"),
+            WordSpan(start_ms=1800, end_ms=2000, text=" ja"),
+        ],
+    )
+    seg2 = CaptionSegment(
+        start_ms=2100,
+        end_ms=4000,
+        text="toinen lause tässä",
+        words=[
+            WordSpan(start_ms=2100, end_ms=2700, text="toinen"),
+            WordSpan(start_ms=2700, end_ms=3300, text=" lause"),
+            WordSpan(start_ms=3300, end_ms=4000, text=" tässä"),
+        ],
+    )
+    results = apply_orphan_rules([seg1, seg2])
+    assert len(results) == 2
+    assert results[0].text == "Tämä on ensimmäinen lause"
+    assert results[0].end_ms == 1800
+    assert len(results[0].words) == 4
+    assert results[1].text == "ja toinen lause tässä"
+    assert results[1].start_ms == 1800
+    assert len(results[1].words) == 4
+    assert results[1].words[0].text == "ja"
+
+
+def test_apply_orphan_rules_post_comma_single_word():
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=2500,
+        text="Tämä on tärkeää, totta",
+        words=[
+            WordSpan(start_ms=0, end_ms=500, text="Tämä"),
+            WordSpan(start_ms=500, end_ms=900, text=" on"),
+            WordSpan(start_ms=900, end_ms=1800, text=" tärkeää,"),
+            WordSpan(start_ms=1800, end_ms=2500, text=" totta"),
+        ],
+    )
+    seg2 = CaptionSegment(
+        start_ms=2600,
+        end_ms=5000,
+        text="kai me se tiedämme",
+        words=[
+            WordSpan(start_ms=2600, end_ms=3200, text="kai"),
+            WordSpan(start_ms=3200, end_ms=4000, text=" me"),
+            WordSpan(start_ms=4000, end_ms=4500, text=" se"),
+            WordSpan(start_ms=4500, end_ms=5000, text=" tiedämme"),
+        ],
+    )
+    results = apply_orphan_rules([seg1, seg2])
+    assert len(results) == 2
+    assert results[0].text == "Tämä on tärkeää,"
+    assert results[0].end_ms == 1800
+    assert len(results[0].words) == 3
+    assert results[1].text == "totta kai me se tiedämme"
+    assert results[1].start_ms == 1800
+    assert results[1].words[0].text == "totta"
+
+
+def test_apply_orphan_rules_last_segment_not_broken():
+    seg = CaptionSegment(start_ms=0, end_ms=1000, text="Viimeinen ja")
+    results = apply_orphan_rules([seg])
+    assert len(results) == 1
+    assert results[0].text == "Viimeinen ja"
+
+
+def test_apply_orphan_rules_one_word_segment_not_emptied():
+    seg1 = CaptionSegment(start_ms=0, end_ms=500, text="ja")
+    seg2 = CaptionSegment(start_ms=600, end_ms=1200, text="sitten")
+    results = apply_orphan_rules([seg1, seg2])
+    assert results[0].text == "ja"
+    assert results[1].text == "sitten"
