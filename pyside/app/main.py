@@ -6,6 +6,7 @@ pyside_dir = Path(__file__).resolve().parent.parent
 if str(pyside_dir) not in sys.path:
     sys.path.insert(0, str(pyside_dir))
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.views.main_window import MainWindow
@@ -15,6 +16,10 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("PyCapSlap")
     app.setOrganizationName("PyCapSlap")
+
+    icon_path = Path(__file__).resolve().parent / "resources" / "icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()
