@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.09.13.1] - 2026-09-13
+
+### Changed
+- Native rewrite: PyCapSlap is now a PySide6 (Qt) desktop app backed by the same Rust processing core, replacing the Electron/React frontend — see README for the performance comparison (memory, startup, scrub latency).
+
 ### Added
 - Transcription settings dialog (⚙, next to Transcribe): choose local whisper.cpp vs. the OpenAI API, pick a local model size, and check/download it, all from the GUI. Local is preferred by default; OpenAI only used when explicitly selected with a key.
 - "Apply to All" position button: sets one vertical position for every caption at once, replacing all per-caption overrides — also sidesteps a bug where re-chunked segments (e.g. after re-transcribing) could keep a stale position.
@@ -15,6 +20,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 - Safe zones (TikTok/Reels/Shorts) and Karaoke are now on by default for new projects.
 - Render export filenames no longer collide: re-rendering the same video/format produces `name (2).mp4`, `name (3).mp4`, etc. instead of silently overwriting the previous export.
 - Font picker menu now actually previews each entry in its own typeface instead of plain text that looked nothing like what got applied.
+- A real downloadable build: `PyCapSlap.app` (macOS Apple Silicon) is now produced and attached to GitHub Releases, bundling the Rust core, ffmpeg/ffprobe, whisper.cpp and fonts into a standalone app — no repo checkout, `uv`, or Rust toolchain required to run it.
 
 ### Fixed
 - Local whisper.cpp transcription was completely broken: the bundled `whisper-cli` binary and its dylibs had absolute rpaths baked in from the machine they were built on, and separately were compiled to require CoreML encoder files that were never generated (and had no non-CoreML fallback) — both silently fell through to the OpenAI API, surfacing only as "OpenAI API key not provided" with no other clue. Rebuilt without CoreML, rpaths fixed to be relocatable, and the previously-`.gitignore`d runtime dylibs are now committed so a fresh clone works too.
@@ -25,6 +31,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 - The on-video caption preview used a font-name lookup that kept only the first word (e.g. "Montserrat Black" → "Montserrat", "THE BOLD FONT" → "THE"), so nearly every multi-word bundled font previewed as something else entirely — while the actual burned render always used the full, correct name.
 - The style panel's outline-width setting was saved and displayed but never actually sent to the renderer, which always used a hardcoded 4px stroke regardless.
 - Removed the blocking "Export Complete" dialog after rendering — it required a click to dismiss on every single export, which is pure friction when rendering several clips in a row; the status bar's completion message (with the output path) is enough.
+- The CI/CD pipeline (`ci.yml`, `release.yml`) only ever built and released the old Electron app, never updated after the rewrite to this native PySide6 + Rust app — a tagged release would have shipped the wrong thing entirely. Rewritten to lint/test the actual current code and package a real standalone macOS build.
 
 ### Added
 - Automatic caption placement: one pass over the video scores every row for edge energy, texture and brightness, and each caption is assigned a height by a Viterbi pass that charges a penalty for moving relative to the previous caption — so captions avoid faces and burned-in text without jittering. Results land in the same manual overrides, so any of them can still be dragged.
