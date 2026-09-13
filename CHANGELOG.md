@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.09.13.2] - 2026-09-13
+
+### Fixed
+- The v26.09.13.1 release build's bundled ffmpeg/ffprobe were x86_64-only (from evermeet.cx), silently non-functional on an Apple Silicon Mac without Rosetta 2 installed — PyInstaller copies files without executing them, so packaging "succeeded" while shipping a broken binary. Switched to Homebrew's arch-native `ffmpeg-full`.
+
 ## [v26.09.13.1] - 2026-09-13
 
 ### Changed
