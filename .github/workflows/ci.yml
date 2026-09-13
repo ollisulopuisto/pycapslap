@@ -26,6 +26,11 @@ jobs:
         working-directory: rust
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Download bundled ffmpeg/ffprobe/whisper-cli
+        run: bash scripts/download-binaries.sh
+        env:
+          TARGET_OS: macOS
+
       - name: Rust test
         working-directory: rust
         run: cargo test --release
@@ -46,6 +51,11 @@ jobs:
       - name: Build Rust core (needed by pyside tests that spawn it)
         working-directory: rust
         run: cargo build --release
+
+      - name: Download bundled ffmpeg/ffprobe/whisper-cli
+        run: bash scripts/download-binaries.sh
+        env:
+          TARGET_OS: macOS
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
