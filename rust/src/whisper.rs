@@ -156,7 +156,12 @@ pub async fn transcribe_with_whisper_cpp(
         .arg(threads.to_string())
         .arg("--output-json-full") // Full JSON output
         // NOTE: no --no-prints — we rely on whisper.cpp's stderr "progress = N%"
-        // lines to report transcription progress back to the UI.
+        // lines to report transcription progress back to the UI. That line is
+        // only printed when --print-progress is passed (print_progress
+        // defaults to false in whisper.cpp's CLI), so it must be requested
+        // explicitly or the progress bar never moves despite transcription
+        // actually running.
+        .arg("--print-progress")
         .arg("--word-thold")
         .arg("0.01") // Better word boundary detection
         .arg("--max-len")

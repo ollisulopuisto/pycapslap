@@ -8,6 +8,25 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- Transcription settings dialog (⚙, next to Transcribe): choose local whisper.cpp vs. the OpenAI API, pick a local model size, and check/download it, all from the GUI. Local is preferred by default; OpenAI only used when explicitly selected with a key.
+- "Apply to All" position button: sets one vertical position for every caption at once, replacing all per-caption overrides — also sidesteps a bug where re-chunked segments (e.g. after re-transcribing) could keep a stale position.
+- Optional "BG Box" style toggle: a semi-transparent box behind caption text in the actual render (previously only ever shown in the editor preview, never burned in). Off by default; ASS can only draw square corners, not the preview's rounded pill.
+- "2-Line" karaoke toggle (on by default): wraps karaoke captions onto two lines instead of forcing one, since single-line karaoke at a large font on portrait video could shrink to ~2 words per on-screen block.
+- Safe zones (TikTok/Reels/Shorts) and Karaoke are now on by default for new projects.
+- Render export filenames no longer collide: re-rendering the same video/format produces `name (2).mp4`, `name (3).mp4`, etc. instead of silently overwriting the previous export.
+- Font picker menu now actually previews each entry in its own typeface instead of plain text that looked nothing like what got applied.
+
+### Fixed
+- Local whisper.cpp transcription was completely broken: the bundled `whisper-cli` binary and its dylibs had absolute rpaths baked in from the machine they were built on, and separately were compiled to require CoreML encoder files that were never generated (and had no non-CoreML fallback) — both silently fell through to the OpenAI API, surfacing only as "OpenAI API key not provided" with no other clue. Rebuilt without CoreML, rpaths fixed to be relocatable, and the previously-`.gitignore`d runtime dylibs are now committed so a fresh clone works too.
+- Transcription progress bar never moved during local whisper.cpp transcription: the Rust core parsed whisper.cpp's stderr for "progress = N%" lines that are only printed when `--print-progress` is passed, which it never was.
+- Transcription always split into one caption per word regardless of the karaoke setting, because `splitByWords` was hardcoded `true`; now tied to the karaoke toggle, giving whisper's natural phrase/sentence segments the rest of the time.
+- Auto Dodge could place captions in the top half of the frame — often directly over a face — because its scoring only weighed "how calm do the pixels look," with no floor. Placement is now floored at the vertical midline by default.
+- Render/Transcribe/Auto Dodge's portrait-vs-landscape default guess was silently always wrong (always landscape): the video's real width/height were never actually read into the project state (an empty probe dict was always passed to `load_video`). Now reads the real decoded frame or extracted thumbnail instead.
+- The on-video caption preview used a font-name lookup that kept only the first word (e.g. "Montserrat Black" → "Montserrat", "THE BOLD FONT" → "THE"), so nearly every multi-word bundled font previewed as something else entirely — while the actual burned render always used the full, correct name.
+- The style panel's outline-width setting was saved and displayed but never actually sent to the renderer, which always used a hardcoded 4px stroke regardless.
+- Removed the blocking "Export Complete" dialog after rendering — it required a click to dismiss on every single export, which is pure friction when rendering several clips in a row; the status bar's completion message (with the output path) is enough.
+
+### Added
 - Automatic caption placement: one pass over the video scores every row for edge energy, texture and brightness, and each caption is assigned a height by a Viterbi pass that charges a penalty for moving relative to the previous caption — so captions avoid faces and burned-in text without jittering. Results land in the same manual overrides, so any of them can still be dragged.
 - The caption position settings now dodge the selected platforms' interface. Whichever overlays are switched on, every position — bottom, bottom quarter, centre, top — is nudged vertically until the text clears them, taking the height of the block into account so a four-line storyteller caption is judged differently from a one-liner. A caption placed by hand is left exactly where it was put.
 - Platform interface overlays in the position editor: toggle TikTok, Instagram Reels and YouTube Shorts to see, in their own colour, which parts of the frame each app covers with its own buttons and captions. Approximate by nature, and labelled as such. Whichever overlays are switched on are also treated as off limits by automatic placement, so it stops choosing a spot that looks best on the frame but that the app covers up.

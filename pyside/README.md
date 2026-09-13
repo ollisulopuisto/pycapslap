@@ -1,6 +1,6 @@
 # PyCapSlap ⚡
 
-**PyCapSlap** is the native, high-performance Python + Qt (PySide6) desktop application for **CapSlap**. It delivers sub-millisecond video scrub latency, a -74% RAM reduction compared to Electron, interactive on-video caption dragging, visual timeline editing, and 100% offline Whisper transcription powered by the Rust core processing engine.
+**PyCapSlap** is the native, high-performance Python + Qt (PySide6) desktop application for **CapSlap**. It delivers sub-millisecond video scrub latency, a -74% RAM reduction compared to Electron, interactive on-video caption dragging, visual timeline editing, and Whisper transcription (offline by default, OpenAI API optional) powered by the Rust core processing engine.
 
 ---
 
@@ -33,8 +33,12 @@ uv run pycapslap ../rust/bin/test_input.mp4
 * **🎞️ Interactive Visual Timeline:** Proportional cue blocks, scrubber needle, and instant timeline scrubbing.
 * **📋 Caption Inspector & Table:** In-place cue text editing, quick position presets (`Top 15%`, `Middle 50%`, `Bottom 80%`), and precision slider.
 * **🤖 Auto-Dodge Captions:** Calls the Rust core to scan video activity across 10 vertical bands and intelligently dodge faces and platform UI overlays (TikTok, Reels, Shorts).
-* **🔒 100% Offline AI Transcription:** Local whisper.cpp transcription via asynchronous Rust IPC with live progress reporting.
+* **🔒 Local-First AI Transcription:** Local whisper.cpp transcription via asynchronous Rust IPC with live progress reporting. A settings dialog (⚙, next to the Transcribe button) lets you pick the local model size, check/download it, or switch to the OpenAI Whisper API with your own key.
+* **🧩 Syllable & Orphan Fixups:** One-click "Fix Syllables" re-glues words Whisper split across segments, and "Fix Orphans" prevents trailing conjunctions and lone words from being stranded on their own line.
+* **📱 Platform Safe Areas:** Toggleable TikTok / Reels / Shorts UI overlays on the canvas, respected by Auto-Dodge placement.
+* **🎬 Multi-Format Rendering:** Burn captions into 9:16, 1:1, 4:5, or 16:9 exports with one click via the Rust + FFmpeg VideoToolbox pipeline, with live render progress.
 * **💾 Sidecar Persistence:** Automatic loading and saving of `.capslap.json` sidecar files.
+* **📊 Live Perf Telemetry:** Status bar shows GUI/Rust core RSS memory and rolling seek latency in real time.
 
 ---
 

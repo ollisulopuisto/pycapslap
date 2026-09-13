@@ -8,7 +8,7 @@ def test_caption_style_defaults():
     assert style.font_size == 65
     assert style.text_color == "#ffffff"
     assert style.highlight_color == "#ffff00"
-    assert style.karaoke is False
+    assert style.karaoke is True
 
 
 def test_caption_style_presets():

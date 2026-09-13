@@ -6,7 +6,18 @@ rust/models/*.bin
 rust/bin/ffmpeg
 rust/bin/ffprobe
 rust/bin/whisper-cli*
-rust/bin/lib/
+rust/bin/lib/**
+# whisper-cli's @rpath entries need exactly these files at runtime (see
+# `otool -L rust/bin/whisper-cli-macos-arm64`); everything else under
+# rust/bin/lib/ (dirty/coreml/versioned build byproducts) stays ignored.
+!rust/bin/lib/
+!rust/bin/lib/libinternal/
+!rust/bin/lib/libinternal/libwhisper.1.dylib
+!rust/bin/lib/libinternal/libggml.0.dylib
+!rust/bin/lib/libinternal/libggml-cpu.0.dylib
+!rust/bin/lib/libinternal/libggml-blas.0.dylib
+!rust/bin/lib/libinternal/libggml-metal.0.dylib
+!rust/bin/lib/libinternal/libggml-base.0.dylib
 rust/bin-win/
 rust/bin-linux/
 .DS_Store
@@ -16,17 +27,7 @@ rust/target/
 rust/bin/test_input.mp4
 rust/bin/test_input_*.mp4
 rust/bin/*.capslap.json
-rust/bin/lib/libinternal/libggml-base.0.9.4-dirty.dylib
-rust/bin/lib/libinternal/libggml-blas.0.9.4-dirty.dylib
-rust/bin/lib/libinternal/libggml-cpu.0.9.4-dirty.dylib
-rust/bin/lib/libinternal/libggml-metal.0.9.4-dirty.dylib
-rust/bin/lib/libinternal/libggml.0.9.4-dirty.dylib
-rust/bin/lib/libinternal/*.dirty.dylib
-rust/bin/lib/libinternal/*.0.dylib
-rust/bin/lib/libinternal/*.coreml.dylib
-rust/bin/lib/libinternal/*.1.8.2.dylib
 *.dirty.dylib
-*.0.dylib
 *.coreml.dylib
 *.1.8.2.dylib
 electron/out/

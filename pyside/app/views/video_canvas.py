@@ -99,7 +99,7 @@ class VideoCanvasWidget(QWidget):
         self.anchor_y_pct: float = 80.0
         self.is_dragging: bool = False
         self.style: CaptionStyle = CaptionStyle()
-        self.active_safe_platforms: set[str] = set()
+        self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
 
         # Initialize fonts database
         init_app_fonts()
@@ -115,6 +115,23 @@ class VideoCanvasWidget(QWidget):
     def set_fallback_pixmap(self, pixmap: QPixmap | None) -> None:
         self._fallback_pixmap = pixmap
         self.update()
+
+    def get_video_size(self) -> tuple[int, int] | None:
+        """The source video's actual pixel dimensions, if known yet.
+
+        Prefers the live decoded frame; falls back to the extracted
+        thumbnail, which is usually available first and carries the same
+        true dimensions. Returns None before either has arrived.
+        """
+        if self._current_frame and self._current_frame.isValid():
+            sz = self._current_frame.size()
+            if sz.width() > 0 and sz.height() > 0:
+                return (sz.width(), sz.height())
+        if self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            sz = self._fallback_pixmap.size()
+            if sz.width() > 0 and sz.height() > 0:
+                return (sz.width(), sz.height())
+        return None
 
     def set_segment(
         self,
@@ -371,10 +388,13 @@ class VideoCanvasWidget(QWidget):
         if not text:
             return
 
-        # 1. Resolve font family
-        font_family = (
-            self.style.font_name.split()[0] if self.style.font_name else "Montserrat"
-        )
+        # 1. Resolve font family. Bundled fonts are registered under their
+        # full family name (e.g. "Montserrat Black", "THE BOLD FONT"), so
+        # using only the first word here silently resolved to a different,
+        # unrelated font for nearly every multi-word family — this preview
+        # then looked nothing like the actual burned-in render, which always
+        # used the full name.
+        font_family = self.style.font_name or "Montserrat Black"
 
         # 2. Proportional font sizing relative to video width and aspect ratio
         vw = video_rect.width()
@@ -491,7 +511,8 @@ class VideoCanvasWidget(QWidget):
                 )
                 pill_path = QPainterPath()
                 pill_path.addRoundedRect(pill_rect, 6, 6)
-                painter.fillPath(pill_path, QColor(0, 0, 0, 180))
+                if self.style.background_box:
+                    painter.fillPath(pill_path, QColor(0, 0, 0, 180))
 
                 if self.is_dragging:
                     painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))
@@ -525,7 +546,8 @@ class VideoCanvasWidget(QWidget):
                 )
                 pill_path = QPainterPath()
                 pill_path.addRoundedRect(pill_rect, 6, 6)
-                painter.fillPath(pill_path, QColor(0, 0, 0, 180))
+                if self.style.background_box:
+                    painter.fillPath(pill_path, QColor(0, 0, 0, 180))
 
                 if self.is_dragging:
                     painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))

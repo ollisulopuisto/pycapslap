@@ -2,7 +2,7 @@
 
 **PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It automatically transcribes video audio using local AI models (whisper.cpp), generates synchronized word-level subtitles, allows interactive visual placement and styling, and burns captions into exports across all social aspect ratios.
 
-**Works 100% offline — zero cloud lock-in, zero API fees.**
+**Offline by default — zero cloud lock-in, zero API fees.** The OpenAI Whisper API is available as an opt-in alternative (e.g. for machines without a local model downloaded) via the transcription settings dialog (⚙) next to the Transcribe button.
 
 ---
 
@@ -29,7 +29,7 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 
 ## ✨ Key Features
 
-* 🎙️ **100% Offline AI Transcription**: Multi-lingual transcription powered by local `whisper.cpp` with Apple Silicon Metal acceleration.
+* 🎙️ **AI Transcription, Local by Default**: Multi-lingual transcription powered by local `whisper.cpp` with Apple Silicon Metal acceleration. Switch to the OpenAI Whisper API instead from the transcription settings dialog (⚙, next to the Transcribe button) — pick a local model size, check/download it, or enter an OpenAI API key to transcribe in the cloud.
 * 🧩 **Smart Syllable Logic & Word Preservation**:
   * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
   * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.
@@ -72,7 +72,7 @@ uv run pycapslap
 
 ## 🧠 Local Whisper Models
 
-Whisper models run completely offline. Download models directly inside the application, or download manually:
+Whisper models run completely offline. Pick a model size and download it straight from the transcription settings dialog (⚙, next to the Transcribe button — "Check / Download Model"), or download manually:
 
 ```bash
 mkdir -p rust/models

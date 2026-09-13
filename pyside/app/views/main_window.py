@@ -36,6 +36,7 @@ from app.models.captions import (
     combine_separated_syllables,
 )
 from app.views.caption_panel import CaptionPanelWidget
+from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
 from app.views.timeline import VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
@@ -192,12 +193,18 @@ class MainWindow(QMainWindow):
         self.caption_panel.position_override_changed.connect(
             self._on_panel_override_changed
         )
+        self.caption_panel.apply_position_to_all_requested.connect(
+            self._on_apply_position_to_all_requested
+        )
         self.caption_panel.segment_updated.connect(self._on_segment_text_updated)
         self.caption_panel.segments_updated.connect(self._on_segments_updated)
         self.caption_panel.style_changed.connect(self._on_style_changed)
         self.caption_panel.save_requested.connect(self._on_save_requested)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
+        self.caption_panel.whisper_settings_requested.connect(
+            self._on_whisper_settings_requested
+        )
         self.caption_panel.add_cue_requested.connect(self._on_add_cue_requested)
         self.caption_panel.safe_platforms_changed.connect(
             self.player.canvas.set_active_safe_platforms
@@ -268,6 +275,14 @@ class MainWindow(QMainWindow):
         if self.overlay.current_segment == seg:
             self.overlay.set_segment(seg, anchor_pct)
 
+    def _on_apply_position_to_all_requested(self, anchor_pct: float) -> None:
+        self.project.apply_position_to_all(anchor_pct)
+        pos_ms = self.player.media_player.position()
+        self._on_position_changed(pos_ms)
+        self.status.showMessage(
+            f"Applied {anchor_pct:.1f}% vertical position to all captions.", 3000
+        )
+
     def _on_segment_text_updated(self, seg: CaptionSegment) -> None:
         self.project.is_dirty = True
         self.timeline.update()
@@ -314,6 +329,26 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
+    def _is_portrait_video(self) -> bool:
+        """Whether the loaded source is taller than it is wide.
+
+        `project.video.width/height` are never actually populated (`load_video`
+        is always called with an empty probe dict), so this reads real pixel
+        dimensions from the canvas instead — the decoded video frame, or the
+        extracted thumbnail as a fallback while the first frame hasn't
+        arrived yet. Both carry the video's true size regardless of how the
+        canvas widget itself is currently laid out.
+        """
+        size = self.player.canvas.get_video_size()
+        if size:
+            width, height = size
+            return height > width
+        return bool(
+            self.project.video
+            and self.project.video.width > 0
+            and self.project.video.height > self.project.video.width
+        )
+
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -332,13 +367,7 @@ class MainWindow(QMainWindow):
             return
 
         # Choose export aspect ratio format
-        default_fmt = "16:9"
-        if (
-            self.project.video
-            and self.project.video.width > 0
-            and self.project.video.height > self.project.video.width
-        ):
-            default_fmt = "9:16"
+        default_fmt = "9:16" if self._is_portrait_video() else "16:9"
 
         format_options = [
             "16:9 (Landscape / YouTube)",
@@ -375,11 +404,14 @@ class MainWindow(QMainWindow):
             "segments": [s.to_dict() for s in self.project.segments],
             "exportFormats": [export_fmt],
             "karaoke": self.project.style.karaoke,
+            "multiline": self.project.style.multiline,
             "fontName": self.project.style.font_name,
             "fontSize": self.project.style.font_size,
             "textColor": self.project.style.text_color,
             "highlightWordColor": self.project.style.highlight_color,
             "outlineColor": self.project.style.outline_color,
+            "outlineWidth": self.project.style.outline_width,
+            "backgroundBox": self.project.style.background_box,
             "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
         }
 
@@ -400,16 +432,7 @@ class MainWindow(QMainWindow):
                     0,
                     self,
                     lambda: self.status.showMessage(
-                        f"Render complete: {output_path}", 6000
-                    ),
-                )
-                QTimer.singleShot(
-                    0,
-                    self,
-                    lambda: QMessageBox.information(
-                        self,
-                        "Export Complete",
-                        f"Video rendered successfully!\n\nOutput saved to:\n{output_path}",
+                        f"Render complete: {output_path}", 8000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
@@ -445,14 +468,7 @@ class MainWindow(QMainWindow):
                 for reg in plat.regions:
                     blocked_bands.append((reg.top, reg.top + reg.height))
 
-        export_fmt = (
-            "9:16"
-            if (
-                self.project.video
-                and self.project.video.height > self.project.video.width
-            )
-            else "16:9"
-        )
+        export_fmt = "9:16" if self._is_portrait_video() else "16:9"
 
         self.status.showMessage("Running automatic caption placement via Rust core...")
         self.progress_bar.setRange(0, 0)
@@ -463,11 +479,14 @@ class MainWindow(QMainWindow):
             "segments": [s.to_dict() for s in self.project.segments],
             "exportFormat": export_fmt,
             "karaoke": self.project.style.karaoke,
+            "multiline": self.project.style.multiline,
             "fontName": self.project.style.font_name,
             "fontSize": self.project.style.font_size,
             "textColor": self.project.style.text_color,
             "highlightWordColor": self.project.style.highlight_color,
             "outlineColor": self.project.style.outline_color,
+            "outlineWidth": self.project.style.outline_width,
+            "backgroundBox": self.project.style.background_box,
             "blockedBands": blocked_bands,
         }
 
@@ -506,32 +525,36 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
+    def _on_whisper_settings_requested(self) -> None:
+        dlg = WhisperSettingsDialog(self.core, self)
+        dlg.exec()
+
     def _on_transcribe_requested(self) -> None:
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
             QMessageBox.information(self, "Transcribe", "Please load a video first.")
             return
 
-        self.status.showMessage("Transcribing audio via Rust core...")
+        provider_params = get_transcription_params()
+        provider_label = (
+            "OpenAI API" if provider_params["model"] == "whisper-1" else "local Whisper"
+        )
+        self.status.showMessage(f"Transcribing audio via Rust core ({provider_label})...")
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
 
-        export_fmt = (
-            "9:16"
-            if (
-                self.project.video
-                and self.project.video.height > self.project.video.width
-            )
-            else "16:9"
-        )
+        export_fmt = "9:16" if self._is_portrait_video() else "16:9"
 
         params = {
             "inputVideo": str(Path(source_file).resolve()),
             "exportFormats": [export_fmt],
             "karaoke": self.project.style.karaoke,
-            "splitByWords": True,
-            "model": "tiny",
+            # Word-per-cue only for karaoke bounce; otherwise keep whisper's
+            # own phrase/sentence segments (with per-word timing nested in
+            # each segment's `words`, still available for highlighting).
+            "splitByWords": self.project.style.karaoke,
             "language": None,
+            **provider_params,
         }
 
         fut = self.core.call("transcribe", params)

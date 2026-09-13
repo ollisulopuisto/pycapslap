@@ -161,6 +161,10 @@ pub struct GenerateCaptionsParams {
     pub highlight_word_color: Option<String>, // Highlight word color as hex string
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<String>, // Outline color as hex string
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<u32>, // Outline stroke width in px (default: 4)
+    #[serde(default)]
+    pub background_box: bool, // Semi-transparent box behind caption text (default: false, outline only)
     #[serde(default)]
     pub glow_effect: bool, // Whether to apply glow effect
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -208,6 +212,10 @@ pub struct BurnCaptionsParams {
     pub highlight_word_color: Option<String>, // Highlight word color
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<String>, // Outline color
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<u32>, // Outline stroke width in px (default: 4)
+    #[serde(default)]
+    pub background_box: bool, // Semi-transparent box behind caption text (default: false, outline only)
     #[serde(default)]
     pub glow_effect: bool, // Whether to apply glow effect
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -239,7 +247,7 @@ pub struct CaptionedVideoResult {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadModelParams {
-    pub model: String, // Model name: "tiny", "base", "small", "medium", "large"
+    pub model: String, // Model name: "tiny", "base", "small", "medium", "large", "turbo"
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -274,6 +282,10 @@ pub struct PreviewLayoutParams {
     pub text_color: Option<String>,
     pub highlight_word_color: Option<String>,
     pub outline_color: Option<String>,
+    #[serde(default)]
+    pub outline_width: Option<u32>,
+    #[serde(default)]
+    pub background_box: bool,
     pub position: Option<String>,
     pub karaoke: bool,
     #[serde(default)]
@@ -378,6 +390,10 @@ pub struct PreviewFrameParams {
     pub highlight_word_color: Option<String>, // Highlight word color
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<String>, // Outline color
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<u32>, // Outline stroke width in px (default: 4)
+    #[serde(default)]
+    pub background_box: bool, // Semi-transparent box behind caption text (default: false, outline only)
     #[serde(default)]
     pub glow_effect: bool, // Whether to apply glow effect
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -423,6 +439,10 @@ pub struct AutoPlaceParams {
     pub highlight_word_color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outline_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<u32>,
+    #[serde(default)]
+    pub background_box: bool,
     #[serde(default)]
     pub glow_effect: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

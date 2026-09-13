@@ -293,17 +293,24 @@ def test_caption_panel_safe_area_toggles(qtbot):
     assert hasattr(panel, "btn_safe_reels")
     assert hasattr(panel, "btn_safe_shorts")
 
+    # All three are on by default, so captions don't overlap platform UI or
+    # (via the lower-half auto-dodge floor) faces out of the box.
+    assert panel.active_safe_platforms == {"tiktok", "reels", "shorts"}
+    assert panel.btn_safe_tiktok.isChecked()
+    assert panel.btn_safe_reels.isChecked()
+    assert panel.btn_safe_shorts.isChecked()
+
     emitted = []
     panel.safe_platforms_changed.connect(emitted.append)
 
     panel.btn_safe_tiktok.click()
-    assert "tiktok" in panel.active_safe_platforms
-    assert emitted[-1] == {"tiktok"}
+    assert "tiktok" not in panel.active_safe_platforms
+    assert emitted[-1] == {"reels", "shorts"}
 
     panel.btn_safe_reels.click()
-    assert "reels" in panel.active_safe_platforms
-    assert emitted[-1] == {"tiktok", "reels"}
+    assert "reels" not in panel.active_safe_platforms
+    assert emitted[-1] == {"shorts"}
 
     panel.btn_safe_tiktok.click()
-    assert "tiktok" not in panel.active_safe_platforms
-    assert emitted[-1] == {"reels"}
+    assert "tiktok" in panel.active_safe_platforms
+    assert emitted[-1] == {"tiktok", "shorts"}

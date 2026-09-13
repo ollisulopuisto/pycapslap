@@ -380,7 +380,17 @@ class CaptionStyle:
     highlight_color: str = "#ffff00"
     outline_color: str = "#000000"
     outline_width: int = 3
-    karaoke: bool = False
+    karaoke: bool = True
+    # Karaoke cues wrap onto two lines instead of being forced onto one, which
+    # roughly doubles how many words fit per on-screen block at a given font
+    # size — single-line karaoke at a large font in a narrow (portrait) frame
+    # can be squeezed down to ~2 words per block, flashing by too fast to read.
+    multiline: bool = True
+    # Off by default: a semi-transparent box behind the text, matching the
+    # in-app preview's pill. ASS can only draw a square-cornered box (no
+    # rounded corners), so this is a close but not pixel-identical match to
+    # the preview even when turned on.
+    background_box: bool = False
     glow_effect: bool = True
 
     def to_dict(self) -> dict[str, Any]:
@@ -393,6 +403,8 @@ class CaptionStyle:
             "outlineColor": self.outline_color,
             "outlineWidth": self.outline_width,
             "karaoke": self.karaoke,
+            "multiline": self.multiline,
+            "backgroundBox": self.background_box,
             "glowEffect": self.glow_effect,
         }
 
@@ -406,7 +418,9 @@ class CaptionStyle:
             highlight_color=str(d.get("highlightColor", "#ffff00")),
             outline_color=str(d.get("outlineColor", "#000000")),
             outline_width=int(d.get("outlineWidth", 3)),
-            karaoke=bool(d.get("karaoke", False)),
+            karaoke=bool(d.get("karaoke", True)),
+            multiline=bool(d.get("multiline", True)),
+            background_box=bool(d.get("backgroundBox", False)),
             glow_effect=bool(d.get("glowEffect", True)),
         )
 
@@ -553,6 +567,22 @@ class ProjectState:
                 y_pct=round(y_pct, 1),
             )
         )
+        self.is_dirty = True
+
+    def apply_position_to_all(self, y_pct: float) -> None:
+        """Replace every position override with a single one spanning the
+        whole timeline, so every caption sits at `y_pct`.
+
+        Unlike per-segment overrides (matched by a segment's midpoint falling
+        inside a stored [start_ms, end_ms] range), a single all-covering
+        override can't be missed when segments later get re-chunked — e.g.
+        re-transcribing, or toggling karaoke word-splitting — which otherwise
+        leaves some of the new segments outside their old override's range
+        and stuck back at the style's default position.
+        """
+        self.position_overrides = [
+            PositionOverride(start_ms=0, end_ms=10**9, y_pct=round(y_pct, 1))
+        ]
         self.is_dirty = True
 
     def load_sidecar(self, path: str | Path | None = None) -> bool:

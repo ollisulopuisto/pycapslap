@@ -29,6 +29,31 @@ fn cleanup_temp_dir(dir: &std::path::Path) {
     }
 }
 
+/// If `path` already exists, find the next free "name (2).ext", "name
+/// (3).ext", ... instead — so re-rendering the same video and format never
+/// silently clobbers a previous export the way the plain deterministic
+/// `{input}_{format}.mp4` name otherwise would.
+fn unique_output_path(path: &str) -> String {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return path.to_string();
+    }
+
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
+    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("mp4");
+    let parent = p.parent().unwrap_or_else(|| std::path::Path::new(""));
+
+    for n in 2..10_000 {
+        let candidate = parent.join(format!("{stem} ({n}).{ext}"));
+        if !candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    // Astronomically unlikely, but never loop forever over a directory
+    // someone has actually filled with 9999 numbered exports.
+    path.to_string()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn extract_and_transcribe(
     id: &str,
@@ -131,6 +156,8 @@ pub async fn burn_captions_with_segments(
             params.text_color,
             params.highlight_word_color,
             params.outline_color,
+            params.outline_width,
+            params.background_box,
             params.glow_effect,
             params.karaoke,
             params.multiline,
@@ -190,6 +217,8 @@ pub async fn generate_captions_single_pass(
             params.text_color,
             params.highlight_word_color,
             params.outline_color,
+            params.outline_width,
+            params.background_box,
             params.glow_effect,
             params.karaoke,
             params.multiline,
@@ -225,6 +254,8 @@ pub fn generate_preview_layout(
         params.text_color.as_deref(),
         params.highlight_word_color.as_deref(),
         params.outline_color.as_deref(),
+        params.outline_width,
+        params.background_box,
         params.glow_effect,
         params.position.as_deref(),
         params.font_size,
@@ -620,6 +651,8 @@ pub async fn generate_preview_frame(
                 params.text_color.as_deref(),
                 params.highlight_word_color.as_deref(),
                 params.outline_color.as_deref(),
+                params.outline_width,
+                params.background_box,
                 params.glow_effect,
                 params.position.as_deref(),
                 params.font_size,
@@ -953,6 +986,8 @@ async fn optimized_multi_format_encode(
     text_color: Option<String>,
     highlight_word_color: Option<String>,
     outline_color: Option<String>,
+    outline_width: Option<u32>,
+    background_box: bool,
     glow_effect: bool,
     karaoke: bool,
     multiline: bool,
@@ -1012,6 +1047,8 @@ async fn optimized_multi_format_encode(
             text_color.as_deref(),
             highlight_word_color.as_deref(),
             outline_color.as_deref(),
+            outline_width,
+            background_box,
             glow_effect,
             position.as_deref(),
             font_size,
@@ -1079,7 +1116,8 @@ async fn optimized_multi_format_encode(
             let _permit = semaphore.acquire().await.unwrap();
 
             let safe_format = format.replace(':', "x");
-            let captioned_path = format!("{}_{}.mp4", input_path, safe_format);
+            let captioned_path =
+                unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
 
             // Single-pass format conversion + caption burning with hardware acceleration
             optimized_single_format_encode(
@@ -1825,6 +1863,12 @@ struct AssStyle {
     secondary: String, // unused here
     outline: String,
     outline_w: u32,
+    /// ASS BorderStyle: 1 = outline + shadow around glyphs (no fill behind
+    /// the line), 3 = an opaque/semi-transparent box behind the whole line.
+    /// `outline_w` doubles as the per-glyph stroke width in mode 1, or the
+    /// box padding in mode 3 — that's how libass itself overloads the
+    /// `Outline` style field depending on BorderStyle.
+    border_style: u32,
     shadow: u32,
     align: u32,        // 1..9 grid; 2 = bottom-center
     margin_v: u32,     // pixels
@@ -2268,7 +2312,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: TikTok,{font},{size},{pri},{sec},{out},&H64000000,0,0,0,0,100,100,0,0,1,{ow},{sh},{al},60,60,{mv},1
+Style: TikTok,{font},{size},{pri},{sec},{out},&H64000000,0,0,0,0,100,100,0,0,{bs},{ow},{sh},{al},60,60,{mv},1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -2280,6 +2324,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         pri = style.primary,
         sec = style.secondary,
         out = style.outline,
+        bs = style.border_style,
         ow = style.outline_w,
         sh = style.shadow,
         al = style.align,
@@ -2567,6 +2612,8 @@ fn default_ass_style(
     text_color: Option<&str>,
     highlight_color: Option<&str>,
     outline_color: Option<&str>,
+    outline_width: Option<u32>,
+    background_box: bool,
     _glow_effect: bool,
     position: Option<&str>,
     font_size: Option<u32>,
@@ -2595,13 +2642,27 @@ fn default_ass_style(
         _ => (2, pct_h(12.0)),                // Bottom center, 12% from bottom (default)
     };
 
+    let resolved_font_size = calculate_proportional_font_size(frame_w, frame_h, font_size);
+
+    // In box mode there's no per-glyph stroke — the box itself separates
+    // text from background — so `outline_w` here is repurposed as box
+    // padding instead, scaled with font size to stay proportional like the
+    // editor's own preview pill does.
+    let (border_style, outline_w) = if background_box {
+        let padding = ((resolved_font_size as f32) * 0.22).round().max(6.0) as u32;
+        (3, padding)
+    } else {
+        (1, outline_width.unwrap_or(4))
+    };
+
     AssStyle {
         font_name: font_name.unwrap_or("Montserrat Black").into(),
-        font_size: calculate_proportional_font_size(frame_w, frame_h, font_size),
+        font_size: resolved_font_size,
         primary: primary.clone(),
         secondary: primary,
         outline,
-        outline_w: 4,
+        outline_w,
+        border_style,
         shadow: 0,
         align,
         margin_v,

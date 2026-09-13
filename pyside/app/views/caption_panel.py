@@ -1,5 +1,5 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
@@ -45,10 +45,12 @@ class CaptionPanelWidget(QWidget):
     segment_updated = Signal(object)
     segments_updated = Signal(object)
     position_override_changed = Signal(object, float)
+    apply_position_to_all_requested = Signal(float)
     style_changed = Signal(object)
     auto_place_requested = Signal()
     save_requested = Signal()
     transcribe_requested = Signal()
+    whisper_settings_requested = Signal()
     add_cue_requested = Signal()
     safe_platforms_changed = Signal(object)
 
@@ -64,7 +66,7 @@ class CaptionPanelWidget(QWidget):
         self.preset_manager = preset_manager or PresetManager()
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
-        self.active_safe_platforms: set[str] = set()
+        self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
         self.active_anchor_pct: float = 80.0
         self.current_style: CaptionStyle = (
             self.preset_manager.get_default_style() or CaptionStyle()
@@ -98,6 +100,14 @@ class CaptionPanelWidget(QWidget):
         self.btn_transcribe.setToolTip("Run AI Whisper transcription on video audio")
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
         header_layout.addWidget(self.btn_transcribe)
+
+        self.btn_whisper_settings = QPushButton("⚙")
+        self.btn_whisper_settings.setFixedWidth(28)
+        self.btn_whisper_settings.setToolTip(
+            "Choose local (offline) Whisper vs. OpenAI API, and manage models"
+        )
+        self.btn_whisper_settings.clicked.connect(self.whisper_settings_requested.emit)
+        header_layout.addWidget(self.btn_whisper_settings)
 
         self.btn_autoplace = QPushButton("Auto Dodge")
         self.btn_autoplace.setToolTip(
@@ -238,6 +248,18 @@ class CaptionPanelWidget(QWidget):
             lambda: self.set_anchor_pct(80.0, user_action=True)
         )
         pos_header.addWidget(self.btn_bottom)
+
+        self.btn_apply_all = QPushButton("Apply to All")
+        self.btn_apply_all.setToolTip(
+            "Set this vertical position for every caption in the video "
+            "(replaces all per-caption position overrides with one)"
+        )
+        self.btn_apply_all.setStyleSheet(btn_style)
+        self.btn_apply_all.setFixedHeight(22)
+        self.btn_apply_all.clicked.connect(
+            lambda: self.apply_position_to_all_requested.emit(self.active_anchor_pct)
+        )
+        pos_header.addWidget(self.btn_apply_all)
 
         pos_header.addStretch()
 
@@ -408,6 +430,27 @@ class CaptionPanelWidget(QWidget):
         self.chk_karaoke.setChecked(self.current_style.karaoke)
         self.chk_karaoke.toggled.connect(self._on_karaoke_toggled)
         row_colors.addWidget(self.chk_karaoke)
+
+        self.chk_multiline = QCheckBox("2-Line")
+        self.chk_multiline.setToolTip(
+            "Wrap karaoke captions onto two lines instead of one, so more "
+            "words stay on screen at once (recommended for large fonts on "
+            "portrait video, where one-line karaoke can shrink to ~2 words "
+            "per block)"
+        )
+        self.chk_multiline.setChecked(self.current_style.multiline)
+        self.chk_multiline.toggled.connect(self._on_multiline_toggled)
+        row_colors.addWidget(self.chk_multiline)
+
+        self.chk_bg_box = QCheckBox("BG Box")
+        self.chk_bg_box.setToolTip(
+            "Draw a semi-transparent box behind the caption text (square "
+            "corners in the actual export — ASS subtitles can't do rounded "
+            "corners like the in-app preview's pill)"
+        )
+        self.chk_bg_box.setChecked(self.current_style.background_box)
+        self.chk_bg_box.toggled.connect(self._on_bg_box_toggled)
+        row_colors.addWidget(self.chk_bg_box)
         content_layout.addLayout(row_colors)
 
         # Initially collapsed
@@ -423,6 +466,7 @@ class CaptionPanelWidget(QWidget):
 
         style_layout.addWidget(self.style_content)
         self._update_color_buttons()
+        self._update_safe_button_styles()
         layout.addWidget(style_container)
 
     def _update_color_buttons(self) -> None:
@@ -468,6 +512,11 @@ class CaptionPanelWidget(QWidget):
             sub_menu = self.font_menu.addMenu(cat_name)
             for f in fonts:
                 act = sub_menu.addAction(f)
+                # Render each entry in its own actual typeface (already loaded
+                # into QFontDatabase by init_app_fonts) so the menu is a real
+                # preview instead of plain text that looks nothing like what
+                # gets applied.
+                act.setFont(QFont(f, 13))
                 act.triggered.connect(
                     lambda checked=False, fname=f: self.set_font_name(fname)
                 )
@@ -543,6 +592,14 @@ class CaptionPanelWidget(QWidget):
         self.current_style.karaoke = checked
         self.style_changed.emit(self.current_style)
 
+    def _on_multiline_toggled(self, checked: bool) -> None:
+        self.current_style.multiline = checked
+        self.style_changed.emit(self.current_style)
+
+    def _on_bg_box_toggled(self, checked: bool) -> None:
+        self.current_style.background_box = checked
+        self.style_changed.emit(self.current_style)
+
     def _pick_color(self, target: str) -> None:
         current_hex = (
             self.current_style.text_color
@@ -590,6 +647,8 @@ class CaptionPanelWidget(QWidget):
         self.slider_font_size.setValue(style.font_size)
         self.lbl_font_size.setText(f"{style.font_size} px")
         self.chk_karaoke.setChecked(style.karaoke)
+        self.chk_multiline.setChecked(style.multiline)
+        self.chk_bg_box.setChecked(style.background_box)
         self._update_color_buttons()
 
         self._block_signals = False

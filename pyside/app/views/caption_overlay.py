@@ -106,33 +106,34 @@ class CaptionOverlayWidget(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        # Draw active caption text if present
+        # Draw active caption text if present. Outlined text only, no
+        # background box: this mirrors the actual burned-in ASS style
+        # (BorderStyle=1 — outline + shadow), which has no box either, so the
+        # editor preview shows what the export will actually look like.
         if self.current_segment and self.current_segment.text.strip():
             text = self.current_segment.text.strip()
             font = QFont("Helvetica Neue", 16, QFont.Weight.Bold)
-            painter.setFont(font)
             metrics = QFontMetrics(font)
-
             text_rect = metrics.boundingRect(text)
-            padding_x = 16
-            padding_y = 8
-            box_w = text_rect.width() + padding_x * 2
-            box_h = text_rect.height() + padding_y * 2
 
-            box_x = (w - box_w) / 2
-            box_y = anchor_y - (box_h / 2)
+            baseline_x = (w - text_rect.width()) / 2 - text_rect.left()
+            baseline_y = anchor_y - text_rect.center().y()
 
-            box_rect = QRectF(box_x, box_y, box_w, box_h)
-
-            # Rounded pill background
             path = QPainterPath()
-            path.addRoundedRect(box_rect, 8, 8)
-            painter.fillPath(path, QColor(0, 0, 0, 180))
+            path.addText(baseline_x, baseline_y, font, text)
+
+            outline_pen = QPen(QColor(0, 0, 0, 255), 4)
+            outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.strokePath(path, outline_pen)
+            painter.fillPath(path, QColor(255, 255, 255))
 
             if self.is_dragging:
+                selection_rect = QRectF(
+                    baseline_x + text_rect.left(),
+                    baseline_y + text_rect.top(),
+                    text_rect.width(),
+                    text_rect.height(),
+                ).adjusted(-8, -6, 8, 6)
                 painter.setPen(QPen(QColor(99, 102, 241, 255), 2))
-                painter.drawPath(path)
-
-            # Draw text
-            painter.setPen(QColor(255, 255, 255))
-            painter.drawText(box_rect, Qt.AlignmentFlag.AlignCenter, text)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(selection_rect)

@@ -22,7 +22,15 @@ const SAMPLE_FPS: u32 = 2;
 const SAMPLE_WIDTH: u32 = 160;
 
 /// Candidate anchor heights, as a percentage of frame height.
-const MIN_BAND_PCT: f32 = 16.0;
+///
+/// Floored at the vertical middle of the frame, not just above any blocked
+/// platform UI: a face is usually framed somewhere in the top two-thirds of a
+/// portrait shot, and a plain wall or ceiling above someone's head can score
+/// as perfectly calm even though putting text there covers them. Staying in
+/// the lower half by default avoids that regardless of how "calm" the pixels
+/// up there measure; the style's own (typically lower-third) position is
+/// still favoured within this range via HOME_WEIGHT.
+const MIN_BAND_PCT: f32 = 50.0;
 const MAX_BAND_PCT: f32 = 92.0;
 const BAND_COUNT: usize = 13;
 
@@ -515,6 +523,8 @@ pub async fn auto_place_captions(params: AutoPlaceParams) -> Result<AutoPlaceRes
         text_color: params.text_color.clone(),
         highlight_word_color: params.highlight_word_color.clone(),
         outline_color: params.outline_color.clone(),
+        outline_width: params.outline_width,
+        background_box: params.background_box,
         position: params.position.clone(),
         karaoke: params.karaoke,
         multiline: params.multiline,
@@ -636,11 +646,15 @@ mod tests {
 
     #[test]
     fn band_costs_prefer_the_calm_half() {
+        // Tests the cost function itself, independent of candidate_bands'
+        // default-range policy (which floors real placement at 50% so it
+        // never climbs into the top half a face usually occupies — see
+        // MIN_BAND_PCT). Bottom half of these explicit bands is busy, top
+        // half is calm.
         let rows = 100;
-        // Bottom half is busy, top half is calm.
         let activity: Vec<f32> = (0..rows).map(|y| if y >= 50 { 1.0 } else { 0.0 }).collect();
         let brightness = vec![0.0; rows];
-        let bands = candidate_bands(caption(0, 1000).default_y_pct);
+        let bands = vec![10.0, 30.0, 49.0, 70.0, 90.0];
 
         let costs = band_costs(&caption(0, 1000), &bands, &activity, &brightness, &[]);
         let cheapest = costs

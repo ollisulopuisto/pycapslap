@@ -165,6 +165,11 @@ def test_video_canvas_safe_platforms(qtbot):
     canvas.show()
 
     assert hasattr(canvas, "set_active_safe_platforms")
+    # On by default: all three platforms' safe zones are respected unless
+    # explicitly turned off.
+    assert canvas.active_safe_platforms == {"tiktok", "reels", "shorts"}
+
+    canvas.set_active_safe_platforms(set())
     assert canvas.active_safe_platforms == set()
 
     canvas.set_active_safe_platforms({"tiktok", "reels", "shorts"})
