@@ -98,15 +98,23 @@ PyCapSlap strictly follows a **Red-Green Test-Driven Development (TDD)** workflo
 
 ```bash
 # Run all Python Qt and model tests
-uv run pytest
+uv run python -m pytest
 
-# Run Rust core tests (106 unit & integration tests)
+# Run Rust core tests
 cargo test --manifest-path rust/Cargo.toml
 
 # Check linter and formatting
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+---
+
+## 🤝 Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) — in particular, Windows/Linux
+packaged builds are a wanted contribution (currently only macOS Apple
+Silicon is built/released).
 
 ---
 
