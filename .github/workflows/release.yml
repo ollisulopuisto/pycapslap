@@ -1,5 +1,10 @@
 name: Release
 
+# Builds the native PySide6 + Rust app (macOS arm64 only for now — that's
+# the only platform this app currently targets: whisper.cpp and ffmpeg are
+# bundled for macOS arm64, and rendering uses VideoToolbox hardware
+# encoding). Windows/Linux packaging is future work.
+
 on:
   push:
     tags:
@@ -10,100 +15,64 @@ permissions:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            rust_target: aarch64-apple-darwin
-            electron_args: --mac --arm64
-            artifact_name: mac-arm64
-          - os: macos-latest
-            rust_target: x86_64-apple-darwin
-            electron_args: --mac --x64
-            artifact_name: mac-x64
-          - os: windows-latest
-            rust_target: x86_64-pc-windows-msvc
-            electron_args: --win --x64
-            artifact_name: win-x64
-          - os: ubuntu-latest
-            rust_target: x86_64-unknown-linux-gnu
-            electron_args: --linux --x64
-            artifact_name: linux-x64
+    runs-on: macos-14 # Apple Silicon runner
 
-    runs-on: ${{ matrix.os }}
-    
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          targets: ${{ matrix.rust_target }}
+          workspaces: rust
 
       - name: Build Rust core
         working-directory: rust
-        run: cargo build --release --target ${{ matrix.rust_target }}
+        run: cargo build --release
 
-      - name: Copy Rust binary (Unix)
-        if: runner.os != 'Windows'
-        run: cp rust/target/${{ matrix.rust_target }}/release/core rust/target/release/core
-
-      - name: Copy Rust binary (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          New-Item -ItemType Directory -Force -Path rust/target/release
-          Copy-Item rust/target/${{ matrix.rust_target }}/release/core.exe rust/target/release/core.exe
-
-      - name: Download platform binaries
+      - name: Download bundled ffmpeg/ffprobe/whisper-cli
         run: bash scripts/download-binaries.sh
         env:
-          TARGET_OS: ${{ runner.os }}
+          TARGET_OS: macOS
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Install dependencies
-        working-directory: electron
-        run: bun install
+      - name: Install Python dependencies
+        run: uv sync
 
-      - name: Build Electron app
-        working-directory: electron
-        run: bun run vite:build:app
+      - name: Build PyCapSlap.app
+        working-directory: pyside
+        run: uv run --with pyinstaller pyinstaller pycapslap.spec --noconfirm
 
-      - name: Package for distribution
-        working-directory: electron
-        run: bunx electron-builder ${{ matrix.electron_args }} --publish never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Smoke-test the bundled core binary
+        run: |
+          CORE="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/target/release/core"
+          echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
 
-      - name: Upload artifacts
+      - name: Zip app bundle
+        working-directory: pyside/dist
+        run: ditto -c -k --sequesterRsrc --keepParent PyCapSlap.app PyCapSlap-macos-arm64.zip
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: capslap-${{ matrix.artifact_name }}
-          path: |
-            electron/dist/*.dmg
-            electron/dist/*.exe
-            electron/dist/*.AppImage
-            electron/dist/*.deb
-            electron/dist/*.snap
-          if-no-files-found: ignore
+          name: PyCapSlap-macos-arm64
+          path: pyside/dist/PyCapSlap-macos-arm64.zip
 
   release:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
+          name: PyCapSlap-macos-arm64
           path: artifacts
-          merge-multiple: true
-
-      - name: List artifacts
-        run: find artifacts -type f | head -20
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -111,5 +80,12 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
           draft: false
+          body: |
+            macOS (Apple Silicon) build. Unsigned/ad-hoc — on first launch,
+            right-click the app and choose Open (or allow it in
+            System Settings > Privacy & Security) since it isn't notarized
+            by a paid Apple Developer account.
+
+            See CHANGELOG.md for what's in this release.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

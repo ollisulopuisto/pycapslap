@@ -184,6 +184,16 @@ pub fn get_ffmpeg_path_sync() -> String {
 /// Get the fonts directory path for subtitle rendering
 /// Returns None if fonts directory cannot be found (libass will use system fonts)
 fn _get_fonts_dir() -> Option<std::path::PathBuf> {
+    // Priority 0: Explicit override — what a packaged app's launcher sets,
+    // pointing at wherever it actually bundled the fonts, rather than this
+    // process guessing a layout from its own exe path.
+    if let Ok(path) = std::env::var("CAPSLAP_FONTS_DIR") {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() && p.is_dir() {
+            return Some(p);
+        }
+    }
+
     // Priority 1: Development environment
     let dev_fonts = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/fonts");
     if dev_fonts.exists() && dev_fonts.is_dir() {

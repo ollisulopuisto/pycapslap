@@ -15,40 +15,49 @@ WHISPER_VERSION="v1.7.4"
 
 download_macos() {
     echo "Downloading macOS binaries..."
-    
+
     BIN_DIR="$ROOT_DIR/rust/bin"
     mkdir -p "$BIN_DIR/lib"
-    
-    # Check if already exists
-    if [[ -f "$BIN_DIR/ffmpeg" && -f "$BIN_DIR/whisper-cli-macos-arm64" ]]; then
-        echo "macOS binaries already exist, skipping download"
-        return
+
+    # ffmpeg/ffprobe are .gitignored (too large / machine-specific to
+    # commit), so they're always missing on a fresh checkout.
+    if [[ -f "$BIN_DIR/ffmpeg" && -f "$BIN_DIR/ffprobe" ]]; then
+        echo "ffmpeg/ffprobe already present, skipping download"
+    else
+        echo "Downloading FFmpeg..."
+        curl -L "https://evermeet.cx/ffmpeg/ffmpeg-${FFMPEG_VERSION}.zip" -o /tmp/ffmpeg.zip
+        unzip -o /tmp/ffmpeg.zip -d "$BIN_DIR"
+        chmod +x "$BIN_DIR/ffmpeg"
+
+        curl -L "https://evermeet.cx/ffmpeg/ffprobe-${FFMPEG_VERSION}.zip" -o /tmp/ffprobe.zip
+        unzip -o /tmp/ffprobe.zip -d "$BIN_DIR"
+        chmod +x "$BIN_DIR/ffprobe"
     fi
-    
-    # Download FFmpeg from evermeet.cx (static builds for macOS)
-    echo "Downloading FFmpeg..."
-    curl -L "https://evermeet.cx/ffmpeg/ffmpeg-${FFMPEG_VERSION}.zip" -o /tmp/ffmpeg.zip
-    unzip -o /tmp/ffmpeg.zip -d "$BIN_DIR"
-    chmod +x "$BIN_DIR/ffmpeg"
-    
-    curl -L "https://evermeet.cx/ffmpeg/ffprobe-${FFMPEG_VERSION}.zip" -o /tmp/ffprobe.zip
-    unzip -o /tmp/ffprobe.zip -d "$BIN_DIR"
-    chmod +x "$BIN_DIR/ffprobe"
-    
-    # Download whisper.cpp
-    echo "Downloading whisper-cli..."
+
+    # whisper-cli-macos-arm64 (and its runtime dylibs under bin/lib/) ARE
+    # committed to git — built locally without the CoreML requirement the
+    # upstream v1.7.4 release asset has, which otherwise fails at runtime
+    # whenever the matching CoreML-converted model isn't also present.
+    # Never overwrite that with the older release asset if it's already
+    # there; only fetch it as a fallback for an architecture we haven't
+    # built for ourselves.
     ARCH=$(uname -m)
     if [[ "$ARCH" == "arm64" ]]; then
         WHISPER_ASSET="whisper-cli-macos-arm64"
     else
         WHISPER_ASSET="whisper-cli-macos-x64"
     fi
-    
-    curl -L "https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_VERSION}/${WHISPER_ASSET}" \
-        -o "$BIN_DIR/${WHISPER_ASSET}"
-    chmod +x "$BIN_DIR/${WHISPER_ASSET}"
-    
-    echo "macOS binaries downloaded successfully"
+
+    if [[ -f "$BIN_DIR/$WHISPER_ASSET" ]]; then
+        echo "$WHISPER_ASSET already present (committed build), skipping download"
+    else
+        echo "Downloading whisper-cli ($WHISPER_ASSET)..."
+        curl -L "https://github.com/ggerganov/whisper.cpp/releases/download/${WHISPER_VERSION}/${WHISPER_ASSET}" \
+            -o "$BIN_DIR/${WHISPER_ASSET}"
+        chmod +x "$BIN_DIR/${WHISPER_ASSET}"
+    fi
+
+    echo "macOS binaries ready"
 }
 
 download_windows() {

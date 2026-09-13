@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 import threading
 import uuid
 from concurrent.futures import Future
@@ -39,11 +40,29 @@ class CoreClient(QObject):
         self._start_process()
 
     def _resolve_binary_path(self) -> str:
-        # Locate project root relative to pyside/app/core_client.py
+        possible_paths = []
+
+        # A PyInstaller-frozen build extracts/unpacks its bundled data next
+        # to sys._MEIPASS (onefile) or next to the executable (onedir) —
+        # either way, `rust/...` was bundled at that root by pycapslap.spec.
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        if frozen_root:
+            possible_paths.append(
+                Path(frozen_root) / "rust" / "target" / "release" / "core"
+            )
+        if getattr(sys, "frozen", False):
+            possible_paths.append(
+                Path(sys.executable).resolve().parent
+                / "rust"
+                / "target"
+                / "release"
+                / "core"
+            )
+
+        # Dev checkout: locate project root relative to pyside/app/core_client.py
         current_dir = Path(__file__).resolve().parent
         project_root = current_dir.parent.parent
-
-        possible_paths = [
+        possible_paths += [
             project_root / "rust" / "target" / "release" / "core",
             project_root / "rust" / "target" / "debug" / "core",
             project_root / "rust" / "bin" / "core",
@@ -84,6 +103,34 @@ class CoreClient(QObject):
             env["PATH"] = (
                 f"{os.path.dirname(ffmpeg_path)}{os.pathsep}{env.get('PATH', '')}"
             )
+
+        # Point the core straight at rust/bin's ffprobe/whisper-cli and
+        # rust/src/fonts explicitly, rather than relying on its own
+        # exe-relative guessing — which assumes a specific bundle layout
+        # (core and a sibling bin/) that a packaged build may not match.
+        # This is the one thing this launcher actually knows for certain.
+        ffprobe_candidate = rust_bin / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+        if ffprobe_candidate.exists() and os.access(ffprobe_candidate, os.X_OK):
+            env["FFPROBE_PATH"] = str(ffprobe_candidate)
+
+        if os.name == "nt":
+            whisper_candidates = [rust_bin / "whisper-cli.exe"]
+        else:
+            import platform
+
+            arch = "arm64" if platform.machine() == "arm64" else "x64"
+            whisper_candidates = [
+                rust_bin / f"whisper-cli-macos-{arch}",
+                rust_bin / "whisper-cli",
+            ]
+        for candidate in whisper_candidates:
+            if candidate.exists() and os.access(candidate, os.X_OK):
+                env["WHISPER_CLI_PATH"] = str(candidate)
+                break
+
+        fonts_dir = rust_bin.parent / "src" / "fonts"
+        if fonts_dir.is_dir():
+            env["CAPSLAP_FONTS_DIR"] = str(fonts_dir)
 
         self.proc = subprocess.Popen(
             [self.binary_path],

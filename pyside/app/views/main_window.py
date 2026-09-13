@@ -539,7 +539,9 @@ class MainWindow(QMainWindow):
         provider_label = (
             "OpenAI API" if provider_params["model"] == "whisper-1" else "local Whisper"
         )
-        self.status.showMessage(f"Transcribing audio via Rust core ({provider_label})...")
+        self.status.showMessage(
+            f"Transcribing audio via Rust core ({provider_label})..."
+        )
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
 

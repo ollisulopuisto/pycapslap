@@ -7,37 +7,59 @@ on:
     branches: [main, master]
 
 jobs:
-  lint-and-build:
-    runs-on: ubuntu-latest
+  rust:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Rust lint
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust test
+        working-directory: rust
+        run: cargo test --release
+
+  pyside:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Rust lint
-        working-directory: rust
-        run: cargo clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
-      - name: Rust build check
+      - name: Build Rust core (needed by pyside tests that spawn it)
         working-directory: rust
         run: cargo build --release
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
-      - name: Install Electron dependencies
-        working-directory: electron
-        run: bun install --frozen-lockfile
+      - name: Install Python dependencies
+        run: uv sync
 
-      - name: Lint Electron app
-        working-directory: electron
-        run: bun run lint
+      - name: Ruff lint
+        run: uv run ruff check .
 
-      - name: TypeScript check
-        working-directory: electron
-        run: bunx tsc --noEmit
+      - name: Ruff format check
+        run: uv run ruff format --check .
 
-      - name: Build Electron app
-        working-directory: electron
-        run: bun run vite:build:app
+      - name: pytest
+        run: uv run python -m pytest

@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,18 @@ from PySide6.QtGui import QFontDatabase
 
 _LOADED = False
 _AVAILABLE_FONTS: list[str] = []
+
+
+def _fonts_dir() -> Path:
+    # A PyInstaller-frozen build bundled rust/src/fonts at the same relative
+    # path, next to sys._MEIPASS (onefile) or the executable (onedir).
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        return Path(frozen_root) / "rust" / "src" / "fonts"
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "rust" / "src" / "fonts"
+    # Dev checkout: relative to pyside/app/fonts.py
+    return Path(__file__).resolve().parents[2] / "rust" / "src" / "fonts"
 
 
 def init_app_fonts() -> list[str]:
@@ -16,7 +29,7 @@ def init_app_fonts() -> list[str]:
     if _LOADED:
         return _AVAILABLE_FONTS
 
-    fonts_dir = Path(__file__).resolve().parents[2] / "rust" / "src" / "fonts"
+    fonts_dir = _fonts_dir()
     found_families = set()
     if fonts_dir.exists():
         for font_path in sorted(fonts_dir.glob("*.ttf")):

@@ -460,9 +460,20 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
 
     let result = (|| {
         // Priority order:
+        // 0. Explicit override (WHISPER_CLI_PATH) — what a packaged app's
+        //    launcher sets, since its own bundle layout is the one thing it
+        //    actually knows for certain, rather than something this process
+        //    has to guess at via its own exe path.
         // 1. Bundled binary (next to executable)
         // 2. Project binary (for development)
         // 3. System installation (Homebrew, etc.)
+
+        if let Ok(path) = std::env::var("WHISPER_CLI_PATH") {
+            let p = std::path::Path::new(&path);
+            if p.exists() && binary_runnable(p) {
+                return Some(path);
+            }
+        }
 
         // Try to get the directory where the current executable is located
         if let Ok(exe_path) = std::env::current_exe() {

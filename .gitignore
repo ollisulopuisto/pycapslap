@@ -33,6 +33,8 @@ rust/bin/*.capslap.json
 electron/out/
 electron/dist/
 dist/
+# PyInstaller intermediates (pyside/build/pycapslap/*.toc, warn/xref files)
+build/
 node_modules/
 electron/package-lock.json
 *.tsbuildinfo
