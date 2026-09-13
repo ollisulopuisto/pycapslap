@@ -72,4 +72,13 @@ jobs:
         run: uv run ruff format --check .
 
       - name: pytest
-        run: uv run python -m pytest
+        # A 120s per-test cap: test_main_window_save_action loads a
+        # deliberately-garbage "video" file into a real QMediaPlayer, which
+        # hangs indefinitely on a GitHub-hosted runner's non-interactive
+        # session (reproduced locally too under QT_QPA_PLATFORM=offscreen —
+        # that's not a fix here, it hangs the same test a different way).
+        # Bounding it turns a stuck 30-60+ minute run into a fast, visible
+        # failure instead; fixing the test itself (e.g. mocking QMediaPlayer)
+        # is follow-up work.
+        run: uv run python -m pytest --timeout=120
+
