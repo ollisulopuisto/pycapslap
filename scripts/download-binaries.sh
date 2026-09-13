@@ -24,14 +24,20 @@ download_macos() {
     if [[ -f "$BIN_DIR/ffmpeg" && -f "$BIN_DIR/ffprobe" ]]; then
         echo "ffmpeg/ffprobe already present, skipping download"
     else
-        echo "Downloading FFmpeg..."
-        curl -L "https://evermeet.cx/ffmpeg/ffmpeg-${FFMPEG_VERSION}.zip" -o /tmp/ffmpeg.zip
-        unzip -o /tmp/ffmpeg.zip -d "$BIN_DIR"
-        chmod +x "$BIN_DIR/ffmpeg"
-
-        curl -L "https://evermeet.cx/ffmpeg/ffprobe-${FFMPEG_VERSION}.zip" -o /tmp/ffprobe.zip
-        unzip -o /tmp/ffprobe.zip -d "$BIN_DIR"
-        chmod +x "$BIN_DIR/ffprobe"
+        # evermeet.cx's static builds are x86_64-only. On Apple Silicon that
+        # only runs under Rosetta 2, which isn't installed on GitHub's arm64
+        # runners (or guaranteed on an end user's Mac) — binary_runnable()'s
+        # arch check correctly refuses to use it there, so ffmpeg silently
+        # "isn't found" despite the file existing. Homebrew's `ffmpeg-full`
+        # (homebrew-core, keg-only — not `ffmpeg`, which lacks libass) is
+        # native for whatever architecture Homebrew itself is running as,
+        # and has libass (subtitle burning) built in.
+        echo "Installing FFmpeg via Homebrew (arch-native, has libass)..."
+        brew list ffmpeg-full &>/dev/null || brew install ffmpeg-full
+        FFMPEG_PREFIX="$(brew --prefix ffmpeg-full)"
+        cp -L "$FFMPEG_PREFIX/bin/ffmpeg" "$BIN_DIR/ffmpeg"
+        cp -L "$FFMPEG_PREFIX/bin/ffprobe" "$BIN_DIR/ffprobe"
+        chmod +x "$BIN_DIR/ffmpeg" "$BIN_DIR/ffprobe"
     fi
 
     # whisper-cli-macos-arm64 (and its runtime dylibs under bin/lib/) ARE
