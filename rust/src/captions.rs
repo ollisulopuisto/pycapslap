@@ -161,6 +161,7 @@ pub async fn burn_captions_with_segments(
             params.glow_effect,
             params.karaoke,
             params.multiline,
+            params.justify_lines,
             params.position,
             params.output_size,
             params.crop_strategy,
@@ -222,6 +223,7 @@ pub async fn generate_captions_single_pass(
             params.glow_effect,
             params.karaoke,
             params.multiline,
+            params.justify_lines,
             params.position,
             params.output_size,
             params.crop_strategy,
@@ -242,6 +244,31 @@ pub async fn generate_captions_single_pass(
 
     cleanup_temp_dir(&temp_dir);
     result
+}
+
+/// Turn one cue's tokens into the lines the editor should draw, carrying the
+/// same per-line font size the burner writes into the ASS document.
+fn preview_lines(
+    tokens: &[String],
+    hi_idx: usize,
+    justify_lines: bool,
+    font_family: &str,
+    frame_w: u32,
+    base_px: u32,
+) -> Vec<crate::types::PreviewLine> {
+    let layout = cue_lines(tokens, justify_lines, font_family, frame_w, base_px);
+    layout
+        .iter()
+        .map(|line| crate::types::PreviewLine {
+            words: (line.start..line.end)
+                .map(|i| crate::types::PreviewWord {
+                    text: tokens[i].clone(),
+                    is_highlighted: i == hi_idx,
+                })
+                .collect(),
+            font_size_px: line.font_px,
+        })
+        .collect()
 }
 
 pub fn generate_preview_layout(
@@ -274,22 +301,12 @@ pub fn generate_preview_layout(
     let to_pct = |y: i32| (y as f32 / params.height as f32) * 100.0;
 
     if params.karaoke {
-        let phrases = coalesce_phrases(&params.segments);
-        // let white_bgr = bgr_from_aa_bgrr(&style.primary);
-        // let hi_bgr    = bgr_from_aa_bgrr(&style.highlight);
+        let phrases = segment_phrases(&params.segments);
 
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
-            // Mirror build_ass_document's split so cue groups line up with the
-            // blocks that actually get rendered.
-            let segments = if params.multiline {
-                split_phrase_two_lines(&tokens_upper, &ph.spans, params.width, style.font_size)
-                    .into_iter()
-                    .map(|(t, s, _)| (t, s))
-                    .collect()
-            } else {
-                split_phrase_for_width(&tokens_upper, &ph.spans, params.width, style.font_size)
-            };
+            // One cue per authored segment, exactly like build_ass_document.
+            let segments = vec![(tokens_upper, ph.spans.clone())];
 
             for (segment_tokens, segment_spans) in segments {
                 let group_start_ms = segment_spans.first().map(|s| s.start_ms).unwrap_or(0);
@@ -302,7 +319,14 @@ pub fn generate_preview_layout(
                     default_y,
                     params.height,
                     style.align,
-                    if params.multiline { 2 } else { 1 },
+                    cue_lines(
+                        &segment_tokens,
+                        params.justify_lines,
+                        &style.font_name,
+                        params.width,
+                        style.font_size,
+                    )
+                    .len(),
                     style.font_size,
                 ));
 
@@ -312,24 +336,19 @@ pub fn generate_preview_layout(
                     let start_ms = (*cs0 as u64) * 10;
                     let end_ms = (*cs1 as u64) * 10;
 
-                    // In karaoke, each window highlights one word (index i)
-                    // The segment_tokens correspond to segment_spans.
-                    // But wait, split_phrase_for_width returns tokens that match spans.
-
-                    let mut preview_words = Vec::new();
-                    for (w_idx, token) in segment_tokens.iter().enumerate() {
-                        preview_words.push(crate::types::PreviewWord {
-                            text: token.clone(),
-                            is_highlighted: w_idx == i,
-                        });
-                    }
-
+                    // In karaoke each window highlights one word (index i);
+                    // segment_tokens and segment_spans are 1:1.
                     cues.push(crate::types::PreviewCue {
                         start_ms,
                         end_ms,
-                        lines: vec![crate::types::PreviewLine {
-                            words: preview_words,
-                        }],
+                        lines: preview_lines(
+                            &segment_tokens,
+                            i,
+                            params.justify_lines,
+                            &style.font_name,
+                            params.width,
+                            style.font_size,
+                        ),
                         y_pct,
                         group_start_ms,
                         group_end_ms,
@@ -339,17 +358,12 @@ pub fn generate_preview_layout(
             }
         }
     } else {
-        let phrases = coalesce_phrases(&params.segments);
+        let phrases = segment_phrases(&params.segments);
         let mut hl_state = HighlightState::new(&params.segments);
 
         for (p_idx, phrase) in phrases.iter().enumerate() {
             let tokens_upper = normalize_tokens(&phrase.spans);
-
-            let segments = if style.align == 5 {
-                split_phrase_multiline(&tokens_upper, &phrase.spans, params.width, style.font_size)
-            } else {
-                split_phrase_for_width(&tokens_upper, &phrase.spans, params.width, style.font_size)
-            };
+            let segments = vec![(tokens_upper, phrase.spans.clone())];
 
             for (segment_tokens, segment_spans) in segments {
                 let segment_tokens_orig = original_tokens(&segment_spans);
@@ -363,72 +377,17 @@ pub fn generate_preview_layout(
                 );
                 let hi_idx = hi_opt.unwrap_or(usize::MAX);
 
-                // Reconstruct lines structure
-                // For standard: it's usually 1 line, or 2 if assemble_colored_two_lines forces break?
-                // actually assemble_colored_two_lines doesn't Force break, it takes line1_count.
-                // But split_phrase_for_width produces single lines usually?
-                // Let's check split_phrase_for_width... it seems to produce segments that fit in width.
-                // Wait, logic in build_ass_document call to assemble_colored_two_lines passed usize::MAX as break index.
-                // So split_phrase_for_width produces 1 line per segment.
-
-                // For storyteller (split_phrase_multiline), it produces segments but we passed chunks.
-                // The chunk needs further wrapping?
-                // `assemble_multiline` does wrapping based on `max_chars_per_line`.
-                // We need to replicate `assemble_multiline` wrapping logic here to determine lines.
-
-                let est_char_width = (style.font_size as f32 * 0.7).max(1.0);
-
-                let lines_structure = if style.align == 5 {
-                    // Storyteller logic
-                    let max_chars =
-                        ((params.width as f32 * 0.85) / est_char_width).floor() as usize;
-                    let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
-                    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-                    let min_chars = 25.min(max_chars).max(1);
-                    let wrapping_width = soft_target.clamp(min_chars, max_chars);
-
-                    // Perform wrapping
-                    let mut lines = Vec::new();
-                    let mut current_line_words = Vec::new();
-                    let mut line_len = 0;
-
-                    for (i, token) in segment_tokens.iter().enumerate() {
-                        let t_len = token.len(); // raw length
-                                                 // Note: assemble_multiline counts escaped length, we use raw here which is close enough or better
-
-                        if line_len > 0 && line_len + t_len + 1 > wrapping_width {
-                            lines.push(crate::types::PreviewLine {
-                                words: current_line_words,
-                            });
-                            current_line_words = Vec::new();
-                            line_len = 0;
-                        } else if line_len > 0 {
-                            line_len += 1; // space
-                        }
-
-                        current_line_words.push(crate::types::PreviewWord {
-                            text: token.clone(),
-                            is_highlighted: i == hi_idx,
-                        });
-                        line_len += t_len;
-                    }
-                    if !current_line_words.is_empty() {
-                        lines.push(crate::types::PreviewLine {
-                            words: current_line_words,
-                        });
-                    }
-                    lines
-                } else {
-                    // Standard logic (single line per segment usually)
-                    let mut words = Vec::new();
-                    for (i, token) in segment_tokens.iter().enumerate() {
-                        words.push(crate::types::PreviewWord {
-                            text: token.clone(),
-                            is_highlighted: i == hi_idx,
-                        });
-                    }
-                    vec![crate::types::PreviewLine { words }]
-                };
+                // Without justification the burner emits the cue as one
+                // flowing run and lets libass wrap it, so the layout is one
+                // line here too and the client wraps it with the same margins.
+                let lines_structure = preview_lines(
+                    &segment_tokens,
+                    hi_idx,
+                    params.justify_lines,
+                    &style.font_name,
+                    params.width,
+                    style.font_size,
+                );
 
                 let y_pct = to_pct(cue_anchor_y(
                     &params.position_overrides,
@@ -665,6 +624,7 @@ pub async fn generate_preview_frame(
                 &params.segments,
                 params.karaoke,
                 params.multiline,
+                params.justify_lines,
                 params.glow_effect,
                 &params.position_overrides,
                 &params.blocked_bands,
@@ -893,7 +853,7 @@ mod tests_persistence {
             },
         ];
 
-        let phrases = coalesce_phrases(&segments);
+        let phrases = segment_phrases(&segments);
         let words: Vec<&str> = phrases
             .iter()
             .flat_map(|p| p.spans.iter())
@@ -914,7 +874,7 @@ mod tests_persistence {
     }
 
     #[test]
-    fn test_coalesce_phrases_honors_edited_segment_text() {
+    fn test_segment_phrases_honors_edited_segment_text() {
         // When s.text is edited and differs from s.words, coalesce_phrases must use s.text
         let segments = vec![CaptionSegment {
             start_ms: 0,
@@ -936,7 +896,7 @@ mod tests_persistence {
             ],
         }];
 
-        let phrases = coalesce_phrases(&segments);
+        let phrases = segment_phrases(&segments);
         let words: Vec<&str> = phrases
             .iter()
             .flat_map(|p| p.spans.iter())
@@ -944,6 +904,65 @@ mod tests_persistence {
             .collect();
 
         assert_eq!(words, vec!["Uusi", "muokattu", "teksti"]);
+    }
+
+    #[test]
+    fn each_authored_segment_stays_its_own_cue() {
+        // Sentence-ending punctuation, sub-second gaps and short cues used to
+        // be re-chunked here, which discarded every split the user had made in
+        // the editor. One segment in, one cue out.
+        let segments = vec![
+            CaptionSegment {
+                start_ms: 0,
+                end_ms: 800,
+                text: "Eka lause.".to_string(),
+                words: vec![
+                    WordSpan {
+                        start_ms: 0,
+                        end_ms: 400,
+                        text: "Eka".to_string(),
+                        glue_to_previous: false,
+                    },
+                    WordSpan {
+                        start_ms: 400,
+                        end_ms: 800,
+                        text: "lause.".to_string(),
+                        glue_to_previous: false,
+                    },
+                ],
+            },
+            CaptionSegment {
+                start_ms: 800,
+                end_ms: 1600,
+                text: "Toka".to_string(),
+                words: vec![WordSpan {
+                    start_ms: 800,
+                    end_ms: 1600,
+                    text: "Toka".to_string(),
+                    glue_to_previous: false,
+                }],
+            },
+            CaptionSegment {
+                start_ms: 1600,
+                end_ms: 2400,
+                text: "kolmas".to_string(),
+                words: vec![WordSpan {
+                    start_ms: 1600,
+                    end_ms: 2400,
+                    text: "kolmas".to_string(),
+                    glue_to_previous: false,
+                }],
+            },
+        ];
+
+        let phrases = segment_phrases(&segments);
+
+        assert_eq!(phrases.len(), 3);
+        assert_eq!(phrases[0].tokens, vec!["Eka", "lause."]);
+        assert_eq!(phrases[1].tokens, vec!["Toka"]);
+        assert_eq!(phrases[2].tokens, vec!["kolmas"]);
+        assert_eq!(phrases[1].start_ms, 800);
+        assert_eq!(phrases[1].end_ms, 1600);
     }
 
     #[test]
@@ -991,6 +1010,7 @@ async fn optimized_multi_format_encode(
     glow_effect: bool,
     karaoke: bool,
     multiline: bool,
+    justify_lines: bool,
     position: Option<String>,
     output_size: Option<String>,
     crop_strategy: Option<String>,
@@ -1064,6 +1084,7 @@ async fn optimized_multi_format_encode(
             segments,
             karaoke,
             multiline,
+            justify_lines,
             glow_effect,
             position_overrides,
             blocked_bands,
@@ -1481,8 +1502,9 @@ fn push_glow_and_stroke(
     glow_blur: f32,
     glow_alpha_hex: &str, // e.g. "&H80" ~ 50% opacity
     alignment: u32,       // ASS alignment value (2 = bottom center, 5 = middle center)
+    wrap_tag: &str,       // \q0 to let libass wrap, \q2 when we set the breaks
 ) {
-    let common = format!("{{\\an{}\\q2\\pos({},{})\\be0}}", alignment, x, y);
+    let common = format!("{{\\an{}{}\\pos({},{})\\be0}}", alignment, wrap_tag, x, y);
 
     // LAYER 0 — soft WHITE GLOW (outline only) - only if enabled
     if enable_glow {
@@ -1518,14 +1540,55 @@ struct Phrase {
     spans: Vec<WordSpan>, // timings per token (same length as tokens)
 }
 
-// Heuristics: new phrase if punctuation on previous token or gap > 350ms or length > 3 words
-fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
+/// One phrase per caption segment: the cue boundaries the user authored in the
+/// editor are what gets burned in. Re-chunking here used to throw away every
+/// split, merge and syllable fix made in the panel, which is why the burn never
+/// matched the preview.
+fn segment_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
     crate::debug_log!(
-        "DEBUG: Entering coalesce_phrases with {} segments",
+        "DEBUG: Entering segment_phrases with {} segments",
         segments.len()
     );
-    let mut all: Vec<WordSpan> = Vec::new();
+    let mut out: Vec<Phrase> = Vec::new();
     for s in segments {
+        let mut spans = segment_words(s);
+        if spans.is_empty() {
+            continue;
+        }
+
+        // A syllable glued to the previous cue belongs to the word that ends
+        // that cue ("kaup" | "pa"), so move it there instead of showing half a
+        // word on screen. Only the cue boundary moves; the split stays the
+        // user's to make.
+        if spans[0].glue_to_previous {
+            if let Some(previous) = out.last_mut() {
+                let syllable = spans.remove(0);
+                if let Some(tail) = previous.spans.last_mut() {
+                    tail.text.push_str(&syllable.text);
+                    tail.end_ms = tail.end_ms.max(syllable.end_ms);
+                }
+                previous.end_ms = previous.spans.last().map(|w| w.end_ms).unwrap_or(previous.end_ms);
+                previous.tokens = previous.spans.iter().map(|x| x.text.clone()).collect();
+                if spans.is_empty() {
+                    continue;
+                }
+            }
+        }
+
+        out.push(Phrase {
+            start_ms: spans.first().unwrap().start_ms,
+            end_ms: spans.last().unwrap().end_ms,
+            tokens: spans.iter().map(|x| x.text.clone()).collect(),
+            spans,
+        });
+    }
+    out
+}
+
+/// The words of one segment, with syllables glued back into whole words.
+fn segment_words(s: &CaptionSegment) -> Vec<WordSpan> {
+    let mut all: Vec<WordSpan> = Vec::new();
+    {
         let words_joined = s
             .words
             .iter()
@@ -1558,7 +1621,9 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
                     start_ms: w.start_ms,
                     end_ms: w.end_ms,
                     text: t.to_string(),
-                    glue_to_previous: false,
+                    // Kept on the leading word so the caller can glue it to the
+                    // cue before this one.
+                    glue_to_previous: w.glue_to_previous,
                 });
             }
         } else if !s.text.trim().is_empty() {
@@ -1586,42 +1651,19 @@ fn coalesce_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
         }
     }
 
-    let mut out: Vec<Phrase> = Vec::new();
-    let mut cur: Vec<WordSpan> = Vec::new();
-    for w in all.into_iter() {
-        if cur.is_empty() {
-            cur.push(w);
-            continue;
-        }
-        let prev = cur.last().unwrap();
-        let gap = w.start_ms.saturating_sub(prev.end_ms);
-        let hard_break = [".", "!", "?"].iter().any(|p| prev.text.ends_with(p))
-            || gap > 2000
-            || cur.len() >= 100;
-        if hard_break {
-            let tokens = cur.iter().map(|x| x.text.clone()).collect::<Vec<_>>();
-            out.push(Phrase {
-                start_ms: cur.first().unwrap().start_ms,
-                end_ms: cur.last().unwrap().end_ms,
-                tokens,
-                spans: cur.clone(),
-            });
-            cur = vec![w];
-        } else {
-            cur.push(w);
-        }
-    }
-    if !cur.is_empty() {
-        let tokens = cur.iter().map(|x| x.text.clone()).collect::<Vec<_>>();
-        out.push(Phrase {
-            start_ms: cur.first().unwrap().start_ms,
-            end_ms: cur.last().unwrap().end_ms,
-            tokens,
-            spans: cur.clone(),
-        });
-    }
-    out
+    all
 }
+
+/// Left/right margin the wrapper keeps free, as libass measures line width
+/// against PlayResX minus these. 7% a side leaves captions 86% of the frame,
+/// which is what the editor preview lays out against.
+pub(crate) fn horizontal_margin(frame_w: u32) -> u32 {
+    ((frame_w as f32) * CAPTION_SIDE_MARGIN_PCT / 100.0).round() as u32
+}
+
+/// Percentage of frame width kept free on each side. Mirrored by the PySide
+/// preview (`video_canvas.CAPTION_SIDE_MARGIN_PCT`) — change both together.
+pub(crate) const CAPTION_SIDE_MARGIN_PCT: f32 = 7.0;
 
 // ---- time quantization (ASS is 1/100s) ----
 fn ms_to_cs(ms: u64) -> i64 {
@@ -1681,128 +1723,110 @@ fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
         .collect()
 }
 
-// Split tokens containing hyphens into sub-tokens to allow wrapping
-// e.g. "FOO-BAR" -> ["FOO-", "BAR"]
-fn preprocess_hyphenated_tokens(
-    tokens: &[String],
-    spans: &[WordSpan],
-) -> (Vec<String>, Vec<WordSpan>) {
-    let mut new_tokens = Vec::new();
-    let mut new_spans = Vec::new();
 
-    for (token, span) in tokens.iter().zip(spans.iter()) {
-        if token.contains('-') && token.len() > 3 {
-            // Only split if length meaningful
-            let parts: Vec<&str> = token.split('-').collect();
-            let count = parts.len();
-
-            // First pass: collect the actual string parts we want to use
-            let mut sub_tokens = Vec::new();
-            for (i, part) in parts.iter().enumerate() {
-                let mut text = part.to_string();
-                // Add hyphen back if this isn't the last part
-                if i < count - 1 {
-                    text.push('-');
-                }
-
-                if !text.is_empty() {
-                    sub_tokens.push(text);
-                }
-            }
-
-            // Second pass: distribute time proportionally
-            let total_len: usize = sub_tokens.iter().map(|t| t.len()).sum();
-            let total_dur = (span.end_ms - span.start_ms) as f64;
-            let mut current_start = span.start_ms as f64;
-
-            if total_len > 0 {
-                for (i, sub_token) in sub_tokens.iter().enumerate() {
-                    let len = sub_token.len();
-                    // Calculate duration for this part
-                    // Use f64 for precision, accumulate error?
-                    // Simple proportion:
-                    let fraction = len as f64 / total_len as f64;
-                    let part_dur = total_dur * fraction;
-
-                    let s_ms = current_start.round() as u64;
-                    let e_ms = if i == sub_tokens.len() - 1 {
-                        span.end_ms // Ensure last one aligns exactly with end
-                    } else {
-                        (current_start + part_dur).round() as u64
-                    };
-
-                    new_tokens.push(sub_token.clone());
-                    new_spans.push(WordSpan {
-                        start_ms: s_ms,
-                        end_ms: e_ms,
-                        text: sub_token.clone(),
-                        glue_to_previous: false,
-                    });
-
-                    current_start += part_dur;
-                }
-            } else {
-                // Should not happen if filtered empty, but fallback
-                new_tokens.push(token.clone());
-                new_spans.push(span.clone());
-            }
-        } else {
-            new_tokens.push(token.clone());
-            new_spans.push(span.clone());
-        }
-    }
-    (new_tokens, new_spans)
-}
-
-// Simple width check for karaoke - split long phrases into single-line segments
-fn split_phrase_for_width(
-    tokens: &[String],
-    spans: &[WordSpan],
-    frame_w: u32,
-    font_px: u32,
-) -> Vec<(Vec<String>, Vec<WordSpan>)> {
-    let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
-
-    let est_char_width = (font_px as f32 * 0.5).max(1.0);
-    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize; // Use 90% of width
-
-    let mut segments = Vec::new();
-    let mut current_tokens = Vec::new();
-    let mut current_spans = Vec::new();
-    let mut current_length = 0;
-
-    for (token, span) in tokens.iter().zip(spans.iter()) {
-        let token_length = token.len() + if current_length == 0 { 0 } else { 1 }; // Add space
-
-        if current_length > 0 && current_length + token_length > max_chars {
-            // Current segment is full, start a new one
-            segments.push((current_tokens.clone(), current_spans.clone()));
-            current_tokens.clear();
-            current_spans.clear();
-            current_length = 0;
-        }
-
-        current_tokens.push(token.clone());
-        current_spans.push(span.clone());
-        current_length += token_length;
-    }
-
-    // Add the last segment if it has content
-    if !current_tokens.is_empty() {
-        segments.push((current_tokens, current_spans));
-    }
-
-    // If no segments were created (shouldn't happen), return the original as one segment
-    if segments.is_empty() {
-        segments.push((tokens.to_vec(), spans.to_vec()));
-    }
-
-    segments
-}
 
 // Color tags use BBGGRR (no alpha) for \1c
 fn bgr_from_aa_bgrr(aa_bgrr: &str) -> String {
     aa_bgrr.trim_start_matches("&H").chars().skip(2).collect() // drop AA
+}
+
+/// Width available to caption text, both sides' margins removed.
+pub(crate) fn caption_box_width(frame_w: u32) -> f32 {
+    (frame_w as f32) - 2.0 * horizontal_margin(frame_w) as f32
+}
+
+/// Lay a cue out as justified lines, or as one plain line when justification
+/// is off, so both callers below share one notion of "the lines of this cue".
+fn cue_lines(
+    tokens: &[String],
+    justify_lines: bool,
+    font_family: &str,
+    frame_w: u32,
+    base_px: u32,
+) -> Vec<crate::justify::JustifiedLine> {
+    if justify_lines {
+        let lines = crate::justify::justify_two_lines(
+            tokens,
+            font_family,
+            caption_box_width(frame_w),
+            base_px,
+        );
+        if !lines.is_empty() {
+            return lines;
+        }
+    }
+    vec![crate::justify::JustifiedLine {
+        start: 0,
+        end: tokens.len(),
+        font_px: base_px,
+    }]
+}
+
+/// Render one cue's text body, justified or free-flowing.
+#[allow(clippy::too_many_arguments)]
+fn assemble_cue(
+    tokens: &[String],
+    layout: &[crate::justify::JustifiedLine],
+    hi: usize,
+    white_bgr: &str,
+    hi_bgr: &str,
+    header: &str,
+    justify_lines: bool,
+    font_size: u32,
+) -> String {
+    if justify_lines {
+        assemble_justified(tokens, layout, hi, white_bgr, hi_bgr, header)
+    } else {
+        assemble_colored_two_lines(
+            tokens,
+            hi,
+            white_bgr,
+            hi_bgr,
+            usize::MAX, // no forced break; \q0 wraps on real metrics
+            header,
+            font_size,
+        )
+    }
+}
+
+/// Emit one cue's words with an explicit break and font size per line.
+///
+/// Used for the justified style, where every line carries its own `\fs` and no
+/// automatic wrapping may interfere with the widths we computed.
+fn assemble_justified(
+    tokens: &[String],
+    lines: &[crate::justify::JustifiedLine],
+    hi: usize,
+    white_bgr: &str,
+    hi_bgr: &str,
+    header: &str,
+) -> String {
+    let mut s = String::from(header);
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 {
+            s.push_str(r"\N");
+        }
+        for i in line.start..line.end {
+            let color = if hi != usize::MAX && i == hi {
+                hi_bgr
+            } else {
+                white_bgr
+            };
+            // Size stays put even on the highlighted word: the line is flush
+            // to the box, so growing one word would break the justification.
+            s.push_str(&format!("{{\\1c&H{}&\\fs{}}}", color, line.font_px));
+            s.push_str(
+                &tokens[i]
+                    .replace('\\', r"\\")
+                    .replace('{', r"\{")
+                    .replace('}', r"\}"),
+            );
+            if i + 1 < line.end && !(tokens[i].ends_with('-') && tokens[i].len() > 1) {
+                s.push(' ');
+            }
+        }
+    }
+    s
 }
 
 fn assemble_colored_two_lines(
@@ -1824,7 +1848,7 @@ fn assemble_colored_two_lines(
         format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size) // Same size, just different color
     };
 
-    let mut s = String::from(header); // will include \an2 \pos \q2 and stretch
+    let mut s = String::from(header); // will include \an2 \pos \q0 and stretch
     for i in 0..tokens.len() {
         if i == line1_count {
             s.push_str(r"\N");
@@ -2291,6 +2315,7 @@ fn build_ass_document(
     segments: &[CaptionSegment],
     karaoke: bool,
     multiline: bool,
+    justify_lines: bool,
     glow_effect: bool,
     position_overrides: &[PositionOverride],
     blocked_bands: &[(f32, f32)],
@@ -2312,7 +2337,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: TikTok,{font},{size},{pri},{sec},{out},&H64000000,0,0,0,0,100,100,0,0,{bs},{ow},{sh},{al},60,60,{mv},1
+Style: TikTok,{font},{size},{pri},{sec},{out},&H64000000,0,0,0,0,100,100,0,0,{bs},{ow},{sh},{al},{mh},{mh},{mv},1
 
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
@@ -2328,27 +2353,33 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         ow = style.outline_w,
         sh = style.shadow,
         al = style.align,
+        mh = horizontal_margin(w),
         mv = style.margin_v
     );
 
     let mut lines = String::new();
+    // Justified cues carry their own breaks and exact widths, so libass must
+    // not re-wrap them; everything else wraps on real metrics.
+    let wrap_tag = if justify_lines { r"\q2" } else { r"\q0" };
 
     if karaoke {
-        let phrases = coalesce_phrases(segments);
+        let phrases = segment_phrases(segments);
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
         let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
 
-        // Simple single-line karaoke: split phrases that are too wide, then process each segment
+        // One cue per authored segment. Lines are wrapped by libass against the
+        // real font metrics (\q0 + the style margins), not by a character-count
+        // estimate, so nothing overflows the frame and nothing gets re-cut.
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
-            let segments = if multiline {
-                split_phrase_two_lines(&tokens_upper, &ph.spans, w, style.font_size)
-            } else {
-                split_phrase_for_width(&tokens_upper, &ph.spans, w, style.font_size)
-                    .into_iter()
-                    .map(|(t, s)| (t, s, usize::MAX))
-                    .collect()
-            };
+            let cue_layout = cue_lines(
+                &tokens_upper,
+                justify_lines,
+                &style.font_name,
+                w,
+                style.font_size,
+            );
+            let segments = vec![(tokens_upper, ph.spans.clone(), usize::MAX)];
 
             let default_y = style_anchor_y(style.align, style.margin_v, h);
 
@@ -2364,9 +2395,10 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     default_y,
                     h,
                     style.align,
-                    if split_idx == usize::MAX { 1 } else { 2 },
+                    cue_layout.len(),
                     style.font_size,
                 );
+                let _ = split_idx;
 
                 let windows = contiguous_cs_windows(&segment_spans);
 
@@ -2375,8 +2407,9 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     let blur_value = if glow_effect { 6.0 } else { 2.0 };
 
                     let header = format!(
-                        "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur{:.1}}}{}",
+                        "{{\\an{}{}\\pos({},{})\\bord{}\\blur{:.1}}}{}",
                         style.align,
+                        wrap_tag,
                         (w / 2),
                         y_pos,
                         style.outline_w,
@@ -2387,19 +2420,20 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     if glow_effect {
                         // Glow layer
                         let glow_header = format!(
-                        "{{\\an{}\\q2\\pos({},{})\\1a&HFF\\bord{}\\3c&HFFFFFF&\\3a&H80\\blur{:.1}\\shad0}}{}",
-                        style.align, (w/2), y_pos,
+                        "{{\\an{}{}\\pos({},{})\\1a&HFF\\bord{}\\3c&HFFFFFF&\\3a&H80\\blur{:.1}\\shad0}}{}",
+                        style.align, wrap_tag, (w/2), y_pos,
                         style.outline_w as f32 * 2.0,
                         6.0,
                         stretch_tag_ms(dur_ms)
                     );
-                        let glow_text = assemble_colored_two_lines(
+                        let glow_text = assemble_cue(
                             &segment_tokens,
+                            &cue_layout,
                             i,
                             &white_bgr,
                             &hi_bgr,
-                            split_idx,
                             &glow_header,
+                            justify_lines,
                             style.font_size,
                         );
                         lines.push_str(&format!(
@@ -2411,20 +2445,22 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 
                         // Main text layer
                         let main_header = format!(
-                            "{{\\an{}\\q2\\pos({},{})\\bord{}\\blur0\\shad0}}{}",
+                            "{{\\an{}{}\\pos({},{})\\bord{}\\blur0\\shad0}}{}",
                             style.align,
+                            wrap_tag,
                             (w / 2),
                             y_pos,
                             style.outline_w,
                             stretch_tag_ms(dur_ms)
                         );
-                        let main_text = assemble_colored_two_lines(
+                        let main_text = assemble_cue(
                             &segment_tokens,
+                            &cue_layout,
                             i,
                             &white_bgr,
                             &hi_bgr,
-                            split_idx,
                             &main_header,
+                            justify_lines,
                             style.font_size,
                         );
                         lines.push_str(&format!(
@@ -2435,13 +2471,14 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                         ));
                     } else {
                         // Single layer
-                        let text = assemble_colored_two_lines(
+                        let text = assemble_cue(
                             &segment_tokens,
+                            &cue_layout,
                             i,
                             &white_bgr,
                             &hi_bgr,
-                            split_idx,
                             &header,
+                            justify_lines,
                             style.font_size,
                         );
                         lines.push_str(&format!(
@@ -2460,7 +2497,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
         let x = (w / 2) as i32;
         let default_y = style_anchor_y(style.align, style.margin_v, h);
 
-        let phrases = coalesce_phrases(segments);
+        let phrases = segment_phrases(segments);
 
         // NEW: state for smart highlighting
         let mut hl_state = HighlightState::new(segments);
@@ -2469,14 +2506,8 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             crate::debug_log!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
             let tokens_upper = normalize_tokens(&phrase.spans);
 
-            // Split phrase into segments suitable for the current style
-            let segments = if style.align == 5 {
-                // Storyteller: multiple lines per segment
-                split_phrase_multiline(&tokens_upper, &phrase.spans, w, style.font_size)
-            } else {
-                // Standard: 1-2 lines max
-                split_phrase_for_width(&tokens_upper, &phrase.spans, w, style.font_size)
-            };
+            // One cue per authored segment; libass wraps it (\q0 + margins).
+            let segments = vec![(tokens_upper, phrase.spans.clone())];
 
             for (segment_tokens, segment_spans) in segments {
                 let segment_tokens_orig = original_tokens(&segment_spans);
@@ -2493,44 +2524,26 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                 );
                 let hi_idx = hi_opt.unwrap_or(usize::MAX); // usize::MAX => no highlight
 
-                let is_storyteller = style.align == 5; // Safe-center / Storyteller mode
-
-                // Build text body
-                let text_body = if is_storyteller {
-                    // For storyteller, use multiline assembly with dynamic width balancing
-                    let est_char_width = (style.font_size as f32 * 0.50).max(1.0);
-                    let max_chars = ((w as f32 * 0.85) / est_char_width).floor() as usize;
-
-                    let total_chars: usize = segment_tokens.iter().map(|t| t.len()).sum();
-                    // Target 3-5 lines for a nice block
-                    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-                    // Clamp: at least 25 chars (for long words), at most max_chars
-                    let min_chars = 25.min(max_chars).max(1);
-                    let wrapping_width = soft_target.clamp(min_chars, max_chars);
-
-                    // Prepend bounce tag for entrance
-                    let mut body = bounce_tag();
-                    body.push_str(&assemble_multiline(
-                        &segment_tokens,
-                        hi_idx,
-                        &white_bgr,
-                        &hi_bgr,
-                        style.font_size,
-                        wrapping_width,
-                    ));
-                    body
-                } else {
-                    // Standard 1-2 line assembly
-                    assemble_colored_two_lines(
-                        &segment_tokens,
-                        hi_idx,
-                        &white_bgr,
-                        &hi_bgr,
-                        usize::MAX, // no line break forced here, let it flow or use split logic
-                        &bounce_tag(), // entrance scale
-                        style.font_size,
-                    )
-                };
+                // One assembly for every mode: the cue flows as authored and
+                // libass breaks it where it no longer fits. Storyteller differs
+                // only in its centered alignment (style.align == 5).
+                let cue_layout = cue_lines(
+                    &segment_tokens,
+                    justify_lines,
+                    &style.font_name,
+                    w,
+                    style.font_size,
+                );
+                let text_body = assemble_cue(
+                    &segment_tokens,
+                    &cue_layout,
+                    hi_idx,
+                    &white_bgr,
+                    &hi_bgr,
+                    &bounce_tag(), // entrance scale
+                    justify_lines,
+                    style.font_size,
+                );
 
                 // Now that the text is assembled we know how many lines it
                 // has, which is what deciding whether it clears the platform
@@ -2565,6 +2578,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
                     glow_blur,
                     "&H80",      // ~50% white glow
                     style.align, // Pass the alignment from style
+                    wrap_tag,
                 );
             }
         }
@@ -2670,168 +2684,7 @@ fn default_ass_style(
     }
 }
 
-// Split text into multiple lines (3-4 lines) for "Storyteller" mode
-// Aim for balanced lines, filling the middle of the screen
-fn split_phrase_multiline(
-    tokens: &[String],
-    spans: &[WordSpan],
-    frame_w: u32,
-    font_px: u32,
-) -> Vec<(Vec<String>, Vec<WordSpan>)> {
-    crate::debug_log!(
-        "DEBUG: split_phrase_multiline start. tokens={}",
-        tokens.len()
-    );
-    let (tokens, spans) = preprocess_hyphenated_tokens(tokens, spans); // Handle hyphens first
 
-    let est_char_width = (font_px as f32 * 0.7).max(1.0); // Consistent with split_phrase_for_width
-    let max_chars_per_line = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize;
-    let max_lines = 4;
-    // Target roughly 3-4 lines if text is long enough, otherwise fill normally.
-    // Calculate total chars to see if we SHOULD force multiline
-    let total_chars: usize = tokens.iter().map(|t| t.len()).sum();
-
-    // If text is short, just use standard wrapping (it might end up as 1-2 lines)
-    if total_chars < max_chars_per_line * 2 {
-        return split_phrase_for_width(&tokens, &spans, frame_w, font_px);
-    }
-
-    // For longer text, we want to balance it into a block of 3-4 lines.
-    // Heuristic: target line length = total_chars / 3.5 (aiming for 3-4 lines)
-    // trimmed to be at most max_chars_per_line
-    let soft_target = (total_chars as f32 / 3.5).ceil() as usize;
-    let min_chars = 25.min(max_chars_per_line).max(1); // Ensure min is not > max, and at least 1
-    let target_chars = soft_target.clamp(min_chars, max_chars_per_line);
-
-    let mut segments = Vec::new();
-    // In this specific "Storyteller" mode, we act as if the entire phrase is ONE segment (one screen),
-    // but the renderer expects a list of segments.
-    // Wait, the renderer iterates segments and shows them sequentially.
-    // If we want *one static block* of 3-4 lines, we need to return ONE segment containing ALL tokens,
-    // but we need to insert manual line breaks (\N) into the text later?
-    //
-    // NO, `build_ass_document` iterates segments and creates a new Dialogue line for each.
-    // If we split into multiple segments here, they will appear sequentially (replacing each other).
-    // The user wants "a 3-4 line preset... so caption doesn't overlap".
-    // This implies showing MORE text at once.
-    // So we should return FEWER segments, each containing MORE tokens, formatted with line breaks.
-
-    // Actually, `split_phrase_for_width` splits based on WIDTH only.
-    // If we want a block of text, we should pack as much as possible into one segment (up to 4 lines),
-    // and then the rendering logic needs to handle the line breaks.
-    //
-    // CURRENT LOGIC:
-    // `assemble_colored_two_lines` inserts `\N` after `line1_count`. It only supports 2 lines!
-    // We need to upgrade `assemble_colored_two_lines` or create a `assemble_multiline` function.
-
-    // Let's first pack tokens into chunks that fit in 4 lines.
-    let mut current_chunk_tokens = Vec::new();
-    let mut current_chunk_spans = Vec::new();
-    let mut current_chunk_lines = 1;
-    let mut current_line_len = 0;
-
-    crate::debug_log!(
-        "DEBUG: split_phrase_multiline starting loop over {} tokens",
-        tokens.len()
-    );
-    for (token, span) in tokens.iter().zip(spans.iter()) {
-        let token_len = token.len() + 1; // + space
-
-        if current_line_len + token_len > target_chars {
-            // Line full. Can we add another line to this chunk?
-            if current_chunk_lines < max_lines {
-                current_chunk_lines += 1;
-                current_line_len = token_len;
-                current_chunk_tokens.push(token.clone());
-                current_chunk_spans.push(span.clone());
-            } else {
-                // Chunk full (4 lines). Push and start new chunk.
-                segments.push((current_chunk_tokens.clone(), current_chunk_spans.clone()));
-                current_chunk_tokens.clear();
-                current_chunk_spans.clear();
-                current_chunk_tokens.push(token.clone());
-                current_chunk_spans.push(span.clone());
-                current_chunk_lines = 1;
-                current_line_len = token_len;
-            }
-        } else {
-            current_line_len += token_len;
-            current_chunk_tokens.push(token.clone());
-            current_chunk_spans.push(span.clone());
-        }
-    }
-    if !current_chunk_tokens.is_empty() {
-        segments.push((current_chunk_tokens, current_chunk_spans));
-    }
-
-    crate::debug_log!(
-        "DEBUG: split_phrase_multiline end. segments={}",
-        segments.len()
-    );
-    segments
-}
-
-// Assemble multi-line text with highlighting
-fn assemble_multiline(
-    tokens: &[String],
-    hi: usize,
-    white_bgr: &str,
-    hi_bgr: &str,
-    font_size: u32,
-    max_chars_per_line: usize,
-) -> String {
-    crate::debug_log!("DEBUG: assemble_multiline start. tokens={}", tokens.len());
-    // Similar to assemble_colored_two_lines but auto-wraps based on max_chars
-    let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
-    // Bigger font for highlight? Maybe not for block text, it might shift layout too much.
-    // Let's keep same size for stability in 4-line blocks.
-    let has_highlighting = hi != usize::MAX;
-    let hi_style = if has_highlighting {
-        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size)
-    } else {
-        white.clone()
-    };
-
-    let mut s = String::new();
-    let mut line_len = 0;
-
-    for (i, token) in tokens.iter().enumerate() {
-        if i % 10 == 0 {
-            crate::debug_log!("DEBUG: assemble_multiline loop i={}", i);
-        }
-        let t_clean = token
-            .replace('\\', r"\\")
-            .replace('{', r"\{")
-            .replace('}', r"\}");
-        let t_len = t_clean.len();
-
-        // Simple wrapping check
-        // Simple wrapping check
-        // Check if previous token ended with hyphen to suppress space
-        let prev_ended_with_hyphen = if i > 0 {
-            let prev = &tokens[i - 1];
-            prev.ends_with('-') && prev.len() > 1
-        } else {
-            false
-        };
-
-        if line_len > 0 && line_len + t_len + 1 > max_chars_per_line {
-            s.push_str(r"\N");
-            line_len = 0;
-        } else if line_len > 0 && !prev_ended_with_hyphen {
-            s.push(' ');
-            line_len += 1;
-        }
-
-        // Color logic
-        let should_highlight = has_highlighting && i == hi;
-        s.push_str(if should_highlight { &hi_style } else { &white });
-        s.push_str(&t_clean);
-
-        line_len += t_len;
-    }
-    s
-}
 
 /// Convert hex color string (e.g., "#ffffff") to ASS color format (e.g., "&H00FFFFFF")
 fn hex_to_ass_color(hex: &str) -> String {
@@ -2847,120 +2700,12 @@ fn hex_to_ass_color(hex: &str) -> String {
     }
 }
 
-// Split phrase into up to 2 lines for "Karaoke (Two Lines)" mode
-fn split_phrase_two_lines(
-    tokens: &[String],
-    spans: &[WordSpan],
-    frame_w: u32,
-    font_px: u32,
-) -> Vec<(Vec<String>, Vec<WordSpan>, usize)> {
-    // Determine max chars per line
-    let est_char_width = (font_px as f32 * 0.7).max(1.0);
-    // Use slightly less width to be safe for 2 lines
-    let max_chars = ((frame_w as f32 * 0.9) / est_char_width).floor() as usize;
 
-    // Target total length for a "screenful" (2 lines)
-    // We want to fill 2 lines if possible, so max capacity = 2 * max_chars
-    let max_capacity_chars = max_chars * 2;
-
-    let mut segments = Vec::new();
-    let mut current_tokens = Vec::new();
-    let mut current_spans = Vec::new();
-    let mut current_len = 0;
-
-    for (token, span) in tokens.iter().zip(spans.iter()) {
-        let token_len = token.len() + 1; // + space
-
-        if current_len > 0 && current_len + token_len > max_capacity_chars {
-            // Current 2-line block is full, push it
-            if !current_tokens.is_empty() {
-                let split_idx = find_best_split(&current_tokens, max_chars);
-                segments.push((current_tokens.clone(), current_spans.clone(), split_idx));
-                current_tokens.clear();
-                current_spans.clear();
-                current_len = 0;
-            }
-        }
-
-        current_tokens.push(token.clone());
-        current_spans.push(span.clone());
-        current_len += token_len;
-    }
-
-    if !current_tokens.is_empty() {
-        let split_idx = find_best_split(&current_tokens, max_chars);
-        segments.push((current_tokens, current_spans, split_idx));
-    }
-
-    segments
-}
-
-// Find best index to split tokens into 2 lines
-fn find_best_split(tokens: &[String], max_chars_per_line: usize) -> usize {
-    let mut current_len = 0;
-    for (i, token) in tokens.iter().enumerate() {
-        let len = token.len() + 1;
-        if current_len + len > max_chars_per_line {
-            // This token makes it overflow, so split BEFORE this token
-            // i.e., line 1 ends at index i (0..i includes i items?)
-            // assemble_colored_two_lines takes line1_count.
-            // If we return i, line 1 has i items (0 to i-1). Item i starts line 2.
-            return i;
-        }
-        current_len += len;
-    }
-    // If it all fits in one line, return usize::MAX so it doesn't break
-    usize::MAX
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_preprocess_hyphenated_tokens_splits_time() {
-        let span = WordSpan {
-            start_ms: 0,
-            end_ms: 1000,
-            text: "FOO-BAR".to_string(),
-            glue_to_previous: false,
-        };
-        let tokens = vec!["FOO-BAR".to_string()];
-        let spans = vec![span];
-
-        let (new_tokens, new_spans) = preprocess_hyphenated_tokens(&tokens, &spans);
-
-        assert_eq!(new_tokens.len(), 2);
-        assert_eq!(new_tokens[0], "FOO-");
-        assert_eq!(new_tokens[1], "BAR");
-
-        // "FOO-BAR" has 7 chars.
-        // "FOO-" is 4 chars.
-        // "BAR" is 3 chars.
-        // Duration 1000ms.
-        // Part 1: 1000 * 4/7 = 571ms.
-        // Part 2: 1000 * 3/7 = 428ms.
-
-        let s0 = new_spans[0].start_ms;
-        let e0 = new_spans[0].end_ms;
-        let s1 = new_spans[1].start_ms;
-        let e1 = new_spans[1].end_ms;
-
-        println!("Part 1 ({:?}): {} - {}", new_tokens[0], s0, e0);
-        println!("Part 2 ({:?}): {} - {}", new_tokens[1], s1, e1);
-
-        assert_eq!(s0, 0);
-        // We expect sequential times
-        assert!(e0 > 0);
-        assert_eq!(s1, e0); // Start of next = End of previous
-        assert_eq!(e1, 1000);
-
-        // Check approximate proportionality
-        let d0 = e0 - s0;
-        let d1 = e1 - s1;
-        assert!(d0 > d1); // 4 chars > 3 chars
-        assert!((d0 as i64 - 571).abs() < 5);
-    }
 
     #[test]
     fn test_assemble_colored_two_lines_hyphenation() {
@@ -2985,16 +2730,86 @@ mod tests {
         );
     }
 
+
     #[test]
-    fn test_assemble_multiline_hyphenation() {
-        let tokens = vec!["FOO-".to_string(), "BAR".to_string()];
+    fn justified_cues_carry_one_font_size_per_line() {
+        let segments = vec![CaptionSegment {
+            start_ms: 0,
+            end_ms: 2000,
+            text: "vähän niinku huonosta miesvalinnasta".to_string(),
+            words: vec![
+                WordSpan { start_ms: 0, end_ms: 500, text: "vähän".into(), glue_to_previous: false },
+                WordSpan { start_ms: 500, end_ms: 1000, text: "niinku".into(), glue_to_previous: false },
+                WordSpan { start_ms: 1000, end_ms: 1500, text: "huonosta".into(), glue_to_previous: false },
+                WordSpan { start_ms: 1500, end_ms: 2000, text: "miesvalinnasta".into(), glue_to_previous: false },
+            ],
+        }];
 
-        let result = assemble_multiline(&tokens, usize::MAX, "FFFFFF", "0000FF", 20, 100);
-
-        println!("Result: {}", result);
-        assert!(
-            !result.contains("FOO- "),
-            "Should not contain space after hyphen in multiline"
+        let style = default_ass_style(
+            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
         );
+        let doc = build_ass_document(
+            1080, 1920, &style, &segments,
+            false, // karaoke
+            false, // multiline
+            true,  // justify_lines
+            false, // glow
+            &[], &[],
+        )
+        .expect("document builds");
+
+        let dialogue = doc
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .expect("a dialogue line");
+
+        // Two lines, and the shorter one is set larger so both fill the box.
+        assert!(dialogue.contains(r"\N"), "expected a line break in {dialogue}");
+        let sizes: Vec<u32> = dialogue
+            .match_indices(r"\fs")
+            .filter_map(|(i, _)| {
+                // Skip \fscx / \fscy from the bounce animation.
+                let digits: String = dialogue[i + 3..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                digits.parse().ok()
+            })
+            .collect();
+        assert!(sizes.len() >= 4, "one size tag per word: {sizes:?}");
+        assert!(
+            sizes[0] > *sizes.last().unwrap(),
+            "first line should be the big one: {sizes:?}"
+        );
+        // Justified cues set their own breaks, so libass must not re-wrap.
+        assert!(dialogue.contains(r"\q2"), "expected \\q2 in {dialogue}");
+    }
+
+    #[test]
+    fn unjustified_cues_keep_one_size_and_let_libass_wrap() {
+        let segments = vec![CaptionSegment {
+            start_ms: 0,
+            end_ms: 1000,
+            text: "yksi kaksi".to_string(),
+            words: vec![
+                WordSpan { start_ms: 0, end_ms: 500, text: "yksi".into(), glue_to_previous: false },
+                WordSpan { start_ms: 500, end_ms: 1000, text: "kaksi".into(), glue_to_previous: false },
+            ],
+        }];
+
+        let style = default_ass_style(
+            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
+        );
+        let doc = build_ass_document(
+            1080, 1920, &style, &segments, false, false, false, false, &[], &[],
+        )
+        .expect("document builds");
+
+        let dialogue = doc
+            .lines()
+            .find(|l| l.starts_with("Dialogue:"))
+            .expect("a dialogue line");
+        assert!(dialogue.contains(r"\q0"), "expected \\q0 in {dialogue}");
+        assert!(!dialogue.contains(r"\N"), "no forced break expected in {dialogue}");
     }
 }

@@ -29,4 +29,6 @@ pub mod audio;
 pub mod video;
 pub mod captions;
 pub mod placement;
+pub mod justify;
+pub mod text_metrics;
 pub mod whisper;

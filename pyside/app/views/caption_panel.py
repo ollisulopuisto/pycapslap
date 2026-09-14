@@ -552,6 +552,16 @@ class CaptionPanelWidget(QWidget):
         self.chk_multiline.toggled.connect(self._on_multiline_toggled)
         row_colors.addWidget(self.chk_multiline)
 
+        self.chk_justify = QCheckBox("Justify")
+        self.chk_justify.setToolTip(
+            "Two lines flush to the same width: each line's font size is "
+            "chosen so it fills the caption box, so a short line renders "
+            "large and a long one small"
+        )
+        self.chk_justify.setChecked(self.current_style.justify_lines)
+        self.chk_justify.toggled.connect(self._on_justify_toggled)
+        row_colors.addWidget(self.chk_justify)
+
         self.chk_bg_box = QCheckBox("BG Box")
         self.chk_bg_box.setToolTip(
             "Draw a semi-transparent box behind the caption text (square "
@@ -598,6 +608,7 @@ class CaptionPanelWidget(QWidget):
         self.combo_template.addItem("Karaoke (Neon Green)", "karaoke")
         self.combo_template.addItem("Vibrant (Mint / Teal)", "vibrant")
         self.combo_template.addItem("Storyteller (Warm Amber)", "storyteller")
+        self.combo_template.addItem("Justified (Two Flush Lines)", "justified")
 
         custom_presets = self.preset_manager.list_presets()
         if custom_presets:
@@ -706,6 +717,10 @@ class CaptionPanelWidget(QWidget):
         self.current_style.multiline = checked
         self.style_changed.emit(self.current_style)
 
+    def _on_justify_toggled(self, checked: bool) -> None:
+        self.current_style.justify_lines = checked
+        self.style_changed.emit(self.current_style)
+
     def _on_bg_box_toggled(self, checked: bool) -> None:
         self.current_style.background_box = checked
         self.style_changed.emit(self.current_style)
@@ -758,6 +773,7 @@ class CaptionPanelWidget(QWidget):
         self.lbl_font_size.setText(f"{style.font_size} px")
         self.chk_karaoke.setChecked(style.karaoke)
         self.chk_multiline.setChecked(style.multiline)
+        self.chk_justify.setChecked(style.justify_lines)
         self.chk_bg_box.setChecked(style.background_box)
         self._update_color_buttons()
 

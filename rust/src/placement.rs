@@ -528,6 +528,7 @@ pub async fn auto_place_captions(params: AutoPlaceParams) -> Result<AutoPlaceRes
         position: params.position.clone(),
         karaoke: params.karaoke,
         multiline: params.multiline,
+        justify_lines: params.justify_lines,
         glow_effect: params.glow_effect,
         position_overrides: Vec::new(),
         blocked_bands: Vec::new(),

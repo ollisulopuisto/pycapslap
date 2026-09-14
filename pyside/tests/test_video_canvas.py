@@ -98,64 +98,122 @@ def test_video_canvas_portrait_video_caption_fit(qtbot):
     pix = canvas.grab()
     assert not pix.isNull()
 
-    # Verify wrapping logic on karaoke words
+    # Lines are wrapped against the same caption box the renderer uses.
     from PySide6.QtGui import QFont, QFontMetrics
 
-    font = QFont("Montserrat", 16, QFont.Weight.Black)
+    from app.views.video_canvas import CAPTION_SIDE_MARGIN_PCT, _join_words, _wrap_words
+
+    font = QFont("Montserrat")
+    font.setPixelSize(20)
     metrics = QFontMetrics(font)
-    max_w = v_rect.width() * 0.85
-    wrapped_lines = canvas._wrap_karaoke_words(words, metrics, max_w)
-    assert len(wrapped_lines) > 1, (
-        "Long text should wrap into multiple lines on 9:16 video"
-    )
-    for line in wrapped_lines:
-        line_w = canvas._measure_word_span_line(line, metrics)
-        assert line_w <= max_w
+    max_w = v_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
 
-
-def test_video_canvas_plain_text_wrapping(qtbot):
-    canvas = VideoCanvasWidget()
-    qtbot.addWidget(canvas)
-    canvas.resize(600, 400)
-
-    from PySide6.QtGui import QFont, QFontMetrics
-
-    font = QFont("Montserrat", 18, QFont.Weight.Black)
-    metrics = QFontMetrics(font)
-
-    tokens = "Welcome to PyCapSlap high performance native video captions".split()
-    max_w = 200.0  # Narrow width constraint
-    lines = canvas._wrap_plain_tokens(tokens, metrics, max_w)
-    assert len(lines) >= 2
+    layout_words = [
+        {"text": w.upper(), "isHighlighted": False} for w in long_text.split()
+    ]
+    lines = _wrap_words(layout_words, metrics, max_w)
+    assert len(lines) > 1, "long text should wrap on a 9:16 frame"
     for line in lines:
-        assert metrics.horizontalAdvance(line) <= max_w
+        # A single word wider than the box is the only allowed overflow.
+        assert len(line) == 1 or metrics.horizontalAdvance(_join_words(line)) <= max_w
 
 
-def test_video_canvas_karaoke_wrapping_keeps_syllables_together(qtbot):
+def test_video_canvas_wraps_like_the_renderer(qtbot):
+    from PySide6.QtGui import QFont, QFontMetrics
+
+    from app.views.video_canvas import _join_words, _wrap_words
+
     canvas = VideoCanvasWidget()
     qtbot.addWidget(canvas)
 
-    from PySide6.QtGui import QFont, QFontMetrics
-
-    font = QFont("Montserrat", 18, QFont.Weight.Black)
+    font = QFont("Montserrat")
+    font.setPixelSize(18)
     metrics = QFontMetrics(font)
 
     words = [
-        WordSpan(start_ms=0, end_ms=500, text="Lyhyt"),
-        WordSpan(start_ms=500, end_ms=1000, text=" alku"),
-        WordSpan(start_ms=1000, end_ms=1500, text=" pitkä"),
-        WordSpan(start_ms=1500, end_ms=2000, text="sana", glue_to_previous=True),
+        {"text": t, "isHighlighted": False}
+        for t in "WELCOME TO PYCAPSLAP HIGH PERFORMANCE NATIVE VIDEO CAPTIONS".split()
     ]
-    adv_prefix = metrics.horizontalAdvance("Lyhyt alku")
-    adv_pitka = metrics.horizontalAdvance(" pitkä")
-    max_w = adv_prefix + adv_pitka - 5
+    lines = _wrap_words(words, metrics, 200.0)
 
-    lines = canvas._wrap_karaoke_words(words, metrics, max_w)
-    assert len(lines) == 2
-    # Second line must hold both parts of the glued word together
-    assert len(lines[1]) == 2
-    assert lines[1][0].text == " pitkä"
-    assert lines[1][1].text == "sana"
+    assert len(lines) >= 2
+    for line in lines:
+        assert len(line) == 1 or metrics.horizontalAdvance(_join_words(line)) <= 200.0
+    # Wrapping only ever moves whole words between lines.
+    assert sum(len(line) for line in lines) == len(words)
+
+
+def test_video_canvas_draws_the_renderers_layout(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 700)
+
+    img = QImage(1080, 1920, QImage.Format.Format_ARGB32)
+    img.fill(QColor(40, 40, 40))
+    canvas.set_fallback_pixmap(QPixmap.fromImage(img))
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=2000,
+        text="vähän niinku huonosta miesvalinnasta",
+        words=[WordSpan(0, 2000, "vähän niinku huonosta miesvalinnasta")],
+    )
+    canvas.set_segment(seg, anchor_y_pct=80.0, current_pos_ms=500)
+
+    # A justified cue: two lines, each with its own size, as captions.rs emits.
+    canvas.set_layout_cue(
+        {
+            "lines": [
+                {
+                    "words": [
+                        {"text": "VÄHÄN", "isHighlighted": False},
+                        {"text": "NIINKU", "isHighlighted": False},
+                    ],
+                    "fontSizePx": 114,
+                },
+                {
+                    "words": [
+                        {"text": "HUONOSTA", "isHighlighted": False},
+                        {"text": "MIESVALINNASTA", "isHighlighted": True},
+                    ],
+                    "fontSizePx": 57,
+                },
+            ],
+            "yPct": 80.0,
+            "anchor": "bottom",
+        },
+        (1080, 1920),
+    )
+    canvas.show()
+
+    assert not canvas.grab().isNull()
+    assert canvas.layout_cue is not None
+    assert canvas.layout_frame_size == (1080, 1920)
+
+
+def test_video_canvas_fallback_cue_matches_the_renderer(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="pieni testi",
+        words=[WordSpan(0, 500, "pieni"), WordSpan(500, 1000, "testi")],
+    )
+    canvas.set_segment(seg, anchor_y_pct=80.0, current_pos_ms=100)
+    canvas.layout_frame_size = (1080, 1920)
+
+    cue = canvas._fallback_cue()
+    assert cue is not None
+    # The burn uppercases every caption, so the stand-in has to as well.
+    assert [w["text"] for w in cue["lines"][0]["words"]] == ["PIENI", "TESTI"]
+    # ...and use the renderer's proportional size, not the raw style size.
+    from app.views.video_canvas import proportional_font_size
+
+    assert cue["lines"][0]["fontSizePx"] == proportional_font_size(
+        1080, 1920, canvas.style.font_size
+    )
 
 
 def test_video_canvas_safe_platforms(qtbot):

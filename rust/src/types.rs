@@ -147,6 +147,9 @@ pub struct GenerateCaptionsParams {
     pub karaoke: bool,               // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
+    /// Two lines flush to the same width, each sized to fill it.
+    #[serde(default)]
+    pub justify_lines: bool,
     pub font_name: Option<String>,   // Font name for captions (defaults to "Montserrat Black")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size (at 1080p reference)
@@ -203,6 +206,9 @@ pub struct BurnCaptionsParams {
     pub karaoke: bool,                 // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
+    /// Two lines flush to the same width, each sized to fill it.
+    #[serde(default)]
+    pub justify_lines: bool,
     pub font_name: Option<String>,     // Font name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size
@@ -290,6 +296,8 @@ pub struct PreviewLayoutParams {
     pub karaoke: bool,
     #[serde(default)]
     pub multiline: bool,
+    #[serde(default)]
+    pub justify_lines: bool,
     pub glow_effect: bool,
     #[serde(default)]
     pub position_overrides: Vec<PositionOverride>,
@@ -326,6 +334,8 @@ pub struct PreviewCue {
 #[serde(rename_all = "camelCase")]
 pub struct PreviewLine {
     pub words: Vec<PreviewWord>,
+    /// Size this line renders at. Lines differ under justified layout.
+    pub font_size_px: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -381,6 +391,9 @@ pub struct PreviewFrameParams {
     pub karaoke: bool,                 // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
+    /// Two lines flush to the same width, each sized to fill it.
+    #[serde(default)]
+    pub justify_lines: bool,
     pub font_name: Option<String>,     // Font name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size
@@ -430,6 +443,9 @@ pub struct AutoPlaceParams {
     pub karaoke: bool,
     #[serde(default)]
     pub multiline: bool,
+    /// Two lines flush to the same width, each sized to fill it.
+    #[serde(default)]
+    pub justify_lines: bool,
     pub font_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>,

@@ -488,6 +488,10 @@ class CaptionStyle:
     # the preview even when turned on.
     background_box: bool = False
     glow_effect: bool = True
+    # Two lines flush to the same width, each line's font size chosen so it
+    # fills that width — the block look where a short line renders large and a
+    # long one small. The renderer measures the real font to size them.
+    justify_lines: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -502,6 +506,7 @@ class CaptionStyle:
             "multiline": self.multiline,
             "backgroundBox": self.background_box,
             "glowEffect": self.glow_effect,
+            "justifyLines": self.justify_lines,
         }
 
     @classmethod
@@ -518,6 +523,7 @@ class CaptionStyle:
             multiline=bool(d.get("multiline", True)),
             background_box=bool(d.get("backgroundBox", False)),
             glow_effect=bool(d.get("glowEffect", True)),
+            justify_lines=bool(d.get("justifyLines", False)),
         )
 
 
@@ -561,6 +567,17 @@ STYLE_PRESETS: dict[str, CaptionStyle] = {
         outline_color="#000000",
         outline_width=3,
         karaoke=False,
+    ),
+    "justified": CaptionStyle(
+        template_id="justified",
+        font_name="Montserrat Black",
+        font_size=65,
+        text_color="#ffffff",
+        highlight_color="#eaff00",
+        outline_color="#000000",
+        outline_width=3,
+        karaoke=False,
+        justify_lines=True,
     ),
 }
 

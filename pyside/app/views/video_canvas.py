@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
@@ -16,7 +17,26 @@ from PySide6.QtMultimedia import QVideoFrame, QVideoSink
 from PySide6.QtWidgets import QWidget
 
 from app.fonts import init_app_fonts
-from app.models.captions import CaptionSegment, CaptionStyle, WordSpan
+from app.models.captions import CaptionSegment, CaptionStyle
+
+
+# Mirrors captions.rs: the renderer keeps this much of the frame width free on
+# each side, and libass wraps lines against what is left.
+CAPTION_SIDE_MARGIN_PCT = 7.0
+
+# The reference frame the renderer scales its font size against
+# (captions.rs::calculate_proportional_font_size).
+FONT_REFERENCE_W = 608.0
+FONT_REFERENCE_H = 1080.0
+MIN_RENDER_FONT_PX = 18
+
+
+def proportional_font_size(frame_w: int, frame_h: int, base_size: int) -> int:
+    """The font size the burner would use for this frame — same formula."""
+    if frame_w <= 0 or frame_h <= 0:
+        return max(MIN_RENDER_FONT_PX, base_size)
+    scale = math.sqrt((frame_w * frame_h) / (FONT_REFERENCE_W * FONT_REFERENCE_H))
+    return max(MIN_RENDER_FONT_PX, round(base_size * scale))
 
 
 @dataclass
@@ -99,6 +119,10 @@ class VideoCanvasWidget(QWidget):
         self.anchor_y_pct: float = 80.0
         self.is_dragging: bool = False
         self.style: CaptionStyle = CaptionStyle()
+        # Layout handed down by the renderer for the current playback position,
+        # and the frame size it was computed for.
+        self.layout_cue: dict | None = None
+        self.layout_frame_size: tuple[int, int] = (1080, 1920)
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
 
         # Initialize fonts database
@@ -306,254 +330,180 @@ class VideoCanvasWidget(QWidget):
 
         painter.restore()
 
-    @staticmethod
-    def _word_display_text(word: WordSpan, is_first: bool) -> str:
-        txt = word.text
-        if is_first:
-            return txt.lstrip()
-        if not txt.startswith(" ") and not word.glue_to_previous:
-            return " " + txt
-        return txt
+    # ---- Caption painting -------------------------------------------------
+    #
+    # Everything below draws the layout the RENDERER produced (the Rust
+    # `previewLayout` call), not a second layout of its own. That is the whole
+    # point: line breaks, per-line font size, uppercasing, which word is
+    # highlighted and the anchor all come from the same code that writes the
+    # ASS document, so the preview and the burn agree. Only the drawing —
+    # pixels, outline, box — happens here, scaled from frame pixels into the
+    # on-screen video rectangle.
 
-    def _measure_word_span_line(
-        self, line: list[WordSpan], metrics: QFontMetrics
-    ) -> float:
-        total = 0.0
-        for i, w in enumerate(line):
-            display_t = self._word_display_text(w, is_first=(i == 0))
-            total += metrics.horizontalAdvance(display_t)
-        return total
+    def set_layout_cue(
+        self,
+        cue: dict | None,
+        frame_size: tuple[int, int] | None = None,
+    ) -> None:
+        """Hand the canvas the renderer's layout for the current position."""
+        self.layout_cue = cue
+        if frame_size and frame_size[0] > 0 and frame_size[1] > 0:
+            self.layout_frame_size = frame_size
+        self.update()
 
-    def _wrap_karaoke_words(
-        self, words: list[WordSpan], metrics: QFontMetrics, max_width: float
-    ) -> list[list[WordSpan]]:
+    def _fallback_cue(self) -> dict | None:
+        """A stand-in layout for before the renderer has answered.
+
+        Mirrors what the burner does with a cue it is not justifying: one
+        flowing, uppercased line at the style's proportional size.
+        """
+        seg = self.current_segment
+        if not seg or not seg.text.strip():
+            return None
+        frame_w, frame_h = self.layout_frame_size
+        font_px = proportional_font_size(frame_w, frame_h, self.style.font_size)
+        words = [w.text.strip() for w in (seg.words or []) if w.text.strip()]
         if not words:
-            return []
-
-        # 1. Group words and glued syllables into atomic word units
-        units: list[list[WordSpan]] = []
-        for w in words:
-            if units and (
-                w.glue_to_previous or units[-1][-1].text.strip().endswith("-")
-            ):
-                units[-1].append(w)
-            else:
-                units.append([w])
-
-        # 2. Wrap atomic units without breaking in the middle
-        lines: list[list[WordSpan]] = []
-        cur_line: list[WordSpan] = []
-
-        for unit in units:
-            if not cur_line:
-                cur_line.extend(unit)
-            else:
-                candidate = cur_line + unit
-                if self._measure_word_span_line(candidate, metrics) <= max_width:
-                    cur_line.extend(unit)
-                else:
-                    lines.append(cur_line)
-                    cur_line = list(unit)
-
-        if cur_line:
-            lines.append(cur_line)
-        return lines
-
-    @staticmethod
-    def _wrap_plain_tokens(
-        tokens: list[str], metrics: QFontMetrics, max_width: float
-    ) -> list[str]:
-        lines: list[str] = []
-        cur_line: list[str] = []
-
-        for t in tokens:
-            if not cur_line:
-                cur_line.append(t)
-            else:
-                candidate = " ".join(cur_line + [t])
-                if metrics.horizontalAdvance(candidate) <= max_width:
-                    cur_line.append(t)
-                else:
-                    lines.append(" ".join(cur_line))
-                    cur_line = [t]
-
-        if cur_line:
-            lines.append(" ".join(cur_line))
-        return lines
+            words = seg.text.split()
+        return {
+            "lines": [
+                {
+                    "words": [
+                        {"text": w.upper(), "isHighlighted": False} for w in words
+                    ],
+                    "fontSizePx": font_px,
+                }
+            ],
+            "yPct": self.anchor_y_pct,
+            "anchor": "bottom",
+        }
 
     def _paint_caption(
         self, painter: QPainter, video_rect: QRectF, anchor_y: float
     ) -> None:
-        text = self.current_segment.text.strip()
-        if not text:
+        cue = self.layout_cue or self._fallback_cue()
+        if not cue:
             return
 
-        # 1. Resolve font family. Bundled fonts are registered under their
-        # full family name (e.g. "Montserrat Black", "THE BOLD FONT"), so
-        # using only the first word here silently resolved to a different,
-        # unrelated font for nearly every multi-word family — this preview
-        # then looked nothing like the actual burned-in render, which always
-        # used the full name.
+        frame_w, frame_h = self.layout_frame_size
+        if frame_w <= 0 or frame_h <= 0:
+            return
+        scale = video_rect.width() / float(frame_w)
+        if scale <= 0:
+            return
+
         font_family = self.style.font_name or "Montserrat Black"
+        max_width = video_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
 
-        # 2. Proportional font sizing relative to video width and aspect ratio
-        vw = video_rect.width()
-        vh = video_rect.height()
-        if vw <= 0 or vh <= 0:
+        # Lay the cue out line by line. A layout line may still be wider than
+        # the box when the renderer left the wrapping to libass (\q0), so wrap
+        # it here the same way: greedily, at the same margins.
+        drawn_lines: list[tuple[list[dict], QFont, QFontMetrics]] = []
+        for line in cue.get("lines", []):
+            font_px = max(1.0, float(line.get("fontSizePx", 0)) * scale)
+            font = QFont(font_family)
+            font.setPixelSize(max(1, round(font_px)))
+            metrics = QFontMetrics(font)
+            words = line.get("words", [])
+            for chunk in _wrap_words(words, metrics, max_width):
+                drawn_lines.append((chunk, font, metrics))
+
+        if not drawn_lines:
             return
 
-        aspect = vw / vh
-        # Portrait (e.g. 9:16) uses 1080 reference width, landscape (16:9) uses 1920
-        ref_w = 1080.0 if aspect < 1.0 else 1920.0
-        base_size = float(self.style.font_size or 60)
-        start_font_size = max(12, int(base_size * (vw / ref_w)))
+        line_heights = [metrics.height() for _, _, metrics in drawn_lines]
+        total_h = sum(line_heights)
 
-        # Safe area: captions must never exceed 85% of video width
-        max_caption_width = max(40.0, vw * 0.85)
+        # The renderer anchors a bottom-aligned block by its bottom edge
+        # (\an2), a centered one by its middle (\an5); while dragging, the
+        # pointer wins so the caption follows the mouse.
+        y_pct = float(cue.get("yPct", self.anchor_y_pct))
+        anchor_kind = str(cue.get("anchor", "bottom"))
+        if self.is_dragging:
+            block_y = anchor_y
+            anchor_kind = "center"
+        else:
+            block_y = video_rect.top() + video_rect.height() * (y_pct / 100.0)
 
-        words = self.current_segment.words or []
-        has_words = bool(words) and self.style.karaoke
-        plain_tokens = text.split() if not has_words else []
+        if anchor_kind == "center":
+            block_top = block_y - total_h / 2.0
+        elif anchor_kind == "top":
+            block_top = block_y
+        else:
+            block_top = block_y - total_h
 
-        # 3. Dynamic fitting loop: ensure lines wrap and fit within max_caption_width
-        font_size = start_font_size
-        final_font = None
-        final_metrics = None
-        karaoke_lines: list[list[WordSpan]] = []
-        plain_lines: list[str] = []
-
-        while font_size >= 10:
-            test_font = QFont(font_family, font_size, QFont.Weight.Black)
-            test_metrics = QFontMetrics(test_font)
-
-            if has_words:
-                k_lines = self._wrap_karaoke_words(
-                    words, test_metrics, max_caption_width
-                )
-                max_w = max(
-                    (
-                        self._measure_word_span_line(line, test_metrics)
-                        for line in k_lines
-                    ),
-                    default=0.0,
-                )
-                if (
-                    max_w <= max_caption_width and len(k_lines) <= 3
-                ) or font_size == 10:
-                    final_font = test_font
-                    final_metrics = test_metrics
-                    karaoke_lines = k_lines
-                    break
-            else:
-                p_lines = self._wrap_plain_tokens(
-                    plain_tokens, test_metrics, max_caption_width
-                )
-                max_w = max(
-                    (test_metrics.horizontalAdvance(line) for line in p_lines),
-                    default=0.0,
-                )
-                if (
-                    max_w <= max_caption_width and len(p_lines) <= 3
-                ) or font_size == 10:
-                    final_font = test_font
-                    final_metrics = test_metrics
-                    plain_lines = p_lines
-                    break
-
-            font_size -= 1
-
-        if not final_font or not final_metrics:
-            return
-
-        font = final_font
-        metrics = final_metrics
-        line_h = metrics.height()
-        line_spacing = max(2, int(line_h * 0.12))
-        num_lines = len(karaoke_lines) if has_words else len(plain_lines)
-        total_block_h = num_lines * line_h + (num_lines - 1) * line_spacing
-
-        # Keep caption block vertically inside video_rect
-        block_top = anchor_y - (total_block_h / 2.0)
-        min_top = video_rect.top() + 8.0
-        max_top = video_rect.bottom() - total_block_h - 8.0
-        if min_top < max_top:
-            block_top = max(min_top, min(max_top, block_top))
-
-        # Pens & Colors
-        outline_width = max(1, int(self.style.outline_width * (font_size / 24.0)))
+        outline_px = max(1.0, self.style.outline_width * scale)
         outline_pen = QPen(
-            QColor(self.style.outline_color or "#000000"), outline_width * 2
+            QColor(self.style.outline_color or "#000000"), outline_px * 2
         )
         outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-
         text_color = QColor(self.style.text_color or "#ffffff")
         highlight_color = QColor(self.style.highlight_color or "#ffff00")
 
-        pill_pad_x = max(8, int(font_size * 0.35))
-        pill_pad_y = max(4, int(font_size * 0.15))
+        y = block_top
+        for words, font, metrics in drawn_lines:
+            line_text = _join_words(words)
+            line_w = metrics.horizontalAdvance(line_text)
+            x = video_rect.left() + (video_rect.width() - line_w) / 2.0
+            baseline = y + metrics.ascent()
 
-        # 4. Render lines
-        for idx in range(num_lines):
-            line_y = block_top + idx * (line_h + line_spacing)
-            baseline_y = line_y + metrics.ascent()
-
-            if has_words:
-                k_line = karaoke_lines[idx]
-                line_w = self._measure_word_span_line(k_line, metrics)
-                line_x = video_rect.left() + (video_rect.width() - line_w) / 2.0
-                line_x = max(video_rect.left() + 4.0, line_x)
-
-                pill_rect = QRectF(
-                    line_x - pill_pad_x,
-                    line_y - pill_pad_y,
-                    line_w + pill_pad_x * 2,
-                    line_h + pill_pad_y * 2,
+            if self.style.background_box:
+                # BorderStyle 3: an opaque, square-cornered box the height of
+                # the line, padded proportionally to the font — libass has no
+                # rounded corners, so neither does this.
+                pad = max(6.0, round(metrics.height() * 0.22))
+                painter.fillRect(
+                    QRectF(
+                        x - pad,
+                        y,
+                        line_w + pad * 2,
+                        metrics.height(),
+                    ),
+                    QColor(self.style.outline_color or "#000000"),
                 )
-                pill_path = QPainterPath()
-                pill_path.addRoundedRect(pill_rect, 6, 6)
-                if self.style.background_box:
-                    painter.fillPath(pill_path, QColor(0, 0, 0, 180))
 
-                if self.is_dragging:
-                    painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))
-                    painter.drawPath(pill_path)
+            if self.is_dragging:
+                painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(QRectF(x - 6, y, line_w + 12, metrics.height()))
 
-                cur_x = line_x
-                for w_idx, word in enumerate(k_line):
-                    display_text = self._word_display_text(word, is_first=(w_idx == 0))
-                    w_advance = metrics.horizontalAdvance(display_text)
-                    is_active = word.start_ms <= self.current_pos_ms < word.end_ms
-                    fill_color = highlight_color if is_active else text_color
-
-                    wpath = QPainterPath()
-                    wpath.addText(cur_x, baseline_y, font, display_text)
-                    painter.strokePath(wpath, outline_pen)
-                    painter.fillPath(wpath, fill_color)
-
-                    cur_x += w_advance
-
-            else:
-                p_line = plain_lines[idx]
-                line_w = metrics.horizontalAdvance(p_line)
-                line_x = video_rect.left() + (video_rect.width() - line_w) / 2.0
-                line_x = max(video_rect.left() + 4.0, line_x)
-
-                pill_rect = QRectF(
-                    line_x - pill_pad_x,
-                    line_y - pill_pad_y,
-                    line_w + pill_pad_x * 2,
-                    line_h + pill_pad_y * 2,
+            cursor_x = x
+            for i, word in enumerate(words):
+                text = str(word.get("text", ""))
+                if i > 0:
+                    text = " " + text
+                path = QPainterPath()
+                path.addText(cursor_x, baseline, font, text)
+                if not self.style.background_box:
+                    painter.strokePath(path, outline_pen)
+                painter.fillPath(
+                    path,
+                    highlight_color if word.get("isHighlighted") else text_color,
                 )
-                pill_path = QPainterPath()
-                pill_path.addRoundedRect(pill_rect, 6, 6)
-                if self.style.background_box:
-                    painter.fillPath(pill_path, QColor(0, 0, 0, 180))
+                cursor_x += metrics.horizontalAdvance(text)
 
-                if self.is_dragging:
-                    painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))
-                    painter.drawPath(pill_path)
+            y += metrics.height()
 
-                tpath = QPainterPath()
-                tpath.addText(line_x, baseline_y, font, p_line)
-                painter.strokePath(tpath, outline_pen)
-                painter.fillPath(tpath, text_color)
+
+def _join_words(words: list[dict]) -> str:
+    return " ".join(str(w.get("text", "")) for w in words)
+
+
+def _wrap_words(
+    words: list[dict], metrics: QFontMetrics, max_width: float
+) -> list[list[dict]]:
+    """Greedy wrap, mirroring libass \q0 against the same caption box."""
+    if not words:
+        return []
+    lines: list[list[dict]] = []
+    current: list[dict] = []
+    for word in words:
+        candidate = current + [word]
+        if current and metrics.horizontalAdvance(_join_words(candidate)) > max_width:
+            lines.append(current)
+            current = [word]
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return lines

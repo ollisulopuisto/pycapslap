@@ -57,6 +57,15 @@ class MainWindow(QMainWindow):
 
         self._seek_latencies: list[float] = []
 
+        # Caption layout as the renderer computes it, so the preview draws the
+        # same blocks the burn will. Refreshed off a timer because every
+        # keystroke in the cue table would otherwise hit the core.
+        self._preview_cues: list[dict] = []
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(120)
+        self._layout_timer.timeout.connect(self._request_preview_layout)
+
         self._setup_ui()
         self._setup_connections()
         self._setup_dark_theme()
@@ -240,14 +249,89 @@ class MainWindow(QMainWindow):
         self.project.segments = list(segments)
         self.timeline.set_segments(self.project.segments)
         self.caption_panel.set_segments(self.project.segments)
+        self.schedule_preview_layout()
 
     def _on_style_changed(self, style: CaptionStyle) -> None:
         self.project.style = style
         self.project.is_dirty = True
         self.player.canvas.set_style(style)
+        self.schedule_preview_layout()
+
+    def schedule_preview_layout(self) -> None:
+        """Ask the renderer for a fresh layout once the edits settle."""
+        self._layout_timer.start()
+
+    def _preview_frame_size(self) -> tuple[int, int]:
+        size = self.player.canvas.get_video_size()
+        return size or (1080, 1920)
+
+    def _request_preview_layout(self) -> None:
+        if not self.project.segments:
+            self._preview_cues = []
+            self._apply_preview_layout()
+            return
+
+        frame_w, frame_h = self._preview_frame_size()
+        style = self.project.style
+        params = {
+            "segments": [s.to_dict() for s in self.project.segments],
+            "width": frame_w,
+            "height": frame_h,
+            "fontName": style.font_name,
+            "fontSize": style.font_size,
+            "textColor": style.text_color,
+            "highlightWordColor": style.highlight_color,
+            "outlineColor": style.outline_color,
+            "outlineWidth": style.outline_width,
+            "backgroundBox": style.background_box,
+            "position": None,
+            "karaoke": style.karaoke,
+            "multiline": style.multiline,
+            "justifyLines": style.justify_lines,
+            "glowEffect": style.glow_effect,
+            "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
+            "blockedBands": [],
+        }
+
+        try:
+            fut = self.core.call("previewLayout", params)
+        except Exception:
+            return
+
+        def on_done(f) -> None:
+            try:
+                result = f.result()
+            except Exception:
+                # No core, or it refused: the canvas keeps drawing its own
+                # stand-in layout rather than going blank.
+                return
+            cues = (result or {}).get("cues", [])
+
+            def apply(cues=cues) -> None:
+                self._preview_cues = cues
+                self._apply_preview_layout()
+
+            QTimer.singleShot(0, apply)
+
+        fut.add_done_callback(on_done)
+
+    def _cue_for_position(self, pos_ms: int) -> dict | None:
+        for cue in self._preview_cues:
+            if cue.get("startMs", 0) <= pos_ms < cue.get("endMs", 0):
+                return cue
+        return None
+
+    def _apply_preview_layout(self) -> None:
+        pos_ms = self.player.media_player.position()
+        self.overlay.set_layout_cue(
+            self._cue_for_position(pos_ms), self._preview_frame_size()
+        )
 
     def _on_position_changed(self, pos_ms: int) -> None:
         self.timeline.set_position(pos_ms)
+        self.overlay.set_layout_cue(
+            self._cue_for_position(pos_ms), self._preview_frame_size()
+        )
         active = self.project.get_active_segment(pos_ms)
         if active:
             anchor_y = self.project.get_anchor_y_for_segment(active)
@@ -267,16 +351,19 @@ class MainWindow(QMainWindow):
             seg = self.overlay.current_segment
             self.project.set_segment_position_override(seg, anchor_pct)
             self.caption_panel.set_anchor_pct(anchor_pct, user_action=False)
+            self.schedule_preview_layout()
 
     def _on_panel_override_changed(
         self, seg: CaptionSegment, anchor_pct: float
     ) -> None:
         self.project.set_segment_position_override(seg, anchor_pct)
+        self.schedule_preview_layout()
         if self.overlay.current_segment == seg:
             self.overlay.set_segment(seg, anchor_pct)
 
     def _on_apply_position_to_all_requested(self, anchor_pct: float) -> None:
         self.project.apply_position_to_all(anchor_pct)
+        self.schedule_preview_layout()
         pos_ms = self.player.media_player.position()
         self._on_position_changed(pos_ms)
         self.status.showMessage(
@@ -286,6 +373,7 @@ class MainWindow(QMainWindow):
     def _on_segment_text_updated(self, seg: CaptionSegment) -> None:
         self.project.is_dirty = True
         self.timeline.update()
+        self.schedule_preview_layout()
         if self.overlay.current_segment == seg:
             pos_ms = self.player.media_player.position()
             anchor_y = self.project.get_anchor_y_for_segment(seg)
@@ -295,6 +383,7 @@ class MainWindow(QMainWindow):
         self.project.segments = list(segments)
         self.project.is_dirty = True
         self.timeline.set_segments(self.project.segments)
+        self.schedule_preview_layout()
         pos_ms = self.player.media_player.position()
         self._on_position_changed(pos_ms)
 
@@ -405,6 +494,7 @@ class MainWindow(QMainWindow):
             "exportFormats": [export_fmt],
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
+            "justifyLines": self.project.style.justify_lines,
             "fontName": self.project.style.font_name,
             "fontSize": self.project.style.font_size,
             "textColor": self.project.style.text_color,
@@ -480,6 +570,7 @@ class MainWindow(QMainWindow):
             "exportFormat": export_fmt,
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
+            "justifyLines": self.project.style.justify_lines,
             "fontName": self.project.style.font_name,
             "fontSize": self.project.style.font_size,
             "textColor": self.project.style.text_color,
