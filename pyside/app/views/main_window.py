@@ -555,7 +555,6 @@ class MainWindow(QMainWindow):
             # own phrase/sentence segments (with per-word timing nested in
             # each segment's `words`, still available for highlighting).
             "splitByWords": self.project.style.karaoke,
-            "language": None,
             **provider_params,
         }
 

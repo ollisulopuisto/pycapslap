@@ -34,21 +34,53 @@ from app.core_client import CoreClient
 LOCAL_MODELS = ["tiny", "base", "small", "medium", "large", "turbo"]
 DEFAULT_LOCAL_MODEL = "tiny"
 
+# ISO-639-1 codes Whisper's tokenizer recognizes, code -> display name.
+# Both the whisper.cpp `-l` flag and the OpenAI API `language` form field
+# accept these (see rust/src/whisper.rs).
+WHISPER_LANGUAGES = {
+    "en": "English", "zh": "Chinese", "de": "German", "es": "Spanish",
+    "ru": "Russian", "ko": "Korean", "fr": "French", "ja": "Japanese",
+    "pt": "Portuguese", "tr": "Turkish", "pl": "Polish", "ca": "Catalan",
+    "nl": "Dutch", "ar": "Arabic", "sv": "Swedish", "it": "Italian",
+    "id": "Indonesian", "hi": "Hindi", "fi": "Finnish", "vi": "Vietnamese",
+    "he": "Hebrew", "uk": "Ukrainian", "el": "Greek", "ms": "Malay",
+    "cs": "Czech", "ro": "Romanian", "da": "Danish", "hu": "Hungarian",
+    "ta": "Tamil", "no": "Norwegian", "th": "Thai", "ur": "Urdu",
+    "hr": "Croatian", "bg": "Bulgarian", "lt": "Lithuanian", "la": "Latin",
+    "mi": "Maori", "ml": "Malayalam", "cy": "Welsh", "sk": "Slovak",
+    "te": "Telugu", "fa": "Persian", "lv": "Latvian", "bn": "Bengali",
+    "sr": "Serbian", "az": "Azerbaijani", "sl": "Slovenian", "kn": "Kannada",
+    "et": "Estonian", "mk": "Macedonian", "eu": "Basque", "is": "Icelandic",
+    "hy": "Armenian", "ne": "Nepali", "mn": "Mongolian", "bs": "Bosnian",
+    "kk": "Kazakh", "sq": "Albanian", "sw": "Swahili", "gl": "Galician",
+    "mr": "Marathi", "pa": "Punjabi", "si": "Sinhala", "km": "Khmer",
+    "sn": "Shona", "yo": "Yoruba", "so": "Somali", "af": "Afrikaans",
+    "ka": "Georgian", "be": "Belarusian", "gu": "Gujarati", "am": "Amharic",
+    "lo": "Lao", "uz": "Uzbek", "ps": "Pashto", "mt": "Maltese",
+    "tl": "Tagalog",
+}
+AUTO_DETECT = "auto"
+
 _PROVIDER_KEY = "whisper/provider"
 _MODEL_KEY = "whisper/model"
 _API_KEY_KEY = "whisper/api_key"
+_LANGUAGE_KEY = "whisper/language"
 
 
 def get_transcription_params() -> dict:
     """Read the persisted provider choice as a params fragment to merge into
-    the `transcribe` / `generateCaptions` RPC call (`model`, `apiKey`)."""
+    the `transcribe` / `generateCaptions` RPC call (`model`, `apiKey`,
+    `language`)."""
     settings = QSettings()
+    language_code = settings.value(_LANGUAGE_KEY, AUTO_DETECT, type=str)
+    language = None if not language_code or language_code == AUTO_DETECT else language_code
+
     provider = settings.value(_PROVIDER_KEY, "local")
     if provider == "openai":
         api_key = settings.value(_API_KEY_KEY, "", type=str)
-        return {"model": "whisper-1", "apiKey": api_key or None}
+        return {"model": "whisper-1", "apiKey": api_key or None, "language": language}
     model = settings.value(_MODEL_KEY, DEFAULT_LOCAL_MODEL, type=str)
-    return {"model": model or DEFAULT_LOCAL_MODEL, "apiKey": None}
+    return {"model": model or DEFAULT_LOCAL_MODEL, "apiKey": None, "language": language}
 
 
 class WhisperSettingsDialog(QDialog):
@@ -87,6 +119,17 @@ class WhisperSettingsDialog(QDialog):
         self.model_combo = QComboBox()
         self.model_combo.addItems(LOCAL_MODELS)
         form.addRow("Local model:", self.model_combo)
+
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("Auto-detect", AUTO_DETECT)
+        for code, name in sorted(WHISPER_LANGUAGES.items(), key=lambda kv: kv[1]):
+            self.language_combo.addItem(name, code)
+        self.language_combo.setToolTip(
+            "Whisper's auto-detect guesses from the first ~30s of audio and can "
+            "pick the wrong language. Force it here if you get captions in the "
+            "wrong language."
+        )
+        form.addRow("Language:", self.language_combo)
 
         model_row = QHBoxLayout()
         self.model_status_lbl = QLabel("")
@@ -129,6 +172,10 @@ class WhisperSettingsDialog(QDialog):
         self.model_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         self.api_key_edit.setText(self.settings.value(_API_KEY_KEY, "", type=str))
+
+        language_code = self.settings.value(_LANGUAGE_KEY, AUTO_DETECT, type=str)
+        idx = self.language_combo.findData(language_code)
+        self.language_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _update_enabled_state(self) -> None:
         is_local = self.radio_local.isChecked()
@@ -195,4 +242,5 @@ class WhisperSettingsDialog(QDialog):
         )
         self.settings.setValue(_MODEL_KEY, self.model_combo.currentText())
         self.settings.setValue(_API_KEY_KEY, self.api_key_edit.text().strip())
+        self.settings.setValue(_LANGUAGE_KEY, self.language_combo.currentData())
         self.accept()
