@@ -292,3 +292,52 @@ def test_layer_height_is_quantized(qtbot):
     canvas.resize(362, 643)
     assert canvas.layer_height() == first
     assert first % 120 == 0
+
+
+def test_export_canvas_pads_the_video_and_carries_the_captions(qtbot):
+    """A 9:16 export of a 16:9 source is a taller frame with the video inside.
+
+    The captions are laid out against that taller frame, so the editor has to
+    show it — otherwise it previews a frame the render never produces.
+    """
+    from PySide6.QtGui import QPixmap
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 800)
+    # A 16:9 source, via the thumbnail fallback.
+    source = QPixmap(1920, 1080)
+    source.fill()
+    canvas.set_fallback_pixmap(source)
+
+    # No export canvas: the video fills what the canvas draws.
+    assert canvas._get_canvas_rect() == canvas._get_video_rect()
+
+    canvas.set_export_canvas((1920, 3414))
+    canvas_rect = canvas._get_canvas_rect()
+    video_rect = canvas._get_video_rect()
+    assert canvas_rect.height() > video_rect.height()
+    assert abs(canvas_rect.width() - video_rect.width()) < 1.0
+    # Padding above and below, video centred.
+    assert video_rect.top() > canvas_rect.top()
+    assert video_rect.bottom() < canvas_rect.bottom()
+    assert abs(canvas_rect.height() / canvas_rect.width() - 3414 / 1920) < 0.01
+
+
+def test_anchor_is_read_against_the_export_canvas(qtbot):
+    """yPct is a fraction of the exported frame, padding included."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QPixmap
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 800)
+    source = QPixmap(1920, 1080)
+    source.fill()
+    canvas.set_fallback_pixmap(source)
+    canvas.set_export_canvas((1080, 1920))
+
+    rect = canvas._get_canvas_rect()
+    midpoint = QPoint(int(rect.center().x()), int(rect.top() + rect.height() * 0.5))
+    canvas._update_anchor_from_pos(midpoint)
+    assert abs(canvas.anchor_y_pct - 50.0) < 1.0

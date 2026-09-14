@@ -12,11 +12,10 @@ from PySide6.QtGui import (
     QPixmap,
     QShortcut,
 )
-from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -43,9 +42,22 @@ from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
 
 
+# What the export format dropdown offers, and the aspect each one asks the
+# renderer for. "Source" keeps the video's own frame.
+EXPORT_FORMATS: list[tuple[str, str]] = [
+    ("Export: Source", "source"),
+    ("Export: 9:16 Portrait", "9:16"),
+    ("Export: 16:9 Landscape", "16:9"),
+    ("Export: 1:1 Square", "1:1"),
+    ("Export: 4:5 Vertical", "4:5"),
+]
+
 # How many rendered cues to keep. Each is a full-frame ARGB pixmap, so this
 # is a memory budget, not a hit-rate tuning knob.
 LAYER_CACHE_SIZE = 24
+
+# Renders allowed in flight at once. Each is two ffmpeg processes.
+MAX_LAYER_RENDERS = 3
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +87,11 @@ class MainWindow(QMainWindow):
         self._layer_pending: set[int] = set()
         self._layer_epoch = 0
         self._layer_wanted: dict | None = None
+        self._layer_queue: list[dict] = []
+        self._prefetched_block: tuple[int, int] | None = None
+        # The canvas the renderer last laid the captions out on — the export
+        # canvas, which is the source frame only when the two agree.
+        self._canvas_size: tuple[int, int] | None = None
         # Scrubbing crosses a cue every few pixels; rendering each one it
         # passes over would keep two ffmpeg processes busy per cue for
         # nothing. Only the cue the user comes to rest on gets rendered.
@@ -121,6 +138,18 @@ class MainWindow(QMainWindow):
         self.save_btn.clicked.connect(self._on_save_requested)
         self.save_btn.setEnabled(False)
         action_bar.addWidget(self.save_btn)
+
+        # The export format belongs here, not in a dialog at render time: it
+        # decides the canvas the captions are laid out on, so the preview
+        # cannot be honest about anything until it knows which one it is.
+        self.format_combo = QComboBox()
+        for label, value in EXPORT_FORMATS:
+            self.format_combo.addItem(label, value)
+        self.format_combo.setToolTip(
+            "Aspect ratio of the exported video. The preview shows this frame."
+        )
+        self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
+        action_bar.addWidget(self.format_combo)
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
@@ -222,6 +251,11 @@ class MainWindow(QMainWindow):
 
         # Overlay signals
         self.overlay.anchor_changed.connect(self._on_overlay_anchor_changed)
+        # Until a frame has been decoded the frame size is a guess, and every
+        # layout computed from it is a guess too. Redo them once it is known.
+        self.player.canvas.video_size_changed.connect(
+            self._on_video_size_changed
+        )
 
         # Caption Panel signals
         self.caption_panel.segment_selected.connect(self._on_segment_selected)
@@ -298,11 +332,28 @@ class MainWindow(QMainWindow):
         self._layer_cache.clear()
         self._layer_pending.clear()
         self._layer_wanted = None
+        self._layer_queue.clear()
+        self._prefetched_block = None
         self.overlay.set_caption_layer(None)
 
     def _preview_frame_size(self) -> tuple[int, int]:
         size = self.player.canvas.get_video_size()
         return size or (1080, 1920)
+
+    def _export_format(self) -> str:
+        return self.format_combo.currentData() or "source"
+
+    def _canvas_frame_size(self) -> tuple[int, int]:
+        """The frame the captions were laid out on, as the renderer sized it."""
+        return self._canvas_size or self._preview_frame_size()
+
+    def _on_video_size_changed(self, _w: int, _h: int) -> None:
+        self.schedule_preview_layout()
+
+    def _on_export_format_changed(self, _index: int) -> None:
+        # Another canvas means another layout and other pixels: everything
+        # rendered for the previous one is wrong.
+        self.schedule_preview_layout()
 
     def _request_preview_layout(self) -> None:
         if not self.project.segments:
@@ -310,7 +361,8 @@ class MainWindow(QMainWindow):
             self._apply_preview_layout()
             return
 
-        frame_w, frame_h = self._preview_frame_size()
+        source_size = self._preview_frame_size()
+        frame_w, frame_h = source_size
         style = self.project.style
         params = {
             "segments": [s.to_dict() for s in self.project.segments],
@@ -330,6 +382,7 @@ class MainWindow(QMainWindow):
             "glowEffect": style.glow_effect,
             "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
             "blockedBands": [],
+            "exportFormat": self._export_format(),
         }
 
         try:
@@ -345,9 +398,20 @@ class MainWindow(QMainWindow):
                 # stand-in layout rather than going blank.
                 return
             cues = (result or {}).get("cues", [])
+            canvas = (
+                int((result or {}).get("frameWidth", 0)),
+                int((result or {}).get("frameHeight", 0)),
+            )
 
-            def apply(cues=cues) -> None:
+            def apply(cues=cues, canvas=canvas, source=source_size) -> None:
                 self._preview_cues = cues
+                if canvas[0] > 0 and canvas[1] > 0:
+                    self._canvas_size = canvas
+                    # Padding only exists when the export canvas differs from
+                    # the frame this layout was computed against.
+                    self.player.canvas.set_export_canvas(
+                        None if canvas == source else canvas
+                    )
                 self._apply_preview_layout()
 
             # Three-argument form: this runs on the core client's reader
@@ -365,8 +429,8 @@ class MainWindow(QMainWindow):
     # So for anything that stands still — paused, scrubbed, restyled — the
     # renderer is asked for the cue as pixels, on a transparent canvas the
     # size of the video frame, from the same ASS document the burn writes.
-    # Playback and dragging keep the painted approximation, which costs
-    # nothing per frame.
+    # Dragging keeps the painted approximation, which follows the pointer for
+    # free. Playback keeps whatever the block prefetch has already rendered.
 
     def _sync_caption_layer(self, cue: dict | None) -> None:
         if cue is None:
@@ -380,6 +444,31 @@ class MainWindow(QMainWindow):
             self._layer_wanted = cue
             self._layer_timer.start()
 
+        # Karaoke cuts a caption into one cue per word, and the reader sees
+        # all of them in a couple of seconds. Rendering the whole block as
+        # soon as one of its windows comes up is what lets playback show the
+        # real thing instead of the approximation.
+        block = (int(cue.get("groupStartMs", key)), int(cue.get("groupEndMs", key)))
+        if block != self._prefetched_block:
+            self._prefetched_block = block
+            self._prefetch_block(cue)
+
+    def _prefetch_block(self, cue: dict) -> None:
+        group = (
+            int(cue.get("groupStartMs", -1)),
+            int(cue.get("groupEndMs", -1)),
+        )
+        if group == (-1, -1):
+            return
+        for other in self._preview_cues:
+            same_block = (
+                int(other.get("groupStartMs", -2)),
+                int(other.get("groupEndMs", -2)),
+            ) == group
+            if same_block:
+                self._queue_caption_layer(other)
+        self._pump_layer_queue()
+
     def _render_wanted_layer(self) -> None:
         cue = self._layer_wanted
         self._layer_wanted = None
@@ -392,23 +481,49 @@ class MainWindow(QMainWindow):
             cue.get("startMs", 0)
         ):
             return
-        self._request_caption_layer(cue)
+        # Straight to the front: this is the cue on screen right now.
+        self._queue_caption_layer(cue, front=True)
+        self._pump_layer_queue()
 
     def _layer_source_video(self) -> str:
         path = self.player.media_player.source().toLocalFile()
         return path or (self.project.video_path or "")
 
-    def _request_caption_layer(self, cue: dict) -> None:
-        playing = QMediaPlayer.PlaybackState.PlayingState
-        if self.player.media_player.playbackState() == playing:
+    def _queue_caption_layer(self, cue: dict, front: bool = False) -> None:
+        key = int(cue.get("startMs", 0))
+        if key in self._layer_cache or key in self._layer_pending:
             return
+        self._layer_queue = [
+            q for q in self._layer_queue if int(q.get("startMs", 0)) != key
+        ]
+        if front:
+            self._layer_queue.insert(0, cue)
+        else:
+            self._layer_queue.append(cue)
+
+    def _pump_layer_queue(self) -> None:
+        """Keep a few renders in flight, never the whole queue at once.
+
+        Each one is two ffmpeg processes; letting a twelve-word block start
+        twelve of them at once would fight the video playback for the same
+        cores it is trying to stay ahead of.
+        """
+        while self._layer_queue and len(self._layer_pending) < MAX_LAYER_RENDERS:
+            cue = self._layer_queue.pop(0)
+            key = int(cue.get("startMs", 0))
+            if key in self._layer_cache or key in self._layer_pending:
+                continue
+            if not self._request_caption_layer(cue):
+                break
+
+    def _request_caption_layer(self, cue: dict) -> bool:
         source_file = self._layer_source_video()
         if not source_file or not self.project.segments:
-            return
+            return False
 
         key = int(cue.get("startMs", 0))
         if key in self._layer_pending:
-            return
+            return False
 
         # A karaoke window opens with a \fscx pop; render past it so the cue
         # is caught at rest and one render stands for the whole window.
@@ -420,9 +535,9 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "segments": [s.to_dict() for s in self.project.segments],
             "timestampMs": timestamp,
-            # The video's own frame, not an export canvas: the layer has to
-            # land on the pixels the editor is showing.
-            "exportFormat": "source",
+            # The same canvas the layout was computed on, which is what the
+            # editor is now showing, padding and all.
+            "exportFormat": self._export_format(),
             "karaoke": style.karaoke,
             "multiline": style.multiline,
             "justifyLines": style.justify_lines,
@@ -442,30 +557,35 @@ class MainWindow(QMainWindow):
         try:
             fut = self.core.call("generatePreviewFrame", params)
         except Exception:
-            return
+            return False
 
         self._layer_pending.add(key)
         epoch = self._layer_epoch
+
+        def release() -> None:
+            self._layer_pending.discard(key)
+            self._pump_layer_queue()
 
         def on_done(f) -> None:
             try:
                 result = f.result()
             except Exception:
-                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                QTimer.singleShot(0, self, release)
                 return
             data_uri = (result or {}).get("imageData", "")
             raw = data_uri.split(",", 1)[1] if "," in data_uri else ""
             if not raw:
-                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                QTimer.singleShot(0, self, release)
                 return
             try:
                 image = QImage.fromData(base64.b64decode(raw))
             except (ValueError, TypeError):
-                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                QTimer.singleShot(0, self, release)
                 return
 
             def store(image=image) -> None:
                 self._layer_pending.discard(key)
+                self._pump_layer_queue()
                 if epoch != self._layer_epoch or image.isNull():
                     return
                 pixmap = QPixmap.fromImage(image)
@@ -482,6 +602,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, self, store)
 
         fut.add_done_callback(on_done)
+        return True
 
     def _cue_for_position(self, pos_ms: int) -> dict | None:
         for cue in self._preview_cues:
@@ -492,13 +613,13 @@ class MainWindow(QMainWindow):
     def _apply_preview_layout(self) -> None:
         pos_ms = self.player.media_player.position()
         cue = self._cue_for_position(pos_ms)
-        self.overlay.set_layout_cue(cue, self._preview_frame_size())
+        self.overlay.set_layout_cue(cue, self._canvas_frame_size())
         self._sync_caption_layer(cue)
 
     def _on_position_changed(self, pos_ms: int) -> None:
         self.timeline.set_position(pos_ms)
         cue = self._cue_for_position(pos_ms)
-        self.overlay.set_layout_cue(cue, self._preview_frame_size())
+        self.overlay.set_layout_cue(cue, self._canvas_frame_size())
         self._sync_caption_layer(cue)
         active = self.project.get_active_segment(pos_ms)
         if active:
@@ -589,26 +710,6 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
-    def _is_portrait_video(self) -> bool:
-        """Whether the loaded source is taller than it is wide.
-
-        `project.video.width/height` are never actually populated (`load_video`
-        is always called with an empty probe dict), so this reads real pixel
-        dimensions from the canvas instead — the decoded video frame, or the
-        extracted thumbnail as a fallback while the first frame hasn't
-        arrived yet. Both carry the video's true size regardless of how the
-        canvas widget itself is currently laid out.
-        """
-        size = self.player.canvas.get_video_size()
-        if size:
-            width, height = size
-            return height > width
-        return bool(
-            self.project.video
-            and self.project.video.width > 0
-            and self.project.video.height > self.project.video.width
-        )
-
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -626,29 +727,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Choose export aspect ratio format
-        default_fmt = "9:16" if self._is_portrait_video() else "16:9"
-
-        format_options = [
-            "16:9 (Landscape / YouTube)",
-            "9:16 (Portrait / TikTok / Reels)",
-            "1:1 (Square / Instagram)",
-            "4:5 (Vertical Feed)",
-        ]
-        default_idx = 0 if default_fmt == "16:9" else 1
-
-        chosen, ok = QInputDialog.getItem(
-            self,
-            "Render Video",
-            "Choose export format:",
-            format_options,
-            default_idx,
-            False,
-        )
-        if not ok or not chosen:
-            return
-
-        export_fmt = chosen.split()[0]
+        # Whatever the editor has been previewing all along.
+        export_fmt = self._export_format()
 
         self.status.showMessage(
             f"Rendering {export_fmt} video with burned-in captions..."
@@ -729,7 +809,7 @@ class MainWindow(QMainWindow):
                 for reg in plat.regions:
                     blocked_bands.append((reg.top, reg.top + reg.height))
 
-        export_fmt = "9:16" if self._is_portrait_video() else "16:9"
+        export_fmt = self._export_format()
 
         self.status.showMessage("Running automatic caption placement via Rust core...")
         self.progress_bar.setRange(0, 0)
@@ -807,11 +887,9 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
 
-        export_fmt = "9:16" if self._is_portrait_video() else "16:9"
-
         params = {
             "inputVideo": str(Path(source_file).resolve()),
-            "exportFormats": [export_fmt],
+            "exportFormats": [self._export_format()],
             "karaoke": self.project.style.karaoke,
             # Never one cue per word: whisper's own phrase segments carry
             # per-word timings in `words`, which is what karaoke highlights

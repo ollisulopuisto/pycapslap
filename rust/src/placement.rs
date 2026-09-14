@@ -504,13 +504,14 @@ pub async fn auto_place_captions(params: AutoPlaceParams) -> Result<AutoPlaceRes
     }
 
     let probe_result = crate::video::probe("auto_place_probe", &params.input_video, |_| {}).await?;
-    let target_ar = crate::video::parse_target_ar(&params.export_format)?;
-    let (target_w, target_h) = crate::video::target_dimensions(
-        params.output_size.as_deref(),
-        probe_result.width.unwrap_or(1920) as u32,
-        probe_result.height.unwrap_or(1080) as u32,
-        target_ar,
-    );
+    let src_w = probe_result.width.unwrap_or(1920) as u32;
+    let src_h = probe_result.height.unwrap_or(1080) as u32;
+    let (target_w, target_h) = if params.export_format == "source" {
+        (src_w, src_h)
+    } else {
+        let target_ar = crate::video::parse_target_ar(&params.export_format)?;
+        crate::video::target_dimensions(params.output_size.as_deref(), src_w, src_h, target_ar)
+    };
 
     // Ask the caption renderer where the captions are and how tall they get, so
     // placement reasons about the same blocks the viewer will see.
@@ -532,6 +533,8 @@ pub async fn auto_place_captions(params: AutoPlaceParams) -> Result<AutoPlaceRes
         glow_effect: params.glow_effect,
         position_overrides: Vec::new(),
         blocked_bands: Vec::new(),
+        // Already the export canvas: target_w/target_h above.
+        export_format: None,
     })?;
 
     // ASS lines sit about 1.2 line heights apart; the outline adds a little.

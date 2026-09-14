@@ -306,6 +306,12 @@ pub struct PreviewLayoutParams {
     /// the user placed them by hand.
     #[serde(default)]
     pub blocked_bands: Vec<(f32, f32)>,
+    /// The canvas the captions will actually be burned onto: an export format
+    /// ("9:16", "16:9", "4:5", "1:1") the source gets fitted into, or "source"
+    /// / absent for the frame as it is. `width`/`height` are the source's, so
+    /// the layout is computed for the same canvas the export will use.
+    #[serde(default)]
+    pub export_format: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -313,6 +319,10 @@ pub struct PreviewLayoutParams {
 pub struct PreviewLayoutResult {
     pub cues: Vec<PreviewCue>,
     pub font_size_px: u32, // Rendered font size at the requested frame size
+    /// The canvas the layout was computed for — the export canvas when
+    /// `export_format` asked for one, otherwise the frame that was passed in.
+    pub frame_width: u32,
+    pub frame_height: u32,
 }
 
 #[derive(Serialize, Deserialize, Debug)]

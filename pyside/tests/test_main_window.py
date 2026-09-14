@@ -406,3 +406,125 @@ def test_caption_layer_is_fetched_and_cached_per_cue(qtbot):
     assert window.overlay.caption_layer is None
     assert window._layer_cache == {}
     window.close()
+
+
+def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
+    """One window on screen pulls in the whole block, a few renders at a time.
+
+    Karaoke shows a caption one word at a time; without this, playback would
+    fall back to the painted approximation for every window the user has not
+    stopped on.
+    """
+    import base64
+
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    img = QImage(4, 4, QImage.Format.Format_ARGB32)
+    img.fill(QColor(0, 255, 0, 255))
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    png_b64 = base64.b64encode(bytes(buf.data())).decode()
+
+    words = ["JA", "SITTEN", "ON", "ERIKSEEN", "KANNETTAVA", "TIETOKONE"]
+    cues = [
+        {
+            "startMs": i * 300,
+            "endMs": (i + 1) * 300,
+            "lines": [
+                {
+                    "words": [
+                        {"text": w, "isHighlighted": w == word} for w in words
+                    ],
+                    "fontSizePx": 44,
+                }
+            ],
+            "yPct": 88.0,
+            "anchor": "bottom",
+            "groupStartMs": 0,
+            "groupEndMs": 1800,
+        }
+        for i, word in enumerate(words)
+    ]
+    core, calls = _mock_core_with_layer(cues[0], png_b64)
+
+    window = MainWindow(core_client=core)
+    qtbot.addWidget(window)
+    from app.models.captions import VideoMetadata
+
+    window.project.video = VideoMetadata(path="/tmp/nope.mp4", width=1080, height=1920)
+    window.project.segments = [
+        CaptionSegment(start_ms=0, end_ms=1800, text=" ".join(words))
+    ]
+    window._preview_cues = cues
+    window._layout_timer.stop()
+
+    window._sync_caption_layer(cues[0])
+    # Never more than a few ffmpeg pairs at once.
+    assert len(window._layer_pending) <= 3
+
+    def rendered():
+        return {
+            c[1]["timestampMs"] for c in calls if c[0] == "generatePreviewFrame"
+        }
+
+    qtbot.waitUntil(lambda: len(window._layer_cache) == len(cues), timeout=5000)
+    # Every window rendered, each exactly once.
+    frame_calls = [c for c in calls if c[0] == "generatePreviewFrame"]
+    assert len(frame_calls) == len(cues)
+    assert len(rendered()) == len(cues)
+
+    # Coming back to a window in the block costs nothing.
+    window._sync_caption_layer(cues[3])
+    assert window.overlay.caption_layer is not None
+    assert len([c for c in calls if c[0] == "generatePreviewFrame"]) == len(cues)
+    window.close()
+
+
+def test_export_format_drives_layout_layer_and_render(qtbot):
+    """One canvas for the preview and the burn, chosen in the editor."""
+    from PySide6.QtCore import QObject, Signal
+
+    calls: list[tuple[str, dict]] = []
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            from concurrent.futures import Future
+
+            calls.append((method, params))
+            f: Future = Future()
+            f.set_result({"cues": [], "frameWidth": 1920, "frameHeight": 3414})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    from app.models.captions import VideoMetadata
+
+    window.project.video = VideoMetadata(path="/tmp/nope.mp4", width=1920, height=1080)
+    window.project.segments = [CaptionSegment(start_ms=0, end_ms=2000, text="Ja")]
+
+    index = window.format_combo.findData("9:16")
+    assert index >= 0
+    window.format_combo.setCurrentIndex(index)
+    window._layout_timer.stop()
+    window._request_preview_layout()
+
+    layout_calls = [c for c in calls if c[0] == "previewLayout"]
+    assert layout_calls[-1][1]["exportFormat"] == "9:16"
+    # The renderer's answer decides the canvas the editor draws.
+    qtbot.waitUntil(lambda: window._canvas_size is not None, timeout=2000)
+    assert window._canvas_size == (1920, 3414)
+    assert window.player.canvas.export_canvas_size == (1920, 3414)
+
+    # And the layer for a cue is rendered on that same canvas.
+    window._request_caption_layer({"startMs": 0, "endMs": 2000})
+    frame_calls = [c for c in calls if c[0] == "generatePreviewFrame"]
+    assert frame_calls[-1][1]["exportFormat"] == "9:16"
+    window.close()

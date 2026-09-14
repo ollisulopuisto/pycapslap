@@ -274,9 +274,21 @@ fn preview_lines(
 pub fn generate_preview_layout(
     params: crate::types::PreviewLayoutParams,
 ) -> Result<crate::types::PreviewLayoutResult> {
+    // Lay the cues out on the canvas they will be burned onto. An export
+    // format pads the source into a canvas of its own, and everything that
+    // follows — font size, where lines break, how far up the frame the block
+    // sits — is measured against that canvas, not the source frame.
+    let (frame_w, frame_h) = match params.export_format.as_deref() {
+        None | Some("") | Some("source") => (params.width, params.height),
+        Some(format) => {
+            let ar = crate::video::parse_target_ar(format)?;
+            crate::video::target_dimensions(None, params.width, params.height, ar)
+        }
+    };
+
     let style = default_ass_style(
-        params.width,
-        params.height,
+        frame_w,
+        frame_h,
         params.font_name.as_deref(),
         params.text_color.as_deref(),
         params.highlight_word_color.as_deref(),
@@ -292,13 +304,13 @@ pub fn generate_preview_layout(
 
     // Same anchor the burner uses, expressed as a percentage of frame height so
     // the editor can place an overlay without knowing about ASS.
-    let default_y = style_anchor_y(style.align, style.margin_v, params.height);
+    let default_y = style_anchor_y(style.align, style.margin_v, frame_h);
     let anchor = match style.align {
         5 => "center",
         8 => "top",
         _ => "bottom",
     };
-    let to_pct = |y: i32| (y as f32 / params.height as f32) * 100.0;
+    let to_pct = |y: i32| (y as f32 / frame_h as f32) * 100.0;
 
     if params.karaoke {
         let phrases = segment_phrases(&params.segments);
@@ -317,13 +329,13 @@ pub fn generate_preview_layout(
                     group_start_ms,
                     group_end_ms,
                     default_y,
-                    params.height,
+                    frame_h,
                     style.align,
                     cue_lines(
                         &segment_tokens,
                         params.justify_lines,
                         &style.font_name,
-                        params.width,
+                        frame_w,
                         style.font_size,
                     )
                     .len(),
@@ -346,7 +358,7 @@ pub fn generate_preview_layout(
                             i,
                             params.justify_lines,
                             &style.font_name,
-                            params.width,
+                            frame_w,
                             style.font_size,
                         ),
                         y_pct,
@@ -385,7 +397,7 @@ pub fn generate_preview_layout(
                     hi_idx,
                     params.justify_lines,
                     &style.font_name,
-                    params.width,
+                    frame_w,
                     style.font_size,
                 );
 
@@ -395,7 +407,7 @@ pub fn generate_preview_layout(
                     start_ms,
                     end_ms,
                     default_y,
-                    params.height,
+                    frame_h,
                     style.align,
                     lines_structure.len(),
                     style.font_size,
@@ -418,6 +430,8 @@ pub fn generate_preview_layout(
     Ok(crate::types::PreviewLayoutResult {
         cues,
         font_size_px: style.font_size,
+        frame_width: frame_w,
+        frame_height: frame_h,
     })
 }
 
@@ -1053,13 +1067,18 @@ async fn optimized_multi_format_encode(
             id: id.into(),
             message: format!("Processing format loop for: {}", format),
         });
-        let target_ar = crate::video::parse_target_ar(format)?;
         let src_w = probe_result.width.unwrap_or(1920) as u32;
         let src_h = probe_result.height.unwrap_or(1080) as u32;
 
-        // Determine target dimensions based on output_size or aspect ratio
-        let (target_w, target_h) =
-            crate::video::target_dimensions(output_size.as_deref(), src_w, src_h, target_ar);
+        // Determine target dimensions based on output_size or aspect ratio.
+        // "source" keeps the video's own frame, which is what the editor
+        // previews when no reframing was asked for.
+        let (target_w, target_h) = if format == "source" {
+            (src_w, src_h)
+        } else {
+            let target_ar = crate::video::parse_target_ar(format)?;
+            crate::video::target_dimensions(output_size.as_deref(), src_w, src_h, target_ar)
+        };
 
         // Build ASS subtitle file optimized for this format
         emit(RpcEvent::Log {

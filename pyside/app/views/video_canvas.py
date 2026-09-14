@@ -101,6 +101,10 @@ class VideoCanvasWidget(QWidget):
     """
 
     anchor_changed = Signal(float)
+    # The video's true pixel size, the first time it is known and whenever it
+    # changes. Everything about caption layout is measured against it, and it
+    # is not known until a frame has actually been decoded.
+    video_size_changed = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -113,6 +117,7 @@ class VideoCanvasWidget(QWidget):
         self._current_frame: QVideoFrame | None = None
         self._paint_opts = QVideoFrame.PaintOptions()
         self._fallback_pixmap: QPixmap | None = None
+        self._known_video_size: tuple[int, int] | None = None
 
         self.current_segment: CaptionSegment | None = None
         self.current_pos_ms: int = 0
@@ -129,6 +134,11 @@ class VideoCanvasWidget(QWidget):
         # and the frame size it was computed for.
         self.layout_cue: dict | None = None
         self.layout_frame_size: tuple[int, int] = (1080, 1920)
+        # The canvas the export will be burned onto. A format the source does
+        # not already have pads it — and the captions are laid out against the
+        # padded canvas, not the video — so the editor has to show that canvas
+        # or it is previewing a frame the render never produces.
+        self.export_canvas_size: tuple[int, int] | None = None
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
 
         # Initialize fonts database
@@ -140,6 +150,14 @@ class VideoCanvasWidget(QWidget):
 
     def set_style(self, style: CaptionStyle) -> None:
         self.style = style
+        self.update()
+
+    def set_export_canvas(self, size: tuple[int, int] | None) -> None:
+        """The frame the render will produce, or None for the video's own."""
+        if size and size[0] > 0 and size[1] > 0:
+            self.export_canvas_size = (int(size[0]), int(size[1]))
+        else:
+            self.export_canvas_size = None
         self.update()
 
     def set_caption_layer(self, pixmap: QPixmap | None) -> None:
@@ -155,21 +173,30 @@ class VideoCanvasWidget(QWidget):
         a slow drag of the window edge from invalidating the cache on every
         pixel.
         """
-        rect = self._get_video_rect()
+        rect = self._get_canvas_rect()
         px = rect.height() * self.devicePixelRatioF()
         step = 120
         return max(step, int(math.ceil(px / step) * step))
 
     def set_fallback_pixmap(self, pixmap: QPixmap | None) -> None:
         self._fallback_pixmap = pixmap
+        self._announce_video_size()
         self.update()
 
-    def get_video_size(self) -> tuple[int, int] | None:
-        """The source video's actual pixel dimensions, if known yet.
+    def _announce_video_size(self) -> None:
+        size = self.get_video_size()
+        if size and size != self._known_video_size:
+            self._known_video_size = size
+            self.video_size_changed.emit(size[0], size[1])
 
-        Prefers the live decoded frame; falls back to the extracted
-        thumbnail, which is usually available first and carries the same
-        true dimensions. Returns None before either has arrived.
+    def get_video_size(self) -> tuple[int, int] | None:
+        """The source video's pixel dimensions, if known yet.
+
+        Prefers the live decoded frame. The extracted thumbnail stands in
+        while no frame has arrived, but it is scaled to fit 1080 on its long
+        edge, so it carries the video's aspect rather than its true size —
+        enough for laying captions out, which is proportional to the frame,
+        but not a pixel count to trust. Returns None before either arrives.
         """
         if self._current_frame and self._current_frame.isValid():
             sz = self._current_frame.size()
@@ -194,36 +221,61 @@ class VideoCanvasWidget(QWidget):
 
     def _on_video_frame_changed(self, frame: QVideoFrame) -> None:
         self._current_frame = frame
+        self._announce_video_size()
         self.update()
 
-    def _get_video_rect(self) -> QRectF:
+    def _source_aspect(self) -> float:
+        if self._current_frame and self._current_frame.isValid():
+            sz = self._current_frame.size()
+            if sz.width() > 0 and sz.height() > 0:
+                return sz.width() / sz.height()
+        if self._fallback_pixmap and not self._fallback_pixmap.isNull():
+            sz = self._fallback_pixmap.size()
+            if sz.width() > 0 and sz.height() > 0:
+                return sz.width() / sz.height()
+        return 16.0 / 9.0
+
+    @staticmethod
+    def _fit(outer: QRectF, aspect: float) -> QRectF:
+        """Largest rectangle of `aspect` centred inside `outer`."""
+        if outer.width() <= 0 or outer.height() <= 0 or aspect <= 0:
+            return QRectF(0, 0, 0, 0)
+        if (outer.width() / outer.height()) > aspect:
+            h = outer.height()
+            w = h * aspect
+        else:
+            w = outer.width()
+            h = w / aspect
+        return QRectF(
+            outer.left() + (outer.width() - w) / 2.0,
+            outer.top() + (outer.height() - h) / 2.0,
+            w,
+            h,
+        )
+
+    def _get_canvas_rect(self) -> QRectF:
+        """Where the exported frame sits on screen."""
         w = float(self.width())
         h = float(self.height())
         if w <= 0 or h <= 0:
             return QRectF(0, 0, 0, 0)
 
-        aspect = 16.0 / 9.0
-        if self._current_frame and self._current_frame.isValid():
-            sz = self._current_frame.size()
-            if sz.width() > 0 and sz.height() > 0:
-                aspect = sz.width() / sz.height()
-        elif self._fallback_pixmap and not self._fallback_pixmap.isNull():
-            sz = self._fallback_pixmap.size()
-            if sz.width() > 0 and sz.height() > 0:
-                aspect = sz.width() / sz.height()
+        aspect = self._source_aspect()
+        if self.export_canvas_size:
+            cw, ch = self.export_canvas_size
+            aspect = cw / ch
+        return self._fit(QRectF(0, 0, w, h), aspect)
 
-        if (w / h) > aspect:
-            vh = h
-            vw = h * aspect
-            vx = (w - vw) / 2.0
-            vy = 0.0
-        else:
-            vw = w
-            vh = w / aspect
-            vx = 0.0
-            vy = (h - vh) / 2.0
+    def _get_video_rect(self) -> QRectF:
+        """Where the video itself sits, fitted into the export canvas.
 
-        return QRectF(vx, vy, vw, vh)
+        Mirrors the renderer's "fit" strategy: the source is scaled to fit
+        whole and the rest of the canvas is padding.
+        """
+        canvas = self._get_canvas_rect()
+        if self.export_canvas_size is None:
+            return canvas
+        return self._fit(canvas, self._source_aspect())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -249,11 +301,13 @@ class VideoCanvasWidget(QWidget):
             super().mouseReleaseEvent(event)
 
     def _update_anchor_from_pos(self, pos: QPoint) -> None:
-        video_rect = self._get_video_rect()
-        if video_rect.height() <= 0:
+        # The renderer's yPct is a fraction of the exported frame, so the
+        # pointer has to be read against that frame too, padding included.
+        canvas_rect = self._get_canvas_rect()
+        if canvas_rect.height() <= 0:
             return
-        rel_y = pos.y() - video_rect.top()
-        pct = (rel_y / video_rect.height()) * 100.0
+        rel_y = pos.y() - canvas_rect.top()
+        pct = (rel_y / canvas_rect.height()) * 100.0
         pct = max(5.0, min(95.0, pct))
         self.anchor_y_pct = round(pct, 1)
         self.anchor_changed.emit(self.anchor_y_pct)
@@ -264,14 +318,19 @@ class VideoCanvasWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-        # 1. Background fill for entire canvas
+        # 1. Background fill for entire widget
         painter.fillRect(self.rect(), QColor(10, 10, 12))
 
+        # Everything about captions — safe zones, the anchor, the layer — is
+        # measured against the exported frame. The video is just what happens
+        # to be inside it.
+        canvas_rect = self._get_canvas_rect()
         video_rect = self._get_video_rect()
-        if video_rect.width() <= 0 or video_rect.height() <= 0:
+        if canvas_rect.width() <= 0 or canvas_rect.height() <= 0:
             return
 
-        # 2. Render Video Frame or Fallback Pixmap
+        # 2. The export canvas: the video, and the padding around it
+        painter.fillRect(canvas_rect, QColor(0, 0, 0))
         if self._current_frame and self._current_frame.isValid():
             self._current_frame.paint(painter, video_rect, self._paint_opts)
         elif self._fallback_pixmap and not self._fallback_pixmap.isNull():
@@ -279,19 +338,19 @@ class VideoCanvasWidget(QWidget):
 
         # 3. Render Platform UI Safe Areas (TikTok, Reels, Shorts)
         if self.active_safe_platforms:
-            self._paint_safe_areas(painter, video_rect)
+            self._paint_safe_areas(painter, canvas_rect)
 
         # 4. Dragging guidelines
-        anchor_y = video_rect.top() + (
-            video_rect.height() * (self.anchor_y_pct / 100.0)
+        anchor_y = canvas_rect.top() + (
+            canvas_rect.height() * (self.anchor_y_pct / 100.0)
         )
         if self.is_dragging:
             pen = QPen(QColor(99, 102, 241, 230), 1.5, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawLine(
-                int(video_rect.left()),
+                int(canvas_rect.left()),
                 int(anchor_y),
-                int(video_rect.right()),
+                int(canvas_rect.right()),
                 int(anchor_y),
             )
 
@@ -301,7 +360,10 @@ class VideoCanvasWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(99, 102, 241, 220))
             badge_rect = QRectF(
-                video_rect.left() + 16, max(video_rect.top() + 8, anchor_y - 22), 52, 20
+                canvas_rect.left() + 16,
+                max(canvas_rect.top() + 8, anchor_y - 22),
+                52,
+                20,
             )
             painter.drawRoundedRect(badge_rect, 4, 4)
 
@@ -316,15 +378,15 @@ class VideoCanvasWidget(QWidget):
             and not self.is_dragging
         ):
             painter.drawPixmap(
-                video_rect,
+                canvas_rect,
                 self.caption_layer,
                 QRectF(self.caption_layer.rect()),
             )
         elif self.current_segment and self.current_segment.text.strip():
-            self._paint_caption(painter, video_rect, anchor_y)
+            self._paint_caption(painter, canvas_rect, anchor_y)
 
-    def _paint_safe_areas(self, painter: QPainter, video_rect: QRectF) -> None:
-        """Paint UI safe area boundary overlays for selected platforms (TikTok, Reels, Shorts)."""
+    def _paint_safe_areas(self, painter: QPainter, canvas_rect: QRectF) -> None:
+        """Paint the platforms' own interface over the frame that gets exported."""
         painter.save()
         for plat_id in self.active_safe_platforms:
             platform = SAFE_PLATFORMS.get(plat_id)
@@ -347,10 +409,10 @@ class VideoCanvasWidget(QWidget):
             painter.setFont(font)
 
             for region in platform.regions:
-                rx = video_rect.left() + video_rect.width() * (region.left / 100.0)
-                ry = video_rect.top() + video_rect.height() * (region.top / 100.0)
-                rw = video_rect.width() * (region.width / 100.0)
-                rh = video_rect.height() * (region.height / 100.0)
+                rx = canvas_rect.left() + canvas_rect.width() * (region.left / 100.0)
+                ry = canvas_rect.top() + canvas_rect.height() * (region.top / 100.0)
+                rw = canvas_rect.width() * (region.width / 100.0)
+                rh = canvas_rect.height() * (region.height / 100.0)
                 r_rect = QRectF(rx, ry, rw, rh)
 
                 painter.drawRect(r_rect)
@@ -414,7 +476,7 @@ class VideoCanvasWidget(QWidget):
         }
 
     def _paint_caption(
-        self, painter: QPainter, video_rect: QRectF, anchor_y: float
+        self, painter: QPainter, canvas_rect: QRectF, anchor_y: float
     ) -> None:
         cue = self.layout_cue or self._fallback_cue()
         if not cue:
@@ -423,12 +485,12 @@ class VideoCanvasWidget(QWidget):
         frame_w, frame_h = self.layout_frame_size
         if frame_w <= 0 or frame_h <= 0:
             return
-        scale = video_rect.width() / float(frame_w)
+        scale = canvas_rect.width() / float(frame_w)
         if scale <= 0:
             return
 
         font_family = self.style.font_name or "Montserrat Black"
-        max_width = video_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
+        max_width = canvas_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
 
         # Lay the cue out line by line. A layout line may still be wider than
         # the box when the renderer left the wrapping to libass (\q0), so wrap
@@ -458,7 +520,7 @@ class VideoCanvasWidget(QWidget):
             block_y = anchor_y
             anchor_kind = "center"
         else:
-            block_y = video_rect.top() + video_rect.height() * (y_pct / 100.0)
+            block_y = canvas_rect.top() + canvas_rect.height() * (y_pct / 100.0)
 
         if anchor_kind == "center":
             block_top = block_y - total_h / 2.0
@@ -479,7 +541,7 @@ class VideoCanvasWidget(QWidget):
         for words, font, metrics in drawn_lines:
             line_text = _join_words(words)
             line_w = metrics.horizontalAdvance(line_text)
-            x = video_rect.left() + (video_rect.width() - line_w) / 2.0
+            x = canvas_rect.left() + (canvas_rect.width() - line_w) / 2.0
             baseline = y + metrics.ascent()
 
             if self.style.background_box:
@@ -527,7 +589,7 @@ def _join_words(words: list[dict]) -> str:
 def _wrap_words(
     words: list[dict], metrics: QFontMetrics, max_width: float
 ) -> list[list[dict]]:
-    """Greedy wrap, mirroring libass \q0 against the same caption box."""
+    r"""Greedy wrap, mirroring libass \q0 against the same caption box."""
     if not words:
         return []
     lines: list[list[dict]] = []
