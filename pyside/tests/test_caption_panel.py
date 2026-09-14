@@ -285,6 +285,42 @@ def test_caption_panel_shift_start_and_end(qtbot):
     assert panel.segments[1].text == "Second Third"
 
 
+def test_caption_panel_delete_empty_slot(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="First",
+        words=[WordSpan(0, 1000, "First")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=1800,
+        text="Second",
+        words=[WordSpan(1000, 1800, "Second")],
+    )
+    panel.set_segments([seg1, seg2])
+
+    # A populated slot cannot be deleted through this button.
+    panel.cue_table.selectRow(1)
+    assert not panel.btn_delete_empty.isEnabled()
+
+    # Shift the only word of seg2 away, leaving it empty.
+    panel.btn_shift_prev.click()
+    assert panel.segments[1].text == ""
+    assert panel.btn_delete_empty.isEnabled()
+
+    emitted = []
+    panel.segments_updated.connect(emitted.append)
+    panel.btn_delete_empty.click()
+
+    assert len(emitted) == 1
+    assert len(panel.segments) == 1
+    assert panel.segments[0].text == "First Second"
+
+
 def test_caption_panel_safe_area_toggles(qtbot):
     panel = CaptionPanelWidget()
     qtbot.addWidget(panel)
@@ -314,3 +350,149 @@ def test_caption_panel_safe_area_toggles(qtbot):
     panel.btn_safe_tiktok.click()
     assert "tiktok" in panel.active_safe_platforms
     assert emitted[-1] == {"tiktok", "shorts"}
+
+
+class _FakeChecker:
+    """Stands in for Voikko so the test does not need the native library."""
+
+    available = True
+
+    def __init__(self, bad_words: set[str]):
+        self.bad_words = bad_words
+
+    def misspelled_spans(self, segment):
+        spans = []
+        pos = 0
+        for token in segment.text.split(" "):
+            if token in self.bad_words:
+                spans.append((pos, pos + len(token), token))
+            pos += len(token) + 1
+        return spans
+
+    def suggest(self, word):
+        return ["kauppa", "kaappi"]
+
+
+def test_caption_panel_spell_spans_and_replacement(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    panel.spell_checker = _FakeChecker({"kaupppa"})
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="Tämä on kaupppa",
+        words=[
+            WordSpan(0, 300, "Tämä"),
+            WordSpan(300, 600, "on"),
+            WordSpan(600, 1000, "kaupppa"),
+        ],
+    )
+    panel.set_segments([seg])
+
+    spans = panel.spell_spans_for_row(0)
+    assert spans == [(8, 15, "kaupppa")]
+
+    emitted = []
+    panel.segments_updated.connect(emitted.append)
+    panel._replace_word(0, 8, 15, "kauppa")
+
+    assert panel.segments[0].text == "Tämä on kauppa"
+    assert len(emitted) == 1
+    # The corrected row is re-checked, not served from the stale cache.
+    assert panel.spell_spans_for_row(0) == []
+
+
+def test_caption_panel_spell_check_disabled_without_voikko(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    class _Unavailable:
+        available = False
+
+    panel.spell_checker = _Unavailable()
+    seg = CaptionSegment(
+        start_ms=0, end_ms=1000, text="kaupppa", words=[WordSpan(0, 1000, "kaupppa")]
+    )
+    panel.set_segments([seg])
+
+    assert panel.spell_spans_for_row(0) == []
+
+
+def test_caption_panel_edit_timecode_cell(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0, end_ms=1000, text="First", words=[WordSpan(0, 1000, "First")]
+    )
+    seg2 = CaptionSegment(
+        start_ms=2000,
+        end_ms=3000,
+        text="Second",
+        words=[WordSpan(2000, 3000, "Second")],
+    )
+    panel.set_segments([seg1, seg2])
+
+    emitted = []
+    panel.segments_updated.connect(emitted.append)
+
+    # Retype the second cue's start as mm:ss.t
+    panel.cue_table.item(1, 0).setText("00:01.5")
+    assert panel.segments[1].start_ms == 1500
+    assert panel.segments[1].words[0].start_ms == 1500
+    assert len(emitted) == 1
+
+    # Gibberish is rejected and the cell snaps back to the cue's own time.
+    panel.cue_table.item(1, 0).setText("not a time")
+    assert panel.segments[1].start_ms == 1500
+    assert panel.cue_table.item(1, 0).text() == "00:01.5"
+
+    # A start dragged before the previous cue's end is clamped to it.
+    panel.cue_table.item(1, 0).setText("00:00.2")
+    assert panel.segments[1].start_ms == 1000
+
+
+def test_caption_panel_nudge_selected_cue(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="Nudge me",
+        words=[WordSpan(1000, 1500, "Nudge"), WordSpan(1500, 2000, "me")],
+    )
+    panel.set_segments([seg])
+    panel.cue_table.selectRow(0)
+
+    panel.nudge_selected_cue(100, "end")
+    assert panel.segments[0].end_ms == 2100
+    assert panel.segments[0].words[-1].end_ms == 2100
+
+    panel.nudge_selected_cue(-100, "start")
+    assert panel.segments[0].start_ms == 900
+
+    panel.nudge_selected_cue(100, "both")
+    assert (panel.segments[0].start_ms, panel.segments[0].end_ms) == (1000, 2200)
+
+
+def test_caption_panel_delete_empty_slot_stretches_previous_cue(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0, end_ms=1000, text="First", words=[WordSpan(0, 1000, "First")]
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000, end_ms=1800, text="Second", words=[WordSpan(1000, 1800, "Second")]
+    )
+    panel.set_segments([seg1, seg2])
+
+    panel.cue_table.selectRow(1)
+    panel.btn_shift_prev.click()  # empties the second cue
+    panel.btn_delete_empty.click()
+
+    assert len(panel.segments) == 1
+    # The freed time goes to the cue that absorbed the words.
+    assert panel.segments[0].end_ms == 1800

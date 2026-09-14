@@ -248,6 +248,90 @@ def _join_words(words: list[WordSpan]) -> str:
     return " ".join(parts)
 
 
+MIN_SEGMENT_MS = 100
+
+
+def delete_segment(segments: list[CaptionSegment], index: int) -> None:
+    """Remove a cue and hand its time to the previous one.
+
+    The words are already gone (that is why the slot is being deleted), so the
+    neighbour simply holds its last word longer instead of leaving dead air.
+    Deleting the first cue stretches the following one backwards instead.
+    """
+    if not (0 <= index < len(segments)):
+        return
+    removed = segments.pop(index)
+
+    if index > 0:
+        prev_seg = segments[index - 1]
+        if removed.end_ms > prev_seg.end_ms:
+            prev_seg.end_ms = removed.end_ms
+            if prev_seg.words:
+                prev_seg.words[-1].end_ms = removed.end_ms
+    elif segments:
+        next_seg = segments[0]
+        if removed.start_ms < next_seg.start_ms:
+            next_seg.start_ms = removed.start_ms
+            if next_seg.words:
+                next_seg.words[0].start_ms = removed.start_ms
+
+
+def set_segment_time(seg: CaptionSegment, start_ms: int, end_ms: int) -> None:
+    """Move or stretch a cue, scaling its word timings to match.
+
+    The burner takes cue times from the words, not from the segment, so word
+    spans have to follow or a retimed cue would render at its old position.
+    """
+    start_ms = max(0, int(start_ms))
+    end_ms = max(start_ms + MIN_SEGMENT_MS, int(end_ms))
+
+    if seg.words:
+        old_start = seg.words[0].start_ms
+        old_end = seg.words[-1].end_ms
+        old_span = old_end - old_start
+        new_span = end_ms - start_ms
+        if old_span > 0:
+            scale = new_span / old_span
+            for w in seg.words:
+                w.start_ms = round(start_ms + (w.start_ms - old_start) * scale)
+                w.end_ms = round(start_ms + (w.end_ms - old_start) * scale)
+        else:
+            # Zero-length source: spread the words evenly over the new range.
+            step = new_span / len(seg.words)
+            for i, w in enumerate(seg.words):
+                w.start_ms = round(start_ms + i * step)
+                w.end_ms = round(start_ms + (i + 1) * step)
+        seg.words[0].start_ms = start_ms
+        seg.words[-1].end_ms = end_ms
+
+    seg.start_ms = start_ms
+    seg.end_ms = end_ms
+
+
+def clamped_segment_time(
+    segments: list[CaptionSegment], index: int, start_ms: int, end_ms: int
+) -> tuple[int, int]:
+    """Keep a retimed cue inside its neighbours and at least MIN_SEGMENT_MS long."""
+    if not (0 <= index < len(segments)):
+        return (start_ms, end_ms)
+
+    lower = segments[index - 1].end_ms if index > 0 else 0
+    upper = segments[index + 1].start_ms if index + 1 < len(segments) else None
+
+    start_ms = max(lower, int(start_ms))
+    end_ms = int(end_ms)
+    if upper is not None:
+        end_ms = min(upper, end_ms)
+    if end_ms - start_ms < MIN_SEGMENT_MS:
+        # Whichever edge the user moved, keep the cue playable.
+        if upper is not None and start_ms + MIN_SEGMENT_MS > upper:
+            start_ms = max(lower, upper - MIN_SEGMENT_MS)
+            end_ms = upper
+        else:
+            end_ms = start_ms + MIN_SEGMENT_MS
+    return (start_ms, end_ms)
+
+
 def shift_word_to_prev(segments: list[CaptionSegment], index: int) -> None:
     """Move the first word of segments[index] to the end of segments[index - 1]."""
     if index <= 0 or index >= len(segments):

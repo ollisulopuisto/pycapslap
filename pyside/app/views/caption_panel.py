@@ -1,5 +1,5 @@
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSlider,
+    QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -25,11 +26,20 @@ from app.models.captions import (
     CaptionSegment,
     CaptionStyle,
     apply_orphan_rules,
+    clamped_segment_time,
     combine_separated_syllables,
+    delete_segment,
+    set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
 )
 from app.services.preset_manager import PresetManager
+from app.services.spellcheck import get_shared_checker
+
+SPELL_ERROR_COLOR = "#f87171"
+
+
+NUDGE_MS = 100
 
 
 def format_timestamp(ms: int) -> str:
@@ -38,6 +48,83 @@ def format_timestamp(ms: int) -> str:
     s = total_sec % 60
     tenth = (ms % 1000) // 100
     return f"{m:02d}:{s:02d}.{tenth}"
+
+
+def parse_timestamp(text: str) -> int | None:
+    """Parse the timecodes the table shows, plus the shorthands people type.
+
+    Accepts "mm:ss.t", "h:mm:ss.t", "ss.t" and a bare seconds count; returns
+    milliseconds, or None when the text is not a time at all.
+    """
+    text = text.strip().replace(",", ".")
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) > 3:
+        return None
+    try:
+        seconds = float(parts[-1])
+        minutes = int(parts[-2]) if len(parts) >= 2 else 0
+        hours = int(parts[-3]) if len(parts) == 3 else 0
+    except ValueError:
+        return None
+    if seconds < 0 or minutes < 0 or hours < 0:
+        return None
+    return int(round((hours * 3600 + minutes * 60 + seconds) * 1000))
+
+
+class SpellCheckDelegate(QStyledItemDelegate):
+    """Draws the normal cell, then squiggles under words Voikko rejects."""
+
+    def __init__(self, panel: "CaptionPanelWidget") -> None:
+        super().__init__(panel)
+        self.panel = panel
+
+    def paint(self, painter, option, index) -> None:  # type: ignore[override]
+        super().paint(painter, option, index)
+        if index.column() != 2:
+            return
+        spans = self.panel.spell_spans_for_row(index.row())
+        if not spans:
+            return
+
+        opt = option
+        self.initStyleOption(opt, index)
+        metrics = QFontMetrics(opt.font)
+        text = index.data() or ""
+        # Mirror the 4px text inset QCommonStyle uses for item text.
+        rect = opt.rect.adjusted(4, 0, -4, 0)
+        baseline = (
+            rect.top() + (rect.height() + metrics.ascent() - metrics.descent()) / 2
+        )
+
+        painter.save()
+        pen = QPen(QColor(SPELL_ERROR_COLOR))
+        pen.setWidthF(1.4)
+        painter.setPen(pen)
+        painter.setRenderHint(painter.RenderHint.Antialiasing, True)
+        for start, end, _word in spans:
+            x1 = rect.left() + metrics.horizontalAdvance(text[:start])
+            x2 = rect.left() + metrics.horizontalAdvance(text[:end])
+            if x1 >= rect.right():
+                break
+            x2 = min(x2, rect.right())
+            painter.drawPath(_squiggle(x1, x2, baseline + 3))
+        painter.restore()
+
+
+def _squiggle(x1: float, x2: float, y: float) -> QPainterPath:
+    """A small zigzag, the way every spell checker has drawn one since 1995."""
+    path = QPainterPath()
+    path.moveTo(x1, y)
+    period = 4.0
+    up = True
+    x = x1
+    while x < x2:
+        x = min(x + period / 2, x2)
+        path.lineTo(x, y - 2.0 if up else y)
+        up = not up
+    return path
 
 
 class CaptionPanelWidget(QWidget):
@@ -72,6 +159,8 @@ class CaptionPanelWidget(QWidget):
             self.preset_manager.get_default_style() or CaptionStyle()
         )
         self._block_signals: bool = False
+        self.spell_checker = get_shared_checker()
+        self._spell_cache: dict[int, list[tuple[int, int, str]]] = {}
 
         self._init_ui()
 
@@ -176,6 +265,15 @@ class CaptionPanelWidget(QWidget):
         """)
         self.cue_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
+        self.cue_table.setItemDelegateForColumn(2, SpellCheckDelegate(self))
+        self.cue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.cue_table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self.cue_table.setToolTip(
+            "Start and End are editable (mm:ss.t).\n"
+            f"Alt+←/→ nudges the start by {NUDGE_MS} ms, Alt+Shift+←/→ the end, "
+            "Alt+Ctrl+←/→ the whole cue."
+        )
+        self.cue_table.installEventFilter(self)
         layout.addWidget(self.cue_table, stretch=1)
 
         # Row for word-level shifting
@@ -204,6 +302,18 @@ class CaptionPanelWidget(QWidget):
         )
         self.btn_shift_next.clicked.connect(self._on_shift_next_clicked)
         row_shift.addWidget(self.btn_shift_next)
+
+        self.btn_delete_empty = QPushButton("🗑 Delete Empty")
+        self.btn_delete_empty.setToolTip(
+            "Delete the selected caption slot once all its words have been "
+            "shifted away and it is empty"
+        )
+        self.btn_delete_empty.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_delete_empty.setEnabled(False)
+        self.btn_delete_empty.clicked.connect(self._on_delete_empty_clicked)
+        row_shift.addWidget(self.btn_delete_empty)
         row_shift.addStretch()
         layout.addLayout(row_shift)
 
@@ -685,19 +795,108 @@ class CaptionPanelWidget(QWidget):
             self.cue_table.selectRow(row)
             self.segments_updated.emit(self.segments)
 
+    def spell_spans_for_row(self, row: int) -> list[tuple[int, int, str]]:
+        """Misspelled (start, end, word) spans of a row, cached per repaint."""
+        if not self.spell_checker.available or not (0 <= row < len(self.segments)):
+            return []
+        cached = self._spell_cache.get(row)
+        if cached is None:
+            cached = self.spell_checker.misspelled_spans(self.segments[row])
+            self._spell_cache[row] = cached
+        return cached
+
+    def _invalidate_spell_cache(self, row: int | None = None) -> None:
+        if row is None:
+            self._spell_cache.clear()
+        else:
+            self._spell_cache.pop(row, None)
+
+    def _spell_span_at(self, row: int, pos: QPoint) -> tuple[int, int, str] | None:
+        """The misspelled word under a viewport point, if any."""
+        spans = self.spell_spans_for_row(row)
+        if not spans:
+            return None
+        item = self.cue_table.item(row, 2)
+        if not item:
+            return None
+        rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
+        metrics = QFontMetrics(self.cue_table.font())
+        text = item.text()
+        for start, end, word in spans:
+            x1 = rect.left() + metrics.horizontalAdvance(text[:start])
+            x2 = rect.left() + metrics.horizontalAdvance(text[:end])
+            if x1 <= pos.x() <= x2:
+                return (start, end, word)
+        return None
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        index = self.cue_table.indexAt(pos)
+        if not index.isValid() or index.column() != 2:
+            return
+        row = index.row()
+        span = self._spell_span_at(row, pos)
+        if not span:
+            return
+
+        start, end, word = span
+        menu = QMenu(self)
+        suggestions = self.spell_checker.suggest(word)[:6]
+        if suggestions:
+            for suggestion in suggestions:
+                action = menu.addAction(suggestion)
+                action.triggered.connect(
+                    lambda _checked=False, s=suggestion: self._replace_word(
+                        row, start, end, s
+                    )
+                )
+        else:
+            no_hits = menu.addAction(f"No suggestions for “{word}”")
+            no_hits.setEnabled(False)
+        menu.exec(self.cue_table.viewport().mapToGlobal(pos))
+
+    def _replace_word(self, row: int, start: int, end: int, replacement: str) -> None:
+        if not (0 <= row < len(self.segments)):
+            return
+        seg = self.segments[row]
+        seg.update_text(seg.text[:start] + replacement + seg.text[end:])
+        self._invalidate_spell_cache(row)
+        self.set_segments(self.segments)
+        self.cue_table.selectRow(row)
+        self.segment_updated.emit(seg)
+        self.segments_updated.emit(self.segments)
+
+    def _on_delete_empty_clicked(self) -> None:
+        row = self.cue_table.currentRow()
+        if not (0 <= row < len(self.segments)):
+            return
+        self.commit_active_editor()
+        if row >= len(self.segments) or self.segments[row].text.strip():
+            return
+        delete_segment(self.segments, row)
+        self.set_segments(self.segments)
+        if self.segments:
+            self.cue_table.selectRow(min(row, len(self.segments) - 1))
+        else:
+            self.btn_delete_empty.setEnabled(False)
+        self.segments_updated.emit(self.segments)
+
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self._block_signals = True
         self.segments = list(segments)
+        self._invalidate_spell_cache()
         self.cue_table.setRowCount(len(self.segments))
 
+        editable = (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsEditable
+        )
         for row, seg in enumerate(self.segments):
             item_start = QTableWidgetItem(format_timestamp(seg.start_ms))
-            item_start.setFlags(
-                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            )
+            item_start.setFlags(editable)
 
             item_end = QTableWidgetItem(format_timestamp(seg.end_ms))
-            item_end.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            item_end.setFlags(editable)
 
             item_text = QTableWidgetItem(seg.text)
             item_text.setFlags(
@@ -720,6 +919,7 @@ class CaptionPanelWidget(QWidget):
 
         if not segment:
             self.cue_table.clearSelection()
+            self.btn_delete_empty.setEnabled(False)
             return
 
         for row, seg in enumerate(self.segments):
@@ -727,6 +927,7 @@ class CaptionPanelWidget(QWidget):
                 self._block_signals = True
                 self.cue_table.selectRow(row)
                 self._block_signals = False
+                self.btn_delete_empty.setEnabled(not seg.text.strip())
                 break
 
     def set_anchor_pct(self, pct: float, user_action: bool = False) -> None:
@@ -754,7 +955,10 @@ class CaptionPanelWidget(QWidget):
             if 0 <= row < len(self.segments):
                 seg = self.segments[row]
                 self.selected_segment = seg
+                self.btn_delete_empty.setEnabled(not seg.text.strip())
                 self.segment_selected.emit(seg)
+                return
+        self.btn_delete_empty.setEnabled(False)
 
     def commit_active_editor(self) -> None:
         # Force any active delegate editor to submit its data and close
@@ -777,10 +981,81 @@ class CaptionPanelWidget(QWidget):
             return
         row = item.row()
         col = item.column()
-        if 0 <= row < len(self.segments) and col == 2:
+        if not (0 <= row < len(self.segments)):
+            return
+        if col == 2:
             seg = self.segments[row]
             seg.update_text(item.text())
+            self._invalidate_spell_cache(row)
             self.segment_updated.emit(seg)
+        elif col in (0, 1):
+            self._apply_edited_timecode(row, col, item.text())
+
+    def _apply_edited_timecode(self, row: int, col: int, text: str) -> None:
+        seg = self.segments[row]
+        parsed = parse_timestamp(text)
+        if parsed is None:
+            # Unparseable: put the cue's own time back in the cell.
+            self._refresh_time_cells(row)
+            return
+        start_ms = parsed if col == 0 else seg.start_ms
+        end_ms = parsed if col == 1 else seg.end_ms
+        self._retime_segment(row, start_ms, end_ms)
+
+    def _retime_segment(self, row: int, start_ms: int, end_ms: int) -> None:
+        seg = self.segments[row]
+        start_ms, end_ms = clamped_segment_time(self.segments, row, start_ms, end_ms)
+        set_segment_time(seg, start_ms, end_ms)
+        self._refresh_time_cells(row)
+        self.segment_updated.emit(seg)
+        self.segments_updated.emit(self.segments)
+
+    def _refresh_time_cells(self, row: int) -> None:
+        seg = self.segments[row]
+        was_blocked = self._block_signals
+        self._block_signals = True
+        for col, ms in ((0, seg.start_ms), (1, seg.end_ms)):
+            cell = self.cue_table.item(row, col)
+            if cell:
+                cell.setText(format_timestamp(ms))
+        self._block_signals = was_blocked
+
+    def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        """Alt+arrows retime the selected cue without leaving the table.
+
+        An event filter rather than QShortcut objects: shortcuts registered on
+        this table wedged the app's media loading (see test_main_window).
+        """
+        if obj is self.cue_table and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            mods = event.modifiers()
+            if mods & Qt.KeyboardModifier.AltModifier and key in (
+                Qt.Key.Key_Left,
+                Qt.Key.Key_Right,
+            ):
+                delta = -NUDGE_MS if key == Qt.Key.Key_Left else NUDGE_MS
+                if mods & Qt.KeyboardModifier.ShiftModifier:
+                    edge = "end"
+                elif mods & Qt.KeyboardModifier.ControlModifier:
+                    edge = "both"
+                else:
+                    edge = "start"
+                self.nudge_selected_cue(delta, edge)
+                return True
+        return super().eventFilter(obj, event)
+
+    def nudge_selected_cue(self, delta_ms: int, edge: str) -> None:
+        """Move one edge of the selected cue, or the whole cue when edge='both'."""
+        row = self.cue_table.currentRow()
+        if not (0 <= row < len(self.segments)):
+            return
+        seg = self.segments[row]
+        if edge == "start":
+            self._retime_segment(row, seg.start_ms + delta_ms, seg.end_ms)
+        elif edge == "end":
+            self._retime_segment(row, seg.start_ms, seg.end_ms + delta_ms)
+        else:
+            self._retime_segment(row, seg.start_ms + delta_ms, seg.end_ms + delta_ms)
 
     def _toggle_safe_platform(self, platform_id: str) -> None:
         if platform_id in self.active_safe_platforms:

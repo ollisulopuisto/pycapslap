@@ -1,13 +1,17 @@
 import json
 
 from app.models.captions import (
+    MIN_SEGMENT_MS,
     CaptionSegment,
     CaptionsFile,
     PositionOverride,
     ProjectState,
     WordSpan,
     apply_orphan_rules,
+    clamped_segment_time,
     combine_separated_syllables,
+    delete_segment,
+    set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
 )
@@ -386,3 +390,79 @@ def test_apply_orphan_rules_one_word_segment_not_emptied():
     results = apply_orphan_rules([seg1, seg2])
     assert results[0].text == "ja"
     assert results[1].text == "sitten"
+
+
+def test_delete_segment_gives_time_to_previous_cue():
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="First",
+        words=[WordSpan(0, 1000, "First")],
+    )
+    seg2 = CaptionSegment(start_ms=1000, end_ms=2500, text="", words=[])
+    seg3 = CaptionSegment(
+        start_ms=2500,
+        end_ms=3000,
+        text="Third",
+        words=[WordSpan(2500, 3000, "Third")],
+    )
+    segments = [seg1, seg2, seg3]
+
+    delete_segment(segments, 1)
+
+    assert len(segments) == 2
+    assert segments[0].end_ms == 2500
+    # The burner takes cue times from the words, so the tail word has to follow.
+    assert segments[0].words[-1].end_ms == 2500
+    assert segments[1].start_ms == 2500
+
+
+def test_delete_first_segment_stretches_the_next_one_backwards():
+    seg1 = CaptionSegment(start_ms=200, end_ms=1000, text="", words=[])
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="Second",
+        words=[WordSpan(1000, 2000, "Second")],
+    )
+    segments = [seg1, seg2]
+
+    delete_segment(segments, 0)
+
+    assert len(segments) == 1
+    assert segments[0].start_ms == 200
+    assert segments[0].words[0].start_ms == 200
+
+
+def test_set_segment_time_scales_word_timings():
+    seg = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="Yksi kaksi",
+        words=[WordSpan(1000, 1500, "Yksi"), WordSpan(1500, 2000, "kaksi")],
+    )
+
+    # Same length, moved one second later.
+    set_segment_time(seg, 2000, 3000)
+    assert (seg.start_ms, seg.end_ms) == (2000, 3000)
+    assert [(w.start_ms, w.end_ms) for w in seg.words] == [(2000, 2500), (2500, 3000)]
+
+    # Stretched to double length: the split stays proportional.
+    set_segment_time(seg, 2000, 4000)
+    assert [(w.start_ms, w.end_ms) for w in seg.words] == [(2000, 3000), (3000, 4000)]
+
+
+def test_clamped_segment_time_respects_neighbours_and_minimum():
+    segments = [
+        CaptionSegment(start_ms=0, end_ms=1000, text="a"),
+        CaptionSegment(start_ms=1000, end_ms=2000, text="b"),
+        CaptionSegment(start_ms=2000, end_ms=3000, text="c"),
+    ]
+
+    # Dragging the start before the previous cue's end is not allowed.
+    assert clamped_segment_time(segments, 1, 500, 2000) == (1000, 2000)
+    # Nor is running past the next cue's start.
+    assert clamped_segment_time(segments, 1, 1000, 2500) == (1000, 2000)
+    # A cue can never collapse to nothing.
+    start, end = clamped_segment_time(segments, 1, 1990, 1995)
+    assert end - start >= MIN_SEGMENT_MS
