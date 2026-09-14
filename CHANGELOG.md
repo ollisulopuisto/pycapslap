@@ -7,6 +7,18 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Fixed
+- The editor preview and the burned-in render were two separate layout engines that agreed on almost nothing. The render used a font 1.78× larger (it scaled against a different reference frame), uppercased every caption where the preview did not, anchored the text block by its bottom edge where the preview centred it on the same line, and — worst — threw away the cues as authored: every word in the project was rejoined into one stream and re-cut on punctuation and pauses, so "Fix Syllables", the word shifts and every hand-made split never reached the video at all. The burn now uses one cue per authored segment (a syllable glued across a cue boundary still joins its word — half a word on screen is nobody's intent), and the preview no longer lays anything out: it asks the renderer for the layout and draws what it gets back, so the uppercasing, line breaks, per-line font size, highlighted word and vertical anchor all come from the code that writes the subtitle file.
+- Captions could overflow the frame. Line breaking was a character-count estimate — `font_px * 0.5` in one place, `0.7` in another, `0.85` in a third — and automatic wrapping was switched off, so when the estimate ran under, the line simply ran off the edge. Text is now measured against the actual font file and wrapped on real metrics against one margin defined in one place.
+- Shifting a word between cues with `◀ Shift Start` / `Shift End ▶` put a space in the middle of a word when what moved was a syllable: the cue text was rebuilt with a plain space join, ignoring the very "glue to previous" mark that "Fix Syllables" exists to act on.
+
+### Added
+- Justified caption style: two lines flush to the same width, each line's font size chosen so it fills the caption box — a short line renders large, a long one small, and the block reads as one solid rectangle. Available as the "Justified (Two Flush Lines)" preset or the "Justify" toggle in the style panel.
+- Finnish spell check in the caption table (libvoikko): unknown words get a red squiggle, right-click offers corrections. Syllables split on purpose — a piece glued to the previous cue, a fragment ending in a hyphen — are not flagged, or a syllable-split transcript would be red end to end. Entirely optional: without `brew install libvoikko` nothing is flagged and the panel behaves exactly as before.
+- Editable timecodes: the Start and End columns take `mm:ss.t`, `h:mm:ss.t` or a bare seconds count, clamped so a cue cannot cross its neighbours or collapse to nothing, with each cue's word timings scaled to match. `Alt`+`←`/`→` nudges the start by 100 ms, `Alt`+`Shift`+`←`/`→` the end, `Alt`+`Ctrl`+`←`/`→` the whole cue.
+- Empty caption slots can be deleted. Shifting every word out of a cue used to leave a slot with no way to remove it; the time it occupied now goes to the cue before it — the one that just took its words — instead of becoming a silent gap.
+- The transcription language can be chosen in the settings dialog (⚙) instead of always auto-detecting, which guesses wrong often enough on short clips.
+
 ## [v26.09.13.2] - 2026-09-13
 
 ### Fixed

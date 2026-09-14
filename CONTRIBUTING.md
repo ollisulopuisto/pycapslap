@@ -111,3 +111,30 @@ Happy to answer questions on any of this in an issue before you start.
 
 See the root `README.md` and `pyside/README.md` for running the app,
 tests, and linters locally.
+
+### Optional: Finnish spell check
+
+`brew install libvoikko` turns on the caption table's spell checking. The
+Python wrapper (`libvoikko`) is a normal dependency, but it is a ctypes
+shim: without the native library and its dictionary, `SpellChecker`
+reports no errors and the UI behaves as if the feature did not exist.
+`PYCAPSLAP_DISABLE_SPELLCHECK=1` forces that state, and
+`PYCAPSLAP_VOIKKO_LIB_PATH` points at the native library if it lives
+somewhere the usual Homebrew/MacPorts paths don't cover.
+
+### Where caption layout lives
+
+**One layout engine, in Rust.** `rust/src/captions.rs` decides cue
+boundaries, line breaks, per-line font size, uppercasing, which word is
+highlighted and the vertical anchor, measuring text against the bundled
+font files (`rust/src/text_metrics.rs`, `rust/src/justify.rs`).
+
+The editor does **not** lay captions out. It asks for the layout over the
+`previewLayout` RPC and draws what comes back
+(`pyside/app/views/video_canvas.py`). Please keep it that way: the
+preview and the export used to be separate implementations, and they
+drifted into disagreeing about nearly every visual property (see
+CHANGELOG, Unreleased). If a caption needs to look different, change it
+in `captions.rs` — both sides follow from there. The one thing the canvas
+still decides for itself is a stand-in layout for before the core
+answers, and it mirrors the renderer's own font-size formula.

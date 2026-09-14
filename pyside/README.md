@@ -31,10 +31,13 @@ uv run pycapslap ../rust/bin/test_input.mp4
 * **⚡ Sub-Millisecond Frame Scrubbing:** Direct hardware-accelerated playback with Qt 6 Multimedia + FFmpeg backend (0.1–0.5 ms average seek latency).
 * **🖱️ Direct On-Video Dragging:** Click and drag caption cues directly on top of the video canvas to adjust vertical placement (`anchor_y`) with a live guideline and percentage badge.
 * **🎞️ Interactive Visual Timeline:** Proportional cue blocks, scrubber needle, and instant timeline scrubbing.
-* **📋 Caption Inspector & Table:** In-place cue text editing, quick position presets (`Top 15%`, `Middle 50%`, `Bottom 80%`), and precision slider.
+* **📋 Caption Inspector & Table:** In-place cue text editing, editable `mm:ss.t` timecodes (clamped to the neighbouring cues, with word timings scaled to match), `Alt`+arrow nudging, deletion of cues emptied by word shifting, quick position presets (`Top 15%`, `Middle 50%`, `Bottom 80%`), and precision slider.
 * **🤖 Auto-Dodge Captions:** Calls the Rust core to scan video activity across 10 vertical bands and intelligently dodge faces and platform UI overlays (TikTok, Reels, Shorts).
 * **🔒 Local-First AI Transcription:** Local whisper.cpp transcription via asynchronous Rust IPC with live progress reporting. A settings dialog (⚙, next to the Transcribe button) lets you pick the local model size, check/download it, or switch to the OpenAI Whisper API with your own key.
 * **🧩 Syllable & Orphan Fixups:** One-click "Fix Syllables" re-glues words Whisper split across segments, and "Fix Orphans" prevents trailing conjunctions and lone words from being stranded on their own line.
+* **🔤 Finnish Spell Check (optional):** with `libvoikko` installed (`brew install libvoikko`), unknown words are underlined in the cue table and right-click offers corrections; deliberately split syllables are not flagged. Without the library nothing is flagged and everything else works unchanged.
+* **👁️ Preview = Render:** the canvas draws the layout the Rust core produces for the burn — same cues, line breaks, per-line font sizes, uppercasing, highlighted word and vertical anchor — instead of laying captions out a second time and disagreeing with the export.
+* **📐 Justified Two-Line Style:** both lines flush to the same width, each line's font size chosen so it fills the caption box; measured against the actual font file rather than estimated from character counts.
 * **📱 Platform Safe Areas:** Toggleable TikTok / Reels / Shorts UI overlays on the canvas, respected by Auto-Dodge placement.
 * **🎬 Multi-Format Rendering:** Burn captions into 9:16, 1:1, 4:5, or 16:9 exports with one click via the Rust + FFmpeg VideoToolbox pipeline, with live render progress.
 * **💾 Sidecar Persistence:** Automatic loading and saving of `.capslap.json` sidecar files.

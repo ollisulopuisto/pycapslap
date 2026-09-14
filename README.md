@@ -33,13 +33,20 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 * 🧩 **Smart Syllable Logic & Word Preservation**:
   * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
   * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.
-  * **Manual Word Shifting**: Instant `◀ Shift Start` and `Shift End ▶` buttons to shift words between adjacent cues without typing.
+  * **Manual Word Shifting**: Instant `◀ Shift Start` and `Shift End ▶` buttons to shift words between adjacent cues without typing — a shifted syllable joins the word it belongs to instead of landing next to it.
+  * **Finnish Spell Check** (optional): with [libvoikko](https://voikko.puimula.org/) installed, unknown words are underlined in the cue table and right-click offers corrections. Syllables split on purpose are left alone.
+* ⏱️ **Cue Timing You Can Edit**:
+  * Type timecodes straight into the Start/End columns (`mm:ss.t`), clamped to the neighbouring cues, with word timings scaled to match.
+  * `Alt`+`←`/`→` nudges the start, `Alt`+`Shift`+`←`/`→` the end, `Alt`+`Ctrl`+`←`/`→` the whole cue.
+  * Delete a cue emptied by shifting its words away; its time goes to the cue that took them.
 * 🔤 **Hierarchical Typography System**:
   * Organized font menus categorized into **Modern / Sans**, **Display / Impact**, **Fun / Comic**, **Serif / Elegant**, and **Handwritten / Script**.
   * Bundled with creator-favorite fonts: Montserrat, Komika Axis, THE BOLD FONT, Roboto, Bebas Neue, Bangers, and more.
 * 🎨 **Custom Show Style Presets**:
   * Save custom typography, font sizes, colors, and karaoke highlight styling permanently per show or podcast.
   * Fast dropdown switcher to recall styles for different projects instantly.
+  * **Justified two-line style**: both lines flush to the same width, each sized to fill it, so a short line renders large and a long one small — measured against the real font, not guessed.
+* 👁️ **What You See Is What Gets Burned**: the on-video preview draws the layout the renderer produces — the same line breaks, font sizes, uppercasing and placement that end up in the export, rather than a second guess at them.
 * 🎯 **Interactive Timeline & Auto-Dodge**:
   * Real-time drag-and-drop vertical subtitle positioning on video canvas.
   * Automated computer-vision activity detection ("Auto Dodge") to avoid obscuring faces or high-motion areas.
@@ -56,6 +63,9 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 * **Python 3.12+** and [**uv**](https://github.com/astral-sh/uv)
 * **Rust**: [rustup.rs](https://rustup.rs/)
 * **FFmpeg** installed on your system (`brew install ffmpeg` on macOS)
+* *Optional* — **libvoikko** for Finnish spell check in the caption table
+  (`brew install libvoikko`). Without it the app runs exactly as before,
+  just without the squiggles.
 
 ### Running PyCapSlap
 ```bash
