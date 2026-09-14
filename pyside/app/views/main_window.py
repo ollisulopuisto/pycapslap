@@ -311,7 +311,11 @@ class MainWindow(QMainWindow):
                 self._preview_cues = cues
                 self._apply_preview_layout()
 
-            QTimer.singleShot(0, apply)
+            # Three-argument form: this runs on the core client's reader
+            # thread, which has no event loop, so a timer created there would
+            # never fire. Passing `self` as the context object queues the call
+            # onto the GUI thread instead.
+            QTimer.singleShot(0, self, apply)
 
         fut.add_done_callback(on_done)
 

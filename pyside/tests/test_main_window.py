@@ -245,3 +245,66 @@ def test_main_window_transcribe_params(qtbot, tmp_path):
     assert "exportFormats" in called_params
     assert isinstance(called_params["exportFormats"], list)
     window.close()
+
+
+def test_preview_layout_reaches_canvas_from_reader_thread(qtbot):
+    """The core answers on its own reader thread, not the GUI thread.
+
+    The layout has to be handed over with a thread hop that actually fires
+    there; when it doesn't, the canvas silently keeps drawing its stand-in
+    layout — one flowing line, no karaoke highlight — no matter what the
+    style panel says.
+    """
+    import threading
+    import time
+    from concurrent.futures import Future
+
+    from PySide6.QtCore import QObject, Signal
+
+    cue = {
+        "startMs": 0,
+        "endMs": 2000,
+        "lines": [
+            {"words": [{"text": "JA", "isHighlighted": True}], "fontSizePx": 44},
+            {"words": [{"text": "SITTEN", "isHighlighted": False}], "fontSizePx": 52},
+        ],
+        "yPct": 88.0,
+        "anchor": "bottom",
+    }
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None  # the telemetry timer looks for one
+
+        def call(self, method, params):
+            f: Future = Future()
+            if method == "previewLayout":
+                # Answer with a beat's delay so the caller has attached its
+                # callback first: a Future that is already done runs the
+                # callback inline on the GUI thread, and the test would pass
+                # without ever crossing a thread boundary.
+                def answer():
+                    time.sleep(0.05)
+                    f.set_result({"cues": [cue]})
+
+                threading.Thread(target=answer, daemon=True).start()
+            else:
+                f.set_result({})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    window.set_caption_segments(
+        [CaptionSegment(start_ms=0, end_ms=2000, text="Ja sitten")]
+    )
+    # Only the explicit call below should reach the mock; the debounced
+    # refresh set_caption_segments queued would answer on the GUI thread.
+    window._layout_timer.stop()
+    window._request_preview_layout()
+
+    qtbot.waitUntil(lambda: window._preview_cues == [cue], timeout=2000)
+    assert window.overlay.layout_cue == cue
+    window.close()
