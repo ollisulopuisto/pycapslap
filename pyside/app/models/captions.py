@@ -250,6 +250,88 @@ def _join_words(words: list[WordSpan]) -> str:
 
 MIN_SEGMENT_MS = 100
 
+# Defaults for grouping loose words into readable cues. Roughly what fits a
+# portrait frame at the usual caption sizes — two lines' worth.
+GROUP_MAX_WORDS = 6
+GROUP_MAX_CHARS = 42
+GROUP_GAP_MS = 600
+SENTENCE_ENDINGS = (".", "!", "?", "…", ":")
+
+
+def group_words_into_phrases(
+    segments: list[CaptionSegment],
+    max_words: int = GROUP_MAX_WORDS,
+    max_chars: int = GROUP_MAX_CHARS,
+    gap_ms: int = GROUP_GAP_MS,
+) -> list[CaptionSegment]:
+    """Merge word-per-cue transcripts into phrase-sized cues.
+
+    Transcribing in karaoke mode used to emit one cue per word, and the
+    renderer quietly stitched them back together. It no longer does — the cues
+    are burned as authored — so this puts the stitching in the editor, where
+    the result is visible and can be adjusted.
+    """
+    words: list[WordSpan] = []
+    for seg in segments:
+        for w in seg.words or []:
+            text = w.text.strip()
+            if not text:
+                continue
+            # A syllable marked as glued, or a piece left dangling by a
+            # hyphen, belongs to the word before it — grouping them into one
+            # cue is not enough, they have to become one word.
+            if words and (w.glue_to_previous or words[-1].text.endswith("-")):
+                words[-1].text = words[-1].text.rstrip("-") + text
+                words[-1].end_ms = max(words[-1].end_ms, w.end_ms)
+                continue
+            words.append(
+                WordSpan(
+                    start_ms=w.start_ms,
+                    end_ms=w.end_ms,
+                    text=text,
+                    glue_to_previous=False,
+                )
+            )
+        if not (seg.words or []) and seg.text.strip():
+            # No word timings: spread the cue's own text across its duration.
+            tokens = seg.text.split()
+            step = max(1, (seg.end_ms - seg.start_ms) // max(1, len(tokens)))
+            for i, tok in enumerate(tokens):
+                start = seg.start_ms + i * step
+                end = seg.end_ms if i == len(tokens) - 1 else start + step
+                words.append(WordSpan(start_ms=start, end_ms=end, text=tok))
+
+    if not words:
+        return list(segments)
+
+    groups: list[list[WordSpan]] = []
+    current: list[WordSpan] = []
+    for word in words:
+        if current:
+            previous = current[-1]
+            chars = len(" ".join(w.text for w in current)) + 1 + len(word.text)
+            if (
+                previous.text.endswith(SENTENCE_ENDINGS)
+                or word.start_ms - previous.end_ms > gap_ms
+                or len(current) >= max_words
+                or chars > max_chars
+            ):
+                groups.append(current)
+                current = []
+        current.append(word)
+    if current:
+        groups.append(current)
+
+    return [
+        CaptionSegment(
+            start_ms=group[0].start_ms,
+            end_ms=group[-1].end_ms,
+            text=" ".join(w.text for w in group),
+            words=group,
+        )
+        for group in groups
+    ]
+
 
 def delete_segment(segments: list[CaptionSegment], index: int) -> None:
     """Remove a cue and hand its time to the previous one.

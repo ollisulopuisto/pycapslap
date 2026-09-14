@@ -11,6 +11,7 @@ from app.models.captions import (
     clamped_segment_time,
     combine_separated_syllables,
     delete_segment,
+    group_words_into_phrases,
     set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
@@ -466,3 +467,84 @@ def test_clamped_segment_time_respects_neighbours_and_minimum():
     # A cue can never collapse to nothing.
     start, end = clamped_segment_time(segments, 1, 1990, 1995)
     assert end - start >= MIN_SEGMENT_MS
+
+
+def test_group_words_into_phrases_merges_word_per_cue_transcripts():
+    # What karaoke transcription used to produce: one cue per word.
+    words = [
+        ("Moi", 0, 400),
+        ("täällä", 500, 900),
+        ("Mikko", 950, 1400),
+        ("Hyppönen.", 1450, 2000),
+        ("Vuonna", 3000, 3400),
+        ("2026", 3450, 3900),
+    ]
+    segments = [
+        CaptionSegment(start_ms=s, end_ms=e, text=t, words=[WordSpan(s, e, t)])
+        for t, s, e in words
+    ]
+
+    grouped = group_words_into_phrases(segments)
+
+    assert [g.text for g in grouped] == [
+        "Moi täällä Mikko Hyppönen.",
+        "Vuonna 2026",
+    ]
+    # Cue times and word timings survive the merge, so karaoke still lines up.
+    assert (grouped[0].start_ms, grouped[0].end_ms) == (0, 2000)
+    assert [w.text for w in grouped[0].words] == ["Moi", "täällä", "Mikko", "Hyppönen."]
+    assert grouped[1].start_ms == 3000
+
+
+def test_group_words_into_phrases_rejoins_split_words():
+    segments = [
+        CaptionSegment(
+            start_ms=0, end_ms=400, text="Kyber-", words=[WordSpan(0, 400, "Kyber-")]
+        ),
+        CaptionSegment(
+            start_ms=400,
+            end_ms=900,
+            text="turvallisuudesta",
+            words=[WordSpan(400, 900, "turvallisuudesta")],
+        ),
+        CaptionSegment(
+            start_ms=950,
+            end_ms=1300,
+            text="pa",
+            words=[WordSpan(950, 1300, "pa", glue_to_previous=True)],
+        ),
+    ]
+
+    grouped = group_words_into_phrases(segments)
+
+    assert len(grouped) == 1
+    assert grouped[0].text == "Kyberturvallisuudestapa"
+
+
+def test_group_words_into_phrases_breaks_on_pauses_and_length():
+    # A long pause starts a new cue even mid-sentence.
+    segments = [
+        CaptionSegment(
+            start_ms=0, end_ms=400, text="yksi", words=[WordSpan(0, 400, "yksi")]
+        ),
+        CaptionSegment(
+            start_ms=2000,
+            end_ms=2400,
+            text="kaksi",
+            words=[WordSpan(2000, 2400, "kaksi")],
+        ),
+    ]
+    assert len(group_words_into_phrases(segments)) == 2
+
+    # And a cue never grows past the word limit.
+    many = [
+        CaptionSegment(
+            start_ms=i * 100,
+            end_ms=i * 100 + 90,
+            text="ok",
+            words=[WordSpan(i * 100, i * 100 + 90, "ok")],
+        )
+        for i in range(10)
+    ]
+    grouped = group_words_into_phrases(many, max_words=4)
+    assert all(len(g.words) <= 4 for g in grouped)

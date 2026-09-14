@@ -642,10 +642,12 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "exportFormats": [export_fmt],
             "karaoke": self.project.style.karaoke,
-            # Word-per-cue only for karaoke bounce; otherwise keep whisper's
-            # own phrase/sentence segments (with per-word timing nested in
-            # each segment's `words`, still available for highlighting).
-            "splitByWords": self.project.style.karaoke,
+            # Never one cue per word: whisper's own phrase segments carry
+            # per-word timings in `words`, which is what karaoke highlights
+            # from. Splitting the transcript into words instead put a single
+            # word on screen at a time, since the burner shows the cues as
+            # they are authored.
+            "splitByWords": False,
             **provider_params,
         }
 

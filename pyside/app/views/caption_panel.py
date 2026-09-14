@@ -29,6 +29,7 @@ from app.models.captions import (
     clamped_segment_time,
     combine_separated_syllables,
     delete_segment,
+    group_words_into_phrases,
     set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
@@ -211,6 +212,15 @@ class CaptionPanelWidget(QWidget):
         )
         self.btn_combine_syllables.clicked.connect(self._on_combine_syllables_clicked)
         header_layout.addWidget(self.btn_combine_syllables)
+
+        self.btn_group_words = QPushButton("Group Words")
+        self.btn_group_words.setToolTip(
+            "Merge a word-per-cue transcript into phrase-sized cues, breaking "
+            "on sentence ends, pauses and length — what you need when every "
+            "caption holds a single word"
+        )
+        self.btn_group_words.clicked.connect(self._on_group_words_clicked)
+        header_layout.addWidget(self.btn_group_words)
 
         self.btn_fix_orphans = QPushButton("Fix Orphans")
         self.btn_fix_orphans.setToolTip(
@@ -784,6 +794,12 @@ class CaptionPanelWidget(QWidget):
         self.commit_active_editor()
         self.segments = combine_separated_syllables(self.segments)
         self.segments = apply_orphan_rules(self.segments)
+        self.set_segments(self.segments)
+        self.segments_updated.emit(self.segments)
+
+    def _on_group_words_clicked(self) -> None:
+        self.commit_active_editor()
+        self.segments = group_words_into_phrases(self.segments)
         self.set_segments(self.segments)
         self.segments_updated.emit(self.segments)
 
