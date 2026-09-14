@@ -308,3 +308,101 @@ def test_preview_layout_reaches_canvas_from_reader_thread(qtbot):
     qtbot.waitUntil(lambda: window._preview_cues == [cue], timeout=2000)
     assert window.overlay.layout_cue == cue
     window.close()
+
+
+def _mock_core_with_layer(cue, layer_png):
+    """A core that answers previewLayout with `cue` and hands back `layer_png`."""
+    import threading
+    import time
+    from concurrent.futures import Future
+
+    from PySide6.QtCore import QObject, Signal
+
+    calls: list[tuple[str, dict]] = []
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            calls.append((method, params))
+            f: Future = Future()
+            if method == "previewLayout":
+
+                def answer():
+                    time.sleep(0.05)
+                    f.set_result({"cues": [cue]})
+
+                threading.Thread(target=answer, daemon=True).start()
+            elif method == "generatePreviewFrame":
+
+                def answer_frame():
+                    time.sleep(0.05)
+                    f.set_result({"imageData": "data:image/png;base64," + layer_png})
+
+                threading.Thread(target=answer_frame, daemon=True).start()
+            else:
+                f.set_result({})
+            return f
+
+        def close(self):
+            pass
+
+    return MockCore(), calls
+
+
+def test_caption_layer_is_fetched_and_cached_per_cue(qtbot):
+    """The preview shows libass's pixels, and asks for each cue only once."""
+    import base64
+
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QColor, QImage
+
+    img = QImage(8, 8, QImage.Format.Format_ARGB32)
+    img.fill(QColor(0, 255, 0, 255))
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    png_b64 = base64.b64encode(bytes(buf.data())).decode()
+
+    cue = {
+        "startMs": 0,
+        "endMs": 2000,
+        "lines": [{"words": [{"text": "JA", "isHighlighted": True}], "fontSizePx": 44}],
+        "yPct": 88.0,
+        "anchor": "bottom",
+    }
+    core, calls = _mock_core_with_layer(cue, png_b64)
+
+    window = MainWindow(core_client=core)
+    qtbot.addWidget(window)
+    from app.models.captions import VideoMetadata
+
+    window.project.video = VideoMetadata(
+        path="/tmp/does-not-need-to-exist.mp4", width=1080, height=1920
+    )
+    window.set_caption_segments(
+        [CaptionSegment(start_ms=0, end_ms=2000, text="Ja sitten")]
+    )
+    window._layout_timer.stop()
+    window._request_preview_layout()
+
+    qtbot.waitUntil(lambda: window.overlay.caption_layer is not None, timeout=3000)
+
+    frame_calls = [c for c in calls if c[0] == "generatePreviewFrame"]
+    assert len(frame_calls) == 1
+    params = frame_calls[0][1]
+    assert params["renderMode"] == "captions"
+    assert params["exportFormat"] == "source"
+    # Rendered past the karaoke pop, inside the cue.
+    assert cue["startMs"] <= params["timestampMs"] < cue["endMs"]
+
+    # Same cue again: served from cache, no second render.
+    window._apply_preview_layout()
+    assert len([c for c in calls if c[0] == "generatePreviewFrame"]) == 1
+
+    # A style change invalidates every rendered cue.
+    window._invalidate_caption_layers()
+    assert window.overlay.caption_layer is None
+    assert window._layer_cache == {}
+    window.close()

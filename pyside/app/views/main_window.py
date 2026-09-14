@@ -12,6 +12,7 @@ from PySide6.QtGui import (
     QPixmap,
     QShortcut,
 )
+from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
@@ -42,6 +43,11 @@ from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
 
 
+# How many rendered cues to keep. Each is a full-frame ARGB pixmap, so this
+# is a memory budget, not a hit-rate tuning knob.
+LAYER_CACHE_SIZE = 24
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self, core_client: CoreClient | None = None, parent: QWidget | None = None
@@ -61,6 +67,21 @@ class MainWindow(QMainWindow):
         # same blocks the burn will. Refreshed off a timer because every
         # keystroke in the cue table would otherwise hit the core.
         self._preview_cues: list[dict] = []
+        # libass's own rendering of each cue, keyed by the cue's start. The
+        # editor draws these instead of painting text itself, so what is on
+        # screen is literally what the burn produces. Thrown away whenever
+        # anything that feeds the ASS document changes.
+        self._layer_cache: dict[int, QPixmap] = {}
+        self._layer_pending: set[int] = set()
+        self._layer_epoch = 0
+        self._layer_wanted: dict | None = None
+        # Scrubbing crosses a cue every few pixels; rendering each one it
+        # passes over would keep two ffmpeg processes busy per cue for
+        # nothing. Only the cue the user comes to rest on gets rendered.
+        self._layer_timer = QTimer(self)
+        self._layer_timer.setSingleShot(True)
+        self._layer_timer.setInterval(150)
+        self._layer_timer.timeout.connect(self._render_wanted_layer)
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(120)
@@ -189,6 +210,11 @@ class MainWindow(QMainWindow):
         # Player signals
         self.player.position_changed.connect(self._on_position_changed)
         self.player.duration_changed.connect(self.timeline.set_duration)
+        # Pausing stops position updates, so the moment the user settles on a
+        # frame is the moment to fetch the renderer's version of it.
+        self.player.media_player.playbackStateChanged.connect(
+            self._on_playback_state_changed
+        )
 
         # Timeline signals
         self.timeline.seek_requested.connect(self.player.seek_to_ms)
@@ -259,7 +285,20 @@ class MainWindow(QMainWindow):
 
     def schedule_preview_layout(self) -> None:
         """Ask the renderer for a fresh layout once the edits settle."""
+        self._invalidate_caption_layers()
         self._layout_timer.start()
+
+    def _invalidate_caption_layers(self) -> None:
+        """Drop every rendered cue; the ASS document they came from is stale.
+
+        The epoch bump makes in-flight renders land on nothing instead of
+        overwriting the cache with pixels from the previous style.
+        """
+        self._layer_epoch += 1
+        self._layer_cache.clear()
+        self._layer_pending.clear()
+        self._layer_wanted = None
+        self.overlay.set_caption_layer(None)
 
     def _preview_frame_size(self) -> tuple[int, int]:
         size = self.player.canvas.get_video_size()
@@ -319,6 +358,131 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
+    # ---- Caption layers ---------------------------------------------------
+    #
+    # The editor's own painting can only ever approximate libass: it has to
+    # guess at the same font, the same wrapping, the same outline geometry.
+    # So for anything that stands still — paused, scrubbed, restyled — the
+    # renderer is asked for the cue as pixels, on a transparent canvas the
+    # size of the video frame, from the same ASS document the burn writes.
+    # Playback and dragging keep the painted approximation, which costs
+    # nothing per frame.
+
+    def _sync_caption_layer(self, cue: dict | None) -> None:
+        if cue is None:
+            self.overlay.set_caption_layer(None)
+            return
+
+        key = int(cue.get("startMs", 0))
+        cached = self._layer_cache.get(key)
+        self.overlay.set_caption_layer(cached)
+        if cached is None:
+            self._layer_wanted = cue
+            self._layer_timer.start()
+
+    def _render_wanted_layer(self) -> None:
+        cue = self._layer_wanted
+        self._layer_wanted = None
+        if cue is None:
+            return
+        pos_ms = self.player.media_player.position()
+        current = self._cue_for_position(pos_ms)
+        # Only render what the user actually stopped on.
+        if current is None or int(current.get("startMs", 0)) != int(
+            cue.get("startMs", 0)
+        ):
+            return
+        self._request_caption_layer(cue)
+
+    def _layer_source_video(self) -> str:
+        path = self.player.media_player.source().toLocalFile()
+        return path or (self.project.video_path or "")
+
+    def _request_caption_layer(self, cue: dict) -> None:
+        playing = QMediaPlayer.PlaybackState.PlayingState
+        if self.player.media_player.playbackState() == playing:
+            return
+        source_file = self._layer_source_video()
+        if not source_file or not self.project.segments:
+            return
+
+        key = int(cue.get("startMs", 0))
+        if key in self._layer_pending:
+            return
+
+        # A karaoke window opens with a \fscx pop; render past it so the cue
+        # is caught at rest and one render stands for the whole window.
+        end_ms = int(cue.get("endMs", key))
+        timestamp = min(key + 200, max(key, end_ms - 20))
+
+        style = self.project.style
+        params = {
+            "inputVideo": str(Path(source_file).resolve()),
+            "segments": [s.to_dict() for s in self.project.segments],
+            "timestampMs": timestamp,
+            # The video's own frame, not an export canvas: the layer has to
+            # land on the pixels the editor is showing.
+            "exportFormat": "source",
+            "karaoke": style.karaoke,
+            "multiline": style.multiline,
+            "justifyLines": style.justify_lines,
+            "fontName": style.font_name,
+            "fontSize": style.font_size,
+            "textColor": style.text_color,
+            "highlightWordColor": style.highlight_color,
+            "outlineColor": style.outline_color,
+            "outlineWidth": style.outline_width,
+            "backgroundBox": style.background_box,
+            "glowEffect": style.glow_effect,
+            "positionOverrides": [o.to_dict() for o in self.project.position_overrides],
+            "renderMode": "captions",
+            "thumbnailHeight": self.player.canvas.layer_height(),
+        }
+
+        try:
+            fut = self.core.call("generatePreviewFrame", params)
+        except Exception:
+            return
+
+        self._layer_pending.add(key)
+        epoch = self._layer_epoch
+
+        def on_done(f) -> None:
+            try:
+                result = f.result()
+            except Exception:
+                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                return
+            data_uri = (result or {}).get("imageData", "")
+            raw = data_uri.split(",", 1)[1] if "," in data_uri else ""
+            if not raw:
+                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                return
+            try:
+                image = QImage.fromData(base64.b64decode(raw))
+            except (ValueError, TypeError):
+                QTimer.singleShot(0, self, lambda: self._layer_pending.discard(key))
+                return
+
+            def store(image=image) -> None:
+                self._layer_pending.discard(key)
+                if epoch != self._layer_epoch or image.isNull():
+                    return
+                pixmap = QPixmap.fromImage(image)
+                self._layer_cache[key] = pixmap
+                # A full-frame layer is megabytes; keep only the handful of
+                # cues around wherever the user is working.
+                while len(self._layer_cache) > LAYER_CACHE_SIZE:
+                    self._layer_cache.pop(next(iter(self._layer_cache)))
+                pos_ms = self.player.media_player.position()
+                current = self._cue_for_position(pos_ms)
+                if current is not None and int(current.get("startMs", 0)) == key:
+                    self.overlay.set_caption_layer(pixmap)
+
+            QTimer.singleShot(0, self, store)
+
+        fut.add_done_callback(on_done)
+
     def _cue_for_position(self, pos_ms: int) -> dict | None:
         for cue in self._preview_cues:
             if cue.get("startMs", 0) <= pos_ms < cue.get("endMs", 0):
@@ -327,21 +491,24 @@ class MainWindow(QMainWindow):
 
     def _apply_preview_layout(self) -> None:
         pos_ms = self.player.media_player.position()
-        self.overlay.set_layout_cue(
-            self._cue_for_position(pos_ms), self._preview_frame_size()
-        )
+        cue = self._cue_for_position(pos_ms)
+        self.overlay.set_layout_cue(cue, self._preview_frame_size())
+        self._sync_caption_layer(cue)
 
     def _on_position_changed(self, pos_ms: int) -> None:
         self.timeline.set_position(pos_ms)
-        self.overlay.set_layout_cue(
-            self._cue_for_position(pos_ms), self._preview_frame_size()
-        )
+        cue = self._cue_for_position(pos_ms)
+        self.overlay.set_layout_cue(cue, self._preview_frame_size())
+        self._sync_caption_layer(cue)
         active = self.project.get_active_segment(pos_ms)
         if active:
             anchor_y = self.project.get_anchor_y_for_segment(active)
             self.overlay.set_segment(active, anchor_y, current_pos_ms=pos_ms)
         else:
             self.overlay.set_segment(None, current_pos_ms=pos_ms)
+
+    def _on_playback_state_changed(self, _state) -> None:
+        self._apply_preview_layout()
 
     def _on_segment_selected(self, seg: CaptionSegment) -> None:
         self.player.seek_to_ms(seg.start_ms)

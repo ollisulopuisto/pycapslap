@@ -235,3 +235,60 @@ def test_video_canvas_safe_platforms(qtbot):
 
     # Paint event with safe platforms enabled
     canvas.repaint()
+
+
+def test_canvas_draws_the_renderers_layer_instead_of_its_own_text(qtbot):
+    """A layer from the renderer wins over the canvas's own painting.
+
+    The painted version can only approximate libass; whenever the real pixels
+    are available they are the preview, so the editor shows what the burn
+    produces rather than a lookalike.
+    """
+    from PySide6.QtGui import QColor, QPixmap
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(360, 640)
+    canvas.set_segment(
+        CaptionSegment(start_ms=0, end_ms=1000, text="Ja sitten"), anchor_y_pct=80.0
+    )
+    canvas.set_layout_cue(
+        {
+            "lines": [
+                {"words": [{"text": "JA", "isHighlighted": False}], "fontSizePx": 40}
+            ],
+            "yPct": 80.0,
+            "anchor": "bottom",
+        },
+        (1080, 1920),
+    )
+
+    layer = QPixmap(1080, 1920)
+    layer.fill(QColor(0, 255, 0, 255))
+    canvas.set_caption_layer(layer)
+    assert canvas.caption_layer is layer
+
+    painted = QPixmap(canvas.size())
+    canvas.render(painted)
+    image = painted.toImage()
+    # The layer covers the whole frame, so any pixel inside the video
+    # rectangle is the layer's if it was drawn at all.
+    center = image.pixelColor(image.width() // 2, image.height() // 2)
+    assert (center.red(), center.green(), center.blue()) == (0, 255, 0)
+
+    # Dragging goes back to the painted version, which follows the pointer.
+    canvas.is_dragging = True
+    painted2 = QPixmap(canvas.size())
+    canvas.render(painted2)
+    center2 = painted2.toImage().pixelColor(image.width() // 2, image.height() // 2)
+    assert (center2.red(), center2.green(), center2.blue()) != (0, 255, 0)
+
+
+def test_layer_height_is_quantized(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(360, 640)
+    first = canvas.layer_height()
+    canvas.resize(362, 643)
+    assert canvas.layer_height() == first
+    assert first % 120 == 0

@@ -94,15 +94,34 @@ fn fonts_dir() -> Option<PathBuf> {
         .find(|candidate| candidate.is_dir())
 }
 
-/// Find the font file whose family or full name matches `family`.
+/// Find the font file whose name matches `family`.
 ///
-/// The style presets name fonts the way libass resolves them ("Roboto Bold"),
-/// which is a full name rather than a family, so both are matched.
+/// A font is called different things by different name records, and the two
+/// sides of this app pick different ones: the style presets use the full name
+/// libass resolves ("Roboto Bold", name 4), while the editor's font menu shows
+/// what Qt reports, which is the typographic family ("Montserrat", name 16,
+/// for a file whose full name is "Montserrat Black"). Both have to land on the
+/// same file, so all of them are matched, closest name first.
+///
+/// Returns None when nothing matches. There is deliberately no fallback font:
+/// measuring one font's text against another's glyphs silently mislays every
+/// caption, and a caller that gets None can fall back honestly instead.
 fn find_font_file(family: &str) -> Option<PathBuf> {
     let dir = fonts_dir()?;
     let wanted = normalize_name(family);
 
-    let mut fallback: Option<PathBuf> = None;
+    // Lower is closer: an exact full/family name beats a PostScript name,
+    // which beats the typographic family a whole weight range shares.
+    let rank_of = |name_id: u16| -> Option<u8> {
+        match name_id {
+            4 | 1 => Some(0),
+            6 => Some(1),
+            16 => Some(2),
+            _ => None,
+        }
+    };
+
+    let mut best: Option<(u8, PathBuf)> = None;
     for entry in std::fs::read_dir(dir).ok()?.flatten() {
         let path = entry.path();
         let ext = path
@@ -113,26 +132,30 @@ fn find_font_file(family: &str) -> Option<PathBuf> {
             continue;
         }
 
-        if let Ok(data) = std::fs::read(&path) {
-            if let Ok(face) = ttf_parser::Face::parse(&data, 0) {
-                for name in face.names().into_iter() {
-                    // 1 = family, 4 = full name.
-                    if !matches!(name.name_id, 1 | 4) {
-                        continue;
+        let Ok(data) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(face) = ttf_parser::Face::parse(&data, 0) else {
+            continue;
+        };
+        for name in face.names().into_iter() {
+            let Some(rank) = rank_of(name.name_id) else {
+                continue;
+            };
+            if best.as_ref().is_some_and(|(b, _)| *b <= rank) {
+                continue;
+            }
+            if let Some(value) = name.to_string() {
+                if normalize_name(&value) == wanted {
+                    if rank == 0 {
+                        return Some(path);
                     }
-                    if let Some(value) = name.to_string() {
-                        if normalize_name(&value) == wanted {
-                            return Some(path);
-                        }
-                    }
+                    best = Some((rank, path.clone()));
                 }
             }
         }
-        if fallback.is_none() {
-            fallback = Some(path);
-        }
     }
-    fallback
+    best.map(|(_, path)| path)
 }
 
 fn normalize_name(name: &str) -> String {
@@ -190,9 +213,39 @@ mod tests {
     }
 
     #[test]
-    fn unknown_family_still_returns_something_measurable() {
-        // libass would fall back too; layout must not divide by zero.
-        let m = metrics_for("No Such Font 12345").expect("a fallback face");
-        assert!(m.measure("ABC", 40.0) > 0.0);
+    fn unknown_family_measures_nothing_rather_than_the_wrong_font() {
+        // Silently measuring against whatever font the directory listed first
+        // is worse than not measuring: the caller can fall back honestly, but
+        // it cannot tell that flush lines were sized against another typeface.
+        assert!(metrics_for("No Such Font 12345").is_none());
+    }
+
+    #[test]
+    fn resolves_the_names_both_sides_of_the_app_use() {
+        // The style presets carry full names ("Montserrat Black"); the font
+        // menu shows the typographic family Qt reports ("Montserrat"). Both
+        // have to find the same file, or the burn is laid out against one
+        // font and drawn in another.
+        for family in [
+            "Montserrat Black",
+            "Montserrat",
+            "Roboto Bold",
+            "Roboto",
+            "Poppins",
+            "THE BOLD FONT",
+            "Komika Axis",
+            "Fredoka Light",
+            "Raleway Thin",
+            "Merriweather Light 18pt",
+        ] {
+            assert!(
+                metrics_for(family).is_some(),
+                "font menu offers {family}, which the renderer cannot measure"
+            );
+        }
+
+        let full = metrics_for("Montserrat Black").expect("bundled font");
+        let family = metrics_for("Montserrat").expect("same file by family name");
+        assert_eq!(full.measure("KANNETTAVA", 60.0), family.measure("KANNETTAVA", 60.0));
     }
 }

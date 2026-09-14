@@ -119,6 +119,12 @@ class VideoCanvasWidget(QWidget):
         self.anchor_y_pct: float = 80.0
         self.is_dragging: bool = False
         self.style: CaptionStyle = CaptionStyle()
+        # The renderer's own pixels for the current cue: libass drawing the
+        # same ASS document the burn uses, on a transparent canvas the size of
+        # the video frame. When one is present it IS the preview; the vector
+        # drawing below is only for the moments there isn't one (playback,
+        # dragging, the wait for the first answer).
+        self.caption_layer: QPixmap | None = None
         # Layout handed down by the renderer for the current playback position,
         # and the frame size it was computed for.
         self.layout_cue: dict | None = None
@@ -135,6 +141,24 @@ class VideoCanvasWidget(QWidget):
     def set_style(self, style: CaptionStyle) -> None:
         self.style = style
         self.update()
+
+    def set_caption_layer(self, pixmap: QPixmap | None) -> None:
+        """Hand the canvas libass's own rendering of the current cue."""
+        self.caption_layer = pixmap
+        self.update()
+
+    def layer_height(self) -> int:
+        """Height to ask the renderer for the caption layer in, in pixels.
+
+        The layer only ever gets scaled into the video rectangle, so rendering
+        it much larger than that is wasted work — but rounding to a step keeps
+        a slow drag of the window edge from invalidating the cache on every
+        pixel.
+        """
+        rect = self._get_video_rect()
+        px = rect.height() * self.devicePixelRatioF()
+        step = 120
+        return max(step, int(math.ceil(px / step) * step))
 
     def set_fallback_pixmap(self, pixmap: QPixmap | None) -> None:
         self._fallback_pixmap = pixmap
@@ -284,8 +308,19 @@ class VideoCanvasWidget(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        # 5. Render Active Subtitle
-        if self.current_segment and self.current_segment.text.strip():
+        # 5. Render Active Subtitle — the renderer's own pixels when we have
+        # them, our approximation of them when we don't.
+        if (
+            self.caption_layer is not None
+            and not self.caption_layer.isNull()
+            and not self.is_dragging
+        ):
+            painter.drawPixmap(
+                video_rect,
+                self.caption_layer,
+                QRectF(self.caption_layer.rect()),
+            )
+        elif self.current_segment and self.current_segment.text.strip():
             self._paint_caption(painter, video_rect, anchor_y)
 
     def _paint_safe_areas(self, painter: QPainter, video_rect: QRectF) -> None:

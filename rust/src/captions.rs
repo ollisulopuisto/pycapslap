@@ -584,12 +584,18 @@ pub async fn generate_preview_frame(
         .await?;
 
         // Determine target dimensions
-        let target_ar = crate::video::parse_target_ar(&params.export_format)?;
         let src_w = probe_result.width.unwrap_or(1920) as u32;
         let src_h = probe_result.height.unwrap_or(1080) as u32;
 
-        let (target_w, target_h) =
-            crate::video::target_dimensions(params.output_size.as_deref(), src_w, src_h, target_ar);
+        // "source" lays the captions out on the video's own frame, which is
+        // what the editor shows. Every other format is an export canvas the
+        // video gets fitted into, and the captions follow that canvas.
+        let (target_w, target_h) = if params.export_format == "source" {
+            (src_w, src_h)
+        } else {
+            let target_ar = crate::video::parse_target_ar(&params.export_format)?;
+            crate::video::target_dimensions(params.output_size.as_deref(), src_w, src_h, target_ar)
+        };
 
         // Calculate crop strategy
         let crop_strategy = params.crop_strategy.as_deref().unwrap_or("fit");
