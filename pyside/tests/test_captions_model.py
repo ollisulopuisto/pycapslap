@@ -249,6 +249,53 @@ def test_shift_word_to_prev_and_next():
     assert segments[1].start_ms == 1100
 
 
+def test_shift_word_to_prev_combines_glued_syllable():
+    # 'pa' is a syllable glued to whatever word precedes it; shifting it into
+    # the previous segment must combine it into that word, not add a space.
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="kaup",
+        words=[WordSpan(start_ms=0, end_ms=1000, text="kaup")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="pa kesä",
+        words=[
+            WordSpan(start_ms=1000, end_ms=1500, text="pa", glue_to_previous=True),
+            WordSpan(start_ms=1500, end_ms=2000, text="kesä"),
+        ],
+    )
+    segments = [seg1, seg2]
+
+    shift_word_to_prev(segments, 1)
+    assert segments[0].text == "kauppa"
+    assert segments[1].text == "kesä"
+
+
+def test_shift_word_to_next_combines_glued_syllable():
+    # The word remaining first in the next segment glues to whatever now
+    # precedes it; shifting a word in front of it must combine, not space.
+    seg1 = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="kaup",
+        words=[WordSpan(start_ms=0, end_ms=1000, text="kaup")],
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="pa",
+        words=[WordSpan(start_ms=1000, end_ms=2000, text="pa", glue_to_previous=True)],
+    )
+    segments = [seg1, seg2]
+
+    shift_word_to_next(segments, 0)
+    assert segments[0].text == ""
+    assert segments[1].text == "kauppa"
+
+
 def test_caption_segment_update_text_when_words_empty():
     seg = CaptionSegment(start_ms=1000, end_ms=3000, text="Initial", words=[])
     seg.update_text("Three new words")

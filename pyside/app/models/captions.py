@@ -236,6 +236,18 @@ def combine_separated_syllables(
     return cleaned_segments
 
 
+def _join_words(words: list[WordSpan]) -> str:
+    """Join word texts, combining glue_to_previous words into their neighbour with no space."""
+    parts: list[str] = []
+    for w in words:
+        clean = w.text.strip()
+        if parts and w.glue_to_previous:
+            parts[-1] += clean
+        else:
+            parts.append(clean)
+    return " ".join(parts)
+
+
 def shift_word_to_prev(segments: list[CaptionSegment], index: int) -> None:
     """Move the first word of segments[index] to the end of segments[index - 1]."""
     if index <= 0 or index >= len(segments):
@@ -248,11 +260,11 @@ def shift_word_to_prev(segments: list[CaptionSegment], index: int) -> None:
     word = cur_seg.words.pop(0)
     prev_seg.words.append(word)
     prev_seg.end_ms = word.end_ms
-    prev_seg.text = " ".join(w.text.strip() for w in prev_seg.words)
+    prev_seg.text = _join_words(prev_seg.words)
 
     if cur_seg.words:
         cur_seg.start_ms = cur_seg.words[0].start_ms
-        cur_seg.text = " ".join(w.text.strip() for w in cur_seg.words)
+        cur_seg.text = _join_words(cur_seg.words)
     else:
         cur_seg.start_ms = cur_seg.end_ms
         cur_seg.text = ""
@@ -271,11 +283,11 @@ def shift_word_to_next(segments: list[CaptionSegment], index: int) -> None:
     word.text = word.text.strip()
     next_seg.words.insert(0, word)
     next_seg.start_ms = word.start_ms
-    next_seg.text = " ".join(w.text.strip() for w in next_seg.words)
+    next_seg.text = _join_words(next_seg.words)
 
     if cur_seg.words:
         cur_seg.end_ms = cur_seg.words[-1].end_ms
-        cur_seg.text = " ".join(w.text.strip() for w in cur_seg.words)
+        cur_seg.text = _join_words(cur_seg.words)
     else:
         cur_seg.end_ms = cur_seg.start_ms
         cur_seg.text = ""
