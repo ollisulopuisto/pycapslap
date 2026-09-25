@@ -8,6 +8,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Fixed
+- **Caption lines no longer jump from word to word.** A karaoke caption is one cue per word, and libass wrapped each on its own; the highlighted word is set bigger and every window opens slightly stretched, so the same block broke into different lines from one word to the next. The line breaks are now decided once per caption block, with room for the biggest word highlighted and the stretch, balanced like libass's own wrap, and written into every window as forced breaks (`\N`, `\q2`). Plain captions get the same treatment against their bounce-in.
+- Text is now measured the way libass sizes fonts: an ASS font size is the height of the font's Windows ascent + descent, not its em. Fonts with tall ascenders, such as Anton, set far narrower than the old em-based measure said, so their lines broke too early and justified lines came out narrow.
 - The preview showed each caption twice: first the editor's own approximation in Qt fonts, a moment later libass's real rendering in a slightly different size and wrap. Now it shows only libass's rendering, and nothing while that is on its way. A dragged caption moves as its rendered image until the new position is rendered.
 - Core replies now reach the window through a queued signal instead of `QTimer.singleShot` called from the core client's reader thread, which makes a timer object on that thread and hands it to the GUI's timer list; the macOS test run crashed inside that list (`QTimerInfoList::activateTimers`) with such timers pending.
 

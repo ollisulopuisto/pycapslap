@@ -2018,8 +2018,7 @@ pub(crate) fn horizontal_margin(frame_w: u32) -> u32 {
     ((frame_w as f32) * CAPTION_SIDE_MARGIN_PCT / 100.0).round() as u32
 }
 
-/// Percentage of frame width kept free on each side. Mirrored by the PySide
-/// preview (`video_canvas.CAPTION_SIDE_MARGIN_PCT`) — change both together.
+/// Percentage of frame width kept free on each side.
 pub(crate) const CAPTION_SIDE_MARGIN_PCT: f32 = 7.0;
 
 // ---- time quantization (ASS is 1/100s) ----
@@ -2110,11 +2109,27 @@ fn cue_lines(
             return lines;
         }
     }
-    vec![crate::justify::JustifiedLine {
-        start: 0,
-        end: tokens.len(),
-        font_px: base_px,
-    }]
+    // Breaks decided here, for the whole cue: the highlighted word is set
+    // bigger and each karaoke window opens with a stretch, and letting libass
+    // wrap every window on its own made the lines jump from word to word.
+    crate::justify::steady_lines(
+        tokens,
+        font_family,
+        caption_box_width(frame_w) * STEADY_WRAP_SLACK,
+        base_px,
+        BIG_FONT_SIZE_MULTIPLIER,
+        // Karaoke windows open stretched, plain cues bounce in: room for either.
+        STRETCH_X_PEAK.max(BOUNCE_PEAK),
+    )
+}
+
+/// Our advance-width sum ignores kerning and outline; leave libass a little room.
+const STEADY_WRAP_SLACK: f32 = 0.97;
+
+/// Whether cues carry their own line breaks (`\q2`) or libass wraps them (`\q0`):
+/// only a font we can't measure is left to libass.
+fn breaks_are_ours(font_family: &str, justify_lines: bool) -> bool {
+    justify_lines || crate::text_metrics::metrics_for(font_family).is_some()
 }
 
 /// Render one cue's text body, justified or free-flowing.
@@ -2132,15 +2147,7 @@ fn assemble_cue(
     if justify_lines {
         assemble_justified(tokens, layout, hi, white_bgr, hi_bgr, header)
     } else {
-        assemble_colored_two_lines(
-            tokens,
-            hi,
-            white_bgr,
-            hi_bgr,
-            usize::MAX, // no forced break; \q0 wraps on real metrics
-            header,
-            font_size,
-        )
+        assemble_colored_lines(tokens, layout, hi, white_bgr, hi_bgr, header, font_size)
     }
 }
 
@@ -2184,52 +2191,47 @@ fn assemble_justified(
     s
 }
 
-fn assemble_colored_two_lines(
+/// A cue's words at the style's size, the highlighted one bigger, broken into
+/// `lines` (one line: libass wraps it).
+fn assemble_colored_lines(
     tokens: &[String],
+    lines: &[crate::justify::JustifiedLine],
     hi: usize,
     white_bgr: &str,
     hi_bgr: &str,
-    line1_count: usize,
     header: &str,
     font_size: u32,
 ) -> String {
     let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
-    // Only create bigger font style if we're actually highlighting something
     let has_highlighting = hi != usize::MAX;
     let hi_style = if has_highlighting {
         let big_font_size = (font_size as f32 * BIG_FONT_SIZE_MULTIPLIER) as u32;
         format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, big_font_size)
     } else {
-        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size) // Same size, just different color
+        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size)
     };
+    let line_starts: Vec<usize> = lines.iter().skip(1).map(|l| l.start).collect();
 
-    let mut s = String::from(header); // will include \an2 \pos \q0 and stretch
+    let mut s = String::from(header);
     for i in 0..tokens.len() {
-        if i == line1_count {
+        if line_starts.contains(&i) {
             s.push_str(r"\N");
         }
-        // Only highlight if hi is a valid index (not usize::MAX)
-        let should_highlight = has_highlighting && i == hi;
-        s.push_str(if should_highlight { &hi_style } else { &white });
-        let t = tokens[i]
-            .replace('\\', r"\\")
-            .replace('{', r"\{")
-            .replace('}', r"\}");
-        s.push_str(&t); // Moved s.push_str(&t) earlier to use t for check? No wait.
-
-        // original was:
-        // let t = ...
-        // s.push_str(&t);
-        // if i + 1 < tokens.len() { s.push(' '); }
-
-        // New logic:
-        // Check if CURRENT token (not t, but tokens[i]) ends with '-'
-        // Note: tokens[i] might be raw string.
-        if i + 1 < tokens.len() {
-            let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
-            if !ends_with_hyphen {
-                s.push(' ');
-            }
+        s.push_str(if has_highlighting && i == hi {
+            &hi_style
+        } else {
+            &white
+        });
+        s.push_str(
+            &tokens[i]
+                .replace('\\', r"\\")
+                .replace('{', r"\{")
+                .replace('}', r"\}"),
+        );
+        let ends_line = line_starts.contains(&(i + 1));
+        let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
+        if i + 1 < tokens.len() && !ends_line && !ends_with_hyphen {
+            s.push(' ');
         }
     }
     s
@@ -2715,18 +2717,21 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     );
 
     let mut lines = String::new();
-    // Justified cues carry their own breaks and exact widths, so libass must
-    // not re-wrap them; everything else wraps on real metrics.
-    let wrap_tag = if justify_lines { r"\q2" } else { r"\q0" };
+    // Cues carry their own breaks (see cue_lines), so libass must not re-wrap
+    // them; only a font we can't measure is left to libass's wrapping.
+    let wrap_tag = if breaks_are_ours(&style.font_name, justify_lines) {
+        r"\q2"
+    } else {
+        r"\q0"
+    };
 
     if karaoke {
         let phrases = segment_phrases(segments);
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
         let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
 
-        // One cue per authored segment. Lines are wrapped by libass against the
-        // real font metrics (\q0 + the style margins), not by a character-count
-        // estimate, so nothing overflows the frame and nothing gets re-cut.
+        // One cue per authored segment, its lines decided once for the whole
+        // cue (cue_lines) so every karaoke window below breaks them the same.
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
             let cue_layout = cue_lines(
@@ -2863,7 +2868,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             crate::debug_log!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
             let tokens_upper = normalize_tokens(&phrase.spans);
 
-            // One cue per authored segment; libass wraps it (\q0 + margins).
+            // One cue per authored segment, broken into lines by cue_lines.
             let segments = vec![(tokens_upper, phrase.spans.clone())];
 
             for (segment_tokens, segment_spans) in segments {
@@ -3060,26 +3065,126 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_assemble_colored_two_lines_hyphenation() {
+    fn test_assemble_colored_lines_hyphenation() {
         let tokens = vec!["SAKSALAIS-".to_string(), "ROOMALAINEN".to_string()];
-
-        // We need to provide dummy args for assemble_colored_two_lines
-        // It requires: tokens, hi, white_bgr, hi_bgr, line1_count, header, font_size
-        let result = assemble_colored_two_lines(
+        let one_line = [crate::justify::JustifiedLine {
+            start: 0,
+            end: 2,
+            font_px: 20,
+        }];
+        let result = assemble_colored_lines(
             &tokens,
-            usize::MAX, // no highlight
+            &one_line,
+            usize::MAX,
             "FFFFFF",
             "0000FF",
-            usize::MAX, // no break
             "{\\an2}",
             20,
         );
-
-        println!("Result: {}", result);
         assert!(
             !result.contains("SAKSALAIS- "),
             "Should not contain space after hyphen"
         );
+    }
+
+    fn karaoke_block(words: &[&str]) -> Vec<CaptionSegment> {
+        let spans: Vec<WordSpan> = words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| WordSpan {
+                start_ms: i as u64 * 400,
+                end_ms: (i as u64 + 1) * 400,
+                text: (*w).into(),
+                glue_to_previous: false,
+            })
+            .collect();
+        vec![CaptionSegment {
+            start_ms: 0,
+            end_ms: spans.len() as u64 * 400,
+            text: words.join(" "),
+            words: spans,
+        }]
+    }
+
+    #[test]
+    fn a_karaoke_block_keeps_its_line_breaks_on_every_word() {
+        let segments = karaoke_block(&[
+            "agentit,",
+            "olivat",
+            "löytäneet",
+            "tavan",
+            "kommunikoida",
+            "keskenään.",
+        ]);
+        let style = default_ass_style(
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
+        );
+        let doc = build_ass_document(
+            1080,
+            1920,
+            &style,
+            &segments,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+        )
+        .expect("document builds");
+        // Where each window breaks its lines, as the words before each \N.
+        let layouts: Vec<Vec<String>> = doc
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .map(|l| {
+                let plain = regex_free_text(l);
+                plain
+                    .split(r"\N")
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(layouts.len(), 6, "one window per word");
+        assert!(
+            layouts[0].len() >= 2,
+            "a long block needs lines: {:?}",
+            layouts[0]
+        );
+        assert!(
+            layouts.iter().all(|l| l == &layouts[0]),
+            "lines moved between words: {layouts:#?}"
+        );
+        // libass must not wrap on top of our breaks.
+        assert!(doc
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .all(|l| l.contains(r"\q2")));
+    }
+
+    /// A dialogue line's text with the {override} blocks taken out.
+    fn regex_free_text(line: &str) -> String {
+        let text = line.splitn(10, ',').nth(9).unwrap_or("");
+        let mut out = String::new();
+        let mut depth = 0;
+        for c in text.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ if depth == 0 => out.push(c),
+                _ => {}
+            }
+        }
+        out
     }
 
     #[test]
@@ -3174,22 +3279,22 @@ mod tests {
     }
 
     #[test]
-    fn unjustified_cues_keep_one_size_and_let_libass_wrap() {
+    fn unjustified_short_cues_stay_on_one_line_at_one_size() {
         let segments = vec![CaptionSegment {
             start_ms: 0,
             end_ms: 1000,
-            text: "yksi kaksi".to_string(),
+            text: "ja se".to_string(),
             words: vec![
                 WordSpan {
                     start_ms: 0,
                     end_ms: 500,
-                    text: "yksi".into(),
+                    text: "ja".into(),
                     glue_to_previous: false,
                 },
                 WordSpan {
                     start_ms: 500,
                     end_ms: 1000,
-                    text: "kaksi".into(),
+                    text: "se".into(),
                     glue_to_previous: false,
                 },
             ],
@@ -3226,7 +3331,8 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("Dialogue:"))
             .expect("a dialogue line");
-        assert!(dialogue.contains(r"\q0"), "expected \\q0 in {dialogue}");
+        // Our breaks, not libass's: a short cue simply has none.
+        assert!(dialogue.contains(r"\q2"), "expected \\q2 in {dialogue}");
         assert!(
             !dialogue.contains(r"\N"),
             "no forced break expected in {dialogue}"
