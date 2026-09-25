@@ -47,65 +47,20 @@ you want to take this on:
 - CI: extend the `release.yml` build matrix, and ideally `ci.yml` too if
   there's a Windows/Linux-only code path worth testing.
 
-## Good first contribution: pytest-qt tests in `test_main_window.py` hang
+## Tests that hung under pytest-qt (solved)
 
-**This one isn't fully solved — read this before assuming a clean local
-`uv run python -m pytest` run.** Two tests are already skipped
-(`test_main_window_save_action`, `test_main_window_style_selection_and_sidecar`
-— marked `@_skip_hangs`, an unconditional `pytest.mark.skip`, because they
-reproducibly hang even run completely alone). But running the *rest* of
-`test_main_window.py` together can still hang on a **different** test a
-few tests later (observed hanging on `test_main_window_clean_sidebar_layout`,
-which doesn't even touch `QMediaPlayer`) — so this isn't fully contained to
-those two, and if a full `pytest` run of this file hangs for you, that's
-this same issue, not a new one. CI is protected by `ci.yml`'s job-level
-`timeout-minutes: 15` (the one mechanism that reliably cuts it off — see
-below), but a local run has no such backstop; if it hangs, Ctrl+C and run
-narrower (a single test or file at a time) instead of the whole suite.
+`test_main_window.py` used to hang, on a different test from run to run, and
+two tests were skipped for it. The cause was a modal `QMessageBox`: the window
+opens one whenever the core reports an error (loading the placeholder "video"
+a test writes makes first-frame extraction fail), and in a test run nobody
+clicks it. Which test froze depended on when the core's answer arrived.
+`tests/conftest.py` now records message boxes instead of showing them (the
+`no_modal_message_boxes` fixture returns what would have been shown), so a
+new dialog in the app can't freeze the suite either.
 
-What's been ruled out while chasing this:
-
-- **Not the file content.** Tried both a handful of garbage bytes named
-  `.mp4` (the original) and a real, valid decodable video — both hang the
-  same way.
-- **Not (only) cross-test state.** `test_main_window_save_action` hangs the
-  same running completely alone as it does as part of the full suite — so
-  whatever it's hitting isn't solely about state left over from earlier
-  tests. That said, something sequence/accumulation-dependent is *also*
-  going on, and it's **non-deterministic**: running the rest of the file
-  after skipping the two known offenders can still hang, but not
-  reliably on the same test — one run hung on
-  `test_main_window_clean_sidebar_layout` (doesn't touch `QMediaPlayer` at
-  all), a later run instead got past that one fine and hung on
-  `test_main_window_progress_bar_and_empty_segments_on_load` instead. That
-  smells like resource exhaustion (thread/handle/media-session count) from
-  creating a real `MainWindow`+`QMediaPlayer` repeatedly in one process,
-  which eventually — unpredictably — wedges *something*, rather than one
-  specific test having a bug. Skipping individual tests can't fully fix a
-  problem shaped like that; a session-scoped/reused `MainWindow` fixture
-  (or mocking `QMediaPlayer` for tests that don't need a real one) probably
-  would.
-- **Not `QT_QPA_PLATFORM=offscreen` specifically** — it was tried as a fix,
-  reproduced the same hang instead of avoiding it, so it's ruled out as
-  the *cause* too (though it may still be a contributing factor alongside
-  the real one).
-- **The exact same sequence — create `MainWindow`, `load_video()` a bogus
-  file, `set_caption_segments()`, `save_btn.click()`** — completes in well
-  under a second in a bare Python script with no pytest and no `qtbot`
-  involved at all. So it's specific to running under pytest (pytest-qt's
-  fixture machinery, event-loop interaction, or something else pytest
-  brings along), not to the app code itself.
-- `pytest-timeout`'s per-test signal-based timeout (`pyproject.toml`,
-  `timeout = 120`) does not reliably interrupt whatever it's actually
-  blocked on — hence `ci.yml`'s job-level `timeout-minutes: 15` as the real
-  backstop.
-
-Properly isolating this (bisect what pytest-qt's `qtbot` fixture actually
-does differently around widget teardown / event processing versus a plain
-script, or mock `QMediaPlayer` for tests where a real one isn't the point)
-would let these two run again instead of being skipped.
-
-Happy to answer questions on any of this in an issue before you start.
+The sample video the core and window tests open, `rust/bin/test_input.mp4`, is
+git-ignored; the `sample_video` fixture makes a 5-second 1080p clip with ffmpeg
+(the bundled one, else the one on `PATH`) when it is missing.
 
 ## Local development
 

@@ -37,11 +37,10 @@ jobs:
 
   pyside:
     runs-on: macos-latest
-    # Backstop for the pytest step: two known-hanging tests are already
-    # skipped (see test_main_window.py), but if another one like it turns up,
-    # this is the one mechanism actually guaranteed to cut it off — the
-    # per-test pytest-timeout default (pyproject.toml) did not reliably
-    # interrupt the ones already found.
+    # Backstop for the pytest step. The old hangs were modal message boxes
+    # (see CONTRIBUTING.md), now stubbed in tests/conftest.py; a blocked Qt
+    # event loop is something the per-test pytest-timeout (pyproject.toml)
+    # can't interrupt, so this stays as the guaranteed cut-off.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -78,9 +77,5 @@ jobs:
         run: uv run ruff format --check .
 
       - name: pytest
-        # Two tests are skipped unconditionally (see test_main_window.py) —
-        # they hang under pytest specifically, reproducibly, even run alone;
-        # the job-level timeout-minutes above is the real backstop in case
-        # that turns out not to be the only one.
         run: uv run python -m pytest
 
