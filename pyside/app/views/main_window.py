@@ -1539,5 +1539,6 @@ class MainWindow(QMainWindow):
         self.perf_timer.stop()
         self._layout_timer.stop()
         self._layer_timer.stop()
+        self.player.release()
         self.core.close()
         super().closeEvent(event)

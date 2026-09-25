@@ -204,6 +204,17 @@ class VideoPlayerWidget(QWidget):
         self.media_player.setSource(url)
         self.play_btn.setText("Play")
 
+    def release(self) -> None:
+        """Let go of the media before the widget goes away.
+
+        The macOS backend keeps loading and seeking on its own timers; a player
+        destroyed with a source still open left those firing into freed
+        memory (a segfault in QTimerInfoList::activateTimers).
+        """
+        self.media_player.stop()
+        self.media_player.setVideoSink(None)
+        self.media_player.setSource(QUrl())
+
     def set_play_range(self, start_ms: int, end_ms: int | None) -> None:
         """The trimmed part of the video: Stop goes to its start, playback stops at its end."""
         self._range_start_ms = max(0, int(start_ms))
