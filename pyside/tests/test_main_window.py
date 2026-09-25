@@ -506,3 +506,25 @@ def test_export_format_drives_layout_layer_and_render(qtbot):
     frame_calls = [c for c in calls if c[0] == "generatePreviewFrame"]
     assert frame_calls[-1][1]["exportFormat"] == "9:16"
     window.close()
+
+
+def test_i_and_o_set_the_trim_at_the_playhead(qtbot):
+    from PySide6.QtGui import QShortcut
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._on_duration_changed(10000)
+
+    keys = {s.key().toString() for s in window.findChildren(QShortcut)}
+    assert {"I", "O"} <= keys
+
+    window.player.media_player.position = lambda: 2500
+    window._set_trim_start_here()
+    window.player.media_player.position = lambda: 7400
+    window._set_trim_end_here()
+
+    assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (2500, 7400)
+    # The player follows, so Stop and playback use the new trim.
+    assert (window.player._range_start_ms, window.player._range_end_ms) == (2500, 7400)
+    assert "00:07.4" in window.status.currentMessage()
+    window.close()

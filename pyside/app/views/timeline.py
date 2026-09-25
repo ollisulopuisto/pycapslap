@@ -33,7 +33,10 @@ class VisualTimelineWidget(QWidget):
         self.trim_end_ms = 0
         self._trim_drag_handle: str | None = None
         self._trim_min_gap_ms = 100
-        self.setToolTip("Drag the blue trim handles to shorten the beginning or end")
+        self.setToolTip(
+            "Drag the blue trim handles to shorten the beginning or end,\n"
+            "or press I / O to set the start / end at the playhead"
+        )
 
     def set_duration(self, duration_ms: int) -> None:
         old_duration = self.duration_ms
@@ -55,6 +58,22 @@ class VisualTimelineWidget(QWidget):
         end = max(start + gap, min(int(end_ms), self.duration_ms))
         self.trim_start_ms, self.trim_end_ms = start, end
         self.update()
+
+    def set_trim_start_at(self, pos_ms: int) -> None:
+        """Start the trim at `pos_ms` (the I key). Past the current end, the end goes back
+        to the video's end rather than dragging along."""
+        gap = min(self._trim_min_gap_ms, self.duration_ms)
+        end = self.trim_end_ms if pos_ms < self.trim_end_ms - gap else self.duration_ms
+        self.set_trim_range(pos_ms, end)
+        self.trim_range_changed.emit(self.trim_start_ms, self.trim_end_ms)
+
+    def set_trim_end_at(self, pos_ms: int) -> None:
+        """End the trim at `pos_ms` (the O key). Before the current start, the start goes
+        back to the video's start."""
+        gap = min(self._trim_min_gap_ms, self.duration_ms)
+        start = self.trim_start_ms if pos_ms > self.trim_start_ms + gap else 0
+        self.set_trim_range(start, pos_ms)
+        self.trim_range_changed.emit(self.trim_start_ms, self.trim_end_ms)
 
     def reset_trim_range(self) -> None:
         self.set_trim_range(0, self.duration_ms)

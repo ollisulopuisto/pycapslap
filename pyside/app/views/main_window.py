@@ -169,6 +169,11 @@ class MainWindow(QMainWindow):
         left_col.addLayout(action_bar)
 
         # Cmd+S / Ctrl+S shortcut for Save
+        # I / O set the trim's start / end at the playhead, as in video editors: stop
+        # playback on the right frame and mark it. Text fields keep their letters,
+        # since a line edit claims plain keys before shortcuts see them.
+        QShortcut(QKeySequence(Qt.Key.Key_I), self, activated=self._set_trim_start_here)
+        QShortcut(QKeySequence(Qt.Key.Key_O), self, activated=self._set_trim_end_here)
         QShortcut(
             QKeySequence.StandardKey.Save, self, activated=self._on_save_requested
         )
@@ -794,6 +799,28 @@ class MainWindow(QMainWindow):
                 )
 
         fut.add_done_callback(on_done)
+
+    def _set_trim_start_here(self) -> None:
+        if not self.timeline.duration_ms:
+            return
+        self.timeline.set_trim_start_at(self.player.media_player.position())
+        self.status.showMessage(
+            f"Trim start set to {self._format_trim_time(self.timeline.trim_start_ms)}",
+            2000,
+        )
+
+    def _set_trim_end_here(self) -> None:
+        if not self.timeline.duration_ms:
+            return
+        self.timeline.set_trim_end_at(self.player.media_player.position())
+        self.status.showMessage(
+            f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
+            2000,
+        )
+
+    @staticmethod
+    def _format_trim_time(ms: int) -> str:
+        return f"{ms // 60000:02d}:{(ms // 1000) % 60:02d}.{(ms % 1000) // 100}"
 
     def _sync_play_range(self) -> None:
         """Give the player the timeline's trim, so Stop and playback respect it."""
