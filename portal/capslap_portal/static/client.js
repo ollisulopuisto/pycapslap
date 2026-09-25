@@ -109,7 +109,7 @@ function remembered(key, value) {
 
 async function showSeries() {
   const series = await getJSON(api)
-  document.title = series.title
+  document.title = `${series.title} · Videoiden hyväksyntä`
   $('series-title').textContent = series.title
   $('main').replaceChildren(
     h('h2', {}, t('episodes')),

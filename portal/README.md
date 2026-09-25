@@ -1,4 +1,6 @@
-# PyCapSlap review portal
+# Videoiden hyväksyntä
+
+The PyCapSlap review portal.
 
 A small server where clients watch the renders of their episodes, fix the
 captions and leave feedback, and where the editor collects both. It runs next
