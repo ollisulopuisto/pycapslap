@@ -543,3 +543,64 @@ def test_i_and_o_buttons_set_the_trim_at_the_playhead(qtbot):
     assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (1500, 6000)
     assert (window.player._range_start_ms, window.player._range_end_ms) == (1500, 6000)
     window.close()
+
+
+def test_import_review_applies_fixes_and_shows_comments(
+    qtbot, tmp_path, no_modal_message_boxes
+):
+    import json
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments(
+        [
+            CaptionSegment(0, 2000, "Kylläpä on sää"),
+            CaptionSegment(2000, 4000, "tekoäly yhtiöt"),
+        ]
+    )
+    reviewed = {
+        "segments": [
+            {"startMs": 0, "endMs": 2000, "text": "Kyllä on sää"},
+            {"startMs": 2000, "endMs": 4000, "text": "tekoäly yhtiöt"},
+        ],
+        "review": {
+            "status": "changed",
+            "reviewer": "Asiakas",
+            "comments": [{"index": 1, "text": "Yhdyssana?"}],
+        },
+    }
+    path = tmp_path / "talk.mp4.reviewed.capslap.json"
+    path.write_text(json.dumps(reviewed), encoding="utf-8")
+
+    window.import_review_file(str(path))
+
+    assert [s.text for s in window.caption_panel.segments] == [
+        "Kyllä on sää",
+        "tekoäly yhtiöt",
+    ]
+    assert window.project.is_dirty
+    kind, text = no_modal_message_boxes[-1]
+    assert kind == "information"
+    assert "1 text change(s)" in text and "Yhdyssana?" in text
+    window.close()
+
+
+def test_import_review_of_other_captions_changes_nothing(
+    qtbot, tmp_path, no_modal_message_boxes
+):
+    import json
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    path = tmp_path / "other.json"
+    path.write_text(
+        json.dumps({"segments": [{"startMs": 0, "endMs": 1, "text": "a"}] * 2}),
+        encoding="utf-8",
+    )
+
+    window.import_review_file(str(path))
+
+    assert [s.text for s in window.caption_panel.segments] == ["Yksi"]
+    assert no_modal_message_boxes[-1][0] == "warning"
+    window.close()

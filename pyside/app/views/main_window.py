@@ -1,10 +1,12 @@
 import base64
+import json
 import os
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
+    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QImage,
@@ -18,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -35,6 +38,7 @@ from app.models.captions import (
     apply_orphan_rules,
     combine_separated_syllables,
 )
+from app.models.review import ReviewMismatch, apply_review, review_export_dict
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
 from app.views.timeline import VisualTimelineWidget
@@ -51,6 +55,9 @@ EXPORT_FORMATS: list[tuple[str, str]] = [
     ("Export: 1:1 Square", "1:1"),
     ("Export: 4:5 Vertical", "4:5"),
 ]
+
+# Where the review page (review/ in this repo) is published by GitHub Pages.
+REVIEW_PAGE_URL = "https://ollisulopuisto.github.io/pycapslap/"
 
 # How many rendered cues to keep. Each is a full-frame ARGB pixmap, so this
 # is a memory budget, not a hit-rate tuning knob.
@@ -138,6 +145,24 @@ class MainWindow(QMainWindow):
         self.save_btn.clicked.connect(self._on_save_requested)
         self.save_btn.setEnabled(False)
         action_bar.addWidget(self.save_btn)
+
+        # Client review: send the captions to a client's browser, take the fixes back
+        self.review_btn = QPushButton("Client Review")
+        self.review_btn.setToolTip(
+            "Send captions to a client to check and correct on the review page, "
+            "then import what they send back"
+        )
+        review_menu = QMenu(self.review_btn)
+        review_menu.addAction("Export for Review…", self._on_export_for_review)
+        review_menu.addAction("Import Reviewed Captions…", self._on_import_review)
+        review_menu.addSeparator()
+        review_menu.addAction(
+            "Open Review Page",
+            lambda: QDesktopServices.openUrl(QUrl(REVIEW_PAGE_URL)),
+        )
+        self.review_btn.setMenu(review_menu)
+        self.review_btn.setEnabled(False)
+        action_bar.addWidget(self.review_btn)
 
         # The export format belongs here, not in a dialog at render time: it
         # decides the canvas the captions are laid out on, so the preview
@@ -716,6 +741,77 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
+    def _on_export_for_review(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        if not self.project.video_path or not self.project.segments:
+            QMessageBox.information(
+                self, "Client Review", "Load a video with captions first."
+            )
+            return
+        default = f"{self.project.video_path}.review.capslap.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export for Review", default, "Captions (*.capslap.json *.json)"
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(
+                json.dumps(review_export_dict(self.project), indent=2),
+                encoding="utf-8",
+            )
+        except OSError as err:
+            QMessageBox.warning(self, "Client Review", f"Could not save: {err}")
+            return
+        self.status.showMessage(
+            "Exported for review. Send the file and the video to the client; "
+            f"they open both on {REVIEW_PAGE_URL}",
+            8000,
+        )
+
+    def _on_import_review(self) -> None:
+        self.caption_panel.commit_active_editor()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Reviewed Captions",
+            os.path.dirname(self.project.video_path or ""),
+            "Reviewed captions (*.capslap.json *.json)",
+        )
+        if path:
+            self.import_review_file(path)
+
+    def import_review_file(self, path: str) -> None:
+        """Apply a client's reviewed captions and show what they changed and said."""
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("not a captions file")
+            segments = list(self.caption_panel.segments)
+            result = apply_review(segments, data)
+        except (OSError, ValueError) as err:
+            reason = (
+                str(err)
+                if isinstance(err, ReviewMismatch)
+                else f"Could not read it: {err}"
+            )
+            QMessageBox.warning(self, "Import Review", reason)
+            return
+        if result.changed:
+            self.project.segments = segments
+            self.project.is_dirty = True
+            self.set_caption_segments(segments)
+            self._on_position_changed(self.player.media_player.position())
+        message = result.summary()
+        if result.comments:
+            notes = "\n\n".join(
+                f"#{n} “{text}”\n→ {comment}" for n, text, comment in result.comments
+            )
+            message += f"\n\nComments:\n\n{notes}"
+        if result.changed:
+            message += "\n\nSave the project to keep the changes."
+        self.status.showMessage(result.summary(), 8000)
+        QMessageBox.information(self, "Import Review", message)
+
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -1067,6 +1163,7 @@ class MainWindow(QMainWindow):
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
+        self.review_btn.setEnabled(True)
         self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})
