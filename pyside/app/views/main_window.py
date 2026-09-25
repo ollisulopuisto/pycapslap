@@ -56,6 +56,13 @@ EXPORT_FORMATS: list[tuple[str, str]] = [
     ("Export: 4:5 Vertical", "4:5"),
 ]
 
+# Proof copy next to the full-size render: label, short side in pixels (0 = none).
+PROOF_COPIES = [
+    ("No proof copy", 0),
+    ("+ 720p proof", 720),
+    ("+ 540p proof", 540),
+]
+
 # Where the review page (review/ in this repo) is published by GitHub Pages.
 REVIEW_PAGE_URL = "https://ollisulopuisto.github.io/pycapslap/"
 
@@ -175,6 +182,17 @@ class MainWindow(QMainWindow):
         )
         self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
         action_bar.addWidget(self.format_combo)
+
+        # A smaller copy from the same encode: small for clients to proof, the
+        # full-size one for publishing.
+        self.proof_combo = QComboBox()
+        for label, side in PROOF_COPIES:
+            self.proof_combo.addItem(label, side)
+        self.proof_combo.setCurrentIndex(1)
+        self.proof_combo.setToolTip(
+            "Also render a smaller proof copy, in the same pass as the full-size video"
+        )
+        action_bar.addWidget(self.proof_combo)
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
@@ -850,6 +868,7 @@ class MainWindow(QMainWindow):
             "trimStartMs": trim_start_ms,
             "trimEndMs": trim_end_ms,
             "exportFormats": [export_fmt],
+            "proofShortSide": self.proof_combo.currentData() or None,
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
             "justifyLines": self.project.style.justify_lines,
@@ -871,6 +890,9 @@ class MainWindow(QMainWindow):
                 output_path = ""
                 if isinstance(res, list) and res:
                     output_path = res[0].get("captionedVideo", "")
+                    proof_path = res[0].get("proofVideo")
+                    if proof_path:
+                        output_path += f" (proof: {os.path.basename(proof_path)})"
                 QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
                 QTimer.singleShot(
                     0, self, lambda: self.render_btn.setText("Render Video")

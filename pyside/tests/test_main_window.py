@@ -604,3 +604,55 @@ def test_import_review_of_other_captions_changes_nothing(
     assert [s.text for s in window.caption_panel.segments] == ["Yksi"]
     assert no_modal_message_boxes[-1][0] == "warning"
     window.close()
+
+
+def test_render_asks_for_the_chosen_proof_copy(qtbot, tmp_path):
+    from PySide6.QtCore import QObject, QUrl, Signal
+
+    calls: list[tuple[str, dict]] = []
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            from concurrent.futures import Future
+
+            calls.append((method, params))
+            f: Future = Future()
+            if method == "burn":
+                f.set_result(
+                    [
+                        {
+                            "captionedVideo": "/out/talk_16x9.mp4",
+                            "proofVideo": "/out/talk_16x9_proof720p.mp4",
+                        }
+                    ]
+                )
+            else:
+                f.set_result({"cues": [], "frameWidth": 1920, "frameHeight": 1080})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    window.player.media_player.source = lambda: QUrl.fromLocalFile(str(video))
+    window.set_caption_segments([CaptionSegment(0, 2000, "Ja")])
+
+    # 720p is the default: the proof copy is on unless turned off.
+    assert window.proof_combo.currentData() == 720
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert burn["proofShortSide"] == 720
+    qtbot.waitUntil(lambda: "proof" in window.status.currentMessage(), timeout=2000)
+    assert "talk_16x9_proof720p.mp4" in window.status.currentMessage()
+
+    window.proof_combo.setCurrentIndex(window.proof_combo.findData(0))
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert burn["proofShortSide"] is None
+    window.close()

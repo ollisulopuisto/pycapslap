@@ -222,6 +222,7 @@ pub async fn burn_captions_with_segments(
             &params.blocked_bands,
             trim_start_ms as f64 / 1000.0,
             (trim_end_at_ms - trim_start_ms) as f64 / 1000.0,
+            params.proof_short_side.filter(|&side| side > 0),
             &mut emit,
         )
         .await
@@ -286,6 +287,7 @@ pub async fn generate_captions_single_pass(
             &params.blocked_bands,
             0.0,
             probe_result.duration.unwrap_or(0.0),
+            None, // the one-shot generate path makes no proof copy
             &mut emit,
         )
         .await?;
@@ -1095,6 +1097,7 @@ async fn optimized_multi_format_encode(
     blocked_bands: &[(f32, f32)],
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof_short_side: Option<u32>,
     emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     // Fail fast if libass is not available (required for burning subtitles)
@@ -1223,6 +1226,10 @@ async fn optimized_multi_format_encode(
             let safe_format = format.replace(':', "x");
             let captioned_path =
                 unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
+            // Only when the video is bigger than the proof; a copy the same size is waste.
+            let proof = proof_short_side
+                .filter(|&side| side < target_w.min(target_h))
+                .map(|side| (side, unique_output_path(&proof_output_path(&captioned_path, side))));
 
             // Single-pass format conversion + caption burning with hardware acceleration
             optimized_single_format_encode(
@@ -1236,6 +1243,7 @@ async fn optimized_multi_format_encode(
                 &probe_result,
                 trim_start_seconds,
                 output_duration_seconds,
+                proof.as_ref().map(|(side, path)| (*side, path.as_str())),
                 tx,
                 idx,
             )
@@ -1247,6 +1255,7 @@ async fn optimized_multi_format_encode(
                 captioned_video: captioned_path,
                 width: target_w,
                 height: target_h,
+                proof_video: proof.map(|(_, path)| path),
             })
         });
     }
@@ -1315,6 +1324,7 @@ async fn optimized_single_format_encode(
     probe_result: &crate::video::ProbeResult,
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof: Option<(u32, &str)>,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
 ) -> Result<()> {
@@ -1333,6 +1343,7 @@ async fn optimized_single_format_encode(
         probe_result,
         trim_start_seconds,
         output_duration_seconds,
+        proof,
         hardware_encoder,
         tx.clone(),
         index,
@@ -1352,6 +1363,7 @@ async fn optimized_single_format_encode(
             probe_result,
             trim_start_seconds,
             output_duration_seconds,
+            proof,
             crate::video::HardwareEncoder::Software,
             tx,
             index,
@@ -1375,6 +1387,7 @@ async fn try_encode_with_encoder(
     probe_result: &crate::video::ProbeResult,
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof: Option<(u32, &str)>,
     hardware_encoder: crate::video::HardwareEncoder,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
@@ -1411,6 +1424,16 @@ async fn try_encode_with_encoder(
     let mut cmd = TokioCommand::new(&ffmpeg_path);
     cmd.kill_on_drop(true);
 
+    // With a proof copy the burned frame is split in two: the full-size output as
+    // before, and a scaled-down copy encoded alongside it, so the captions are drawn
+    // and the source decoded only once.
+    let filter_complex = proof.map(|(side, _)| {
+        format!(
+            "[0:v:0]{vf},split=2[full][small];[small]{}[proof]",
+            proof_scale_filter(target_w, target_h, side)
+        )
+    });
+
     let duration_us = Some((output_duration_seconds * 1_000_000.0) as u64);
     let trim_start_arg = format!("{trim_start_seconds:.3}");
     let output_duration_arg = format!("{output_duration_seconds:.3}");
@@ -1427,14 +1450,17 @@ async fn try_encode_with_encoder(
             &output_duration_arg,
             "-progress",
             "pipe:1", // Enable progress reporting
-            "-vf",
-            &vf,
+        ]);
+        match &filter_complex {
+            Some(graph) => args.extend_from_slice(&["-filter_complex", graph, "-map", "[full]"]),
+            // Map first video stream
+            None => args.extend_from_slice(&["-vf", &vf, "-map", "0:v:0"]),
+        }
+        args.extend_from_slice(&[
             "-fps_mode",
             "passthrough", // Modern replacement for -vsync
             "-threads",
             "0", // Use all available CPU cores
-            "-map",
-            "0:v:0", // Map first video stream
             "-map",
             "0:a?", // Map audio if present (optional)
         ]);
@@ -1505,6 +1531,14 @@ async fn try_encode_with_encoder(
             "+faststart", // Fast web playback
             output_path,
         ]);
+
+        // Second output: the proof copy, same encoder family at a proofing bitrate.
+        if let Some((_, proof_path)) = proof {
+            args.extend_from_slice(&["-map", "[proof]", "-map", "0:a?"]);
+            args.extend(proof_video_args(hardware_encoder).iter().copied());
+            args.extend_from_slice(&["-g", &gop_size_str, "-c:a", "aac", "-b:a", "128k"]);
+            args.extend_from_slice(&["-movflags", "+faststart", proof_path]);
+        }
         args
     });
 
@@ -1567,6 +1601,39 @@ async fn try_encode_with_encoder(
     }
 
     Ok(())
+}
+
+/// Scales a proof copy so its short side is `short_side`, keeping the aspect ratio
+/// (the other side rounded to even, as H.264 needs).
+fn proof_scale_filter(target_w: u32, target_h: u32, short_side: u32) -> String {
+    if target_w < target_h {
+        format!("scale={short_side}:-2")
+    } else {
+        format!("scale=-2:{short_side}")
+    }
+}
+
+/// `clip_9x16.mp4` → `clip_9x16_proof720p.mp4`
+fn proof_output_path(captioned_path: &str, short_side: u32) -> String {
+    match captioned_path.strip_suffix(".mp4") {
+        Some(stem) => format!("{stem}_proof{short_side}p.mp4"),
+        None => format!("{captioned_path}_proof{short_side}p.mp4"),
+    }
+}
+
+/// Encoder settings for a proof copy: small files meant for watching, not publishing.
+fn proof_video_args(encoder: crate::video::HardwareEncoder) -> &'static [&'static str] {
+    match encoder {
+        crate::video::HardwareEncoder::VideoToolbox => {
+            &["-c:v", "h264_videotoolbox", "-b:v", "2500k", "-allow_sw", "1"]
+        }
+        crate::video::HardwareEncoder::Nvenc => {
+            &["-c:v", "h264_nvenc", "-cq", "26", "-preset", "p5", "-rc", "vbr"]
+        }
+        crate::video::HardwareEncoder::Software => {
+            &["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
+        }
+    }
 }
 
 // ---- Constants for horizontal stretch animation ----
@@ -2914,5 +2981,43 @@ mod tests {
             .expect("a dialogue line");
         assert!(dialogue.contains(r"\q0"), "expected \\q0 in {dialogue}");
         assert!(!dialogue.contains(r"\N"), "no forced break expected in {dialogue}");
+    }
+}
+
+#[cfg(test)]
+mod tests_proof_copy {
+    use super::*;
+
+    #[test]
+    fn proof_scales_the_short_side() {
+        assert_eq!(proof_scale_filter(1920, 1080, 720), "scale=-2:720");
+        assert_eq!(proof_scale_filter(1080, 1920, 720), "scale=720:-2");
+        assert_eq!(proof_scale_filter(1080, 1080, 540), "scale=-2:540");
+    }
+
+    #[test]
+    fn proof_sits_next_to_the_full_size_video() {
+        assert_eq!(
+            proof_output_path("/v/talk.mp4_9x16.mp4", 720),
+            "/v/talk.mp4_9x16_proof720p.mp4"
+        );
+        assert_eq!(proof_output_path("/v/raw", 540), "/v/raw_proof540p.mp4");
+    }
+
+    #[test]
+    fn proof_copy_is_optional_in_burn_params() {
+        let base = serde_json::json!({
+            "inputVideo": "in.mp4",
+            "segments": [],
+            "exportFormats": ["16:9"],
+            "karaoke": false,
+            "fontName": null
+        });
+        let without: BurnCaptionsParams = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(without.proof_short_side, None);
+        let mut with = base;
+        with["proofShortSide"] = serde_json::json!(720);
+        let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
+        assert_eq!(with.proof_short_side, Some(720));
     }
 }

@@ -207,6 +207,10 @@ pub struct BurnCaptionsParams {
     #[serde(default)]
     pub trim_end_ms: u64,
     pub export_formats: Vec<String>,   // List of aspect ratios to export
+    /// Also write a smaller proof copy whose short side is this many pixels (e.g. 720),
+    /// from the same encode. None or 0: no proof copy.
+    #[serde(default)]
+    pub proof_short_side: Option<u32>,
     pub karaoke: bool,                 // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
@@ -251,6 +255,9 @@ pub struct CaptionedVideoResult {
     pub captioned_video: String, // Path to final video with captions
     pub width: u32,              // Video width
     pub height: u32,             // Video height
+    /// The smaller proof copy, when one was asked for and the video is bigger than it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_video: Option<String>,
 }
 
 // Model download types

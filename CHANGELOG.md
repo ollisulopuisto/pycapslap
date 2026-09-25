@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **Proof copy.** Rendering can write a smaller copy (720p or 540p on the short side; 720p by default, off in the new toolbar dropdown) next to the full-size video, for clients to proof while the full-size one is for publishing. It comes from the same ffmpeg pass: the burned frame is split and the copy scaled down and encoded alongside, so captions are drawn and the source decoded once. No copy is made when the video is no bigger than the proof. `burn` takes `proofShortSide` and answers with `proofVideo`.
 - **Client review.** A static review page (`review/`, published to GitHub Pages) where a client opens the video and a captions file, watches with the captions drawn on the video, fixes wording and timing, comments on a caption, and downloads the reviewed file; nothing leaves their computer, and an unfinished review survives a closed tab. Finnish or English by the browser's language. Ctrl/⌘+Z undoes any edit on the page — text, times, comments, reverts — with typing in one box as one step, and Shift+Ctrl/⌘+Z or Ctrl+Y redoes. In the app, **Client Review → Export for Review…** writes the file to send, and **Import Reviewed Captions…** applies what comes back cue by cue — text through the same re-timing as editing in the table, times through the same clamped move, style and positions untouched — then lists the reviewer's comments next to their captions. A reviewed file is still a valid sidecar.
 
 ### Fixed
