@@ -10,6 +10,7 @@
   <body>
     <header class="topbar">
       <div class="brand">
+        <a id="back" class="back" hidden data-i18n="back">← Back</a>
         <strong data-i18n="title">Caption review</strong>
         <span class="file-name" id="file-name"></span>
       </div>
@@ -19,6 +20,7 @@
           <input id="reviewer" type="text" autocomplete="name" />
         </label>
         <span class="summary" id="summary"></span>
+        <button id="send" class="primary" hidden disabled data-i18n="send">Send to the editor</button>
         <button id="download" class="primary" disabled data-i18n="download">Download reviewed captions</button>
       </div>
     </header>

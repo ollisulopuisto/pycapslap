@@ -11,6 +11,10 @@ build step, no dependencies, no server: open `index.html` from any static host
   captions, plus `review: { status, reviewer, reviewedAt, comments, changes }`.
   Import it in the app with *Client Review → Import Reviewed Captions…*.
 
+**From the review portal** (`portal/`), the page is opened as
+`/review/?video=…&captions=…&submit=…&back=…`: *Send to the editor* posts the
+reviewed file to `submit` (same site only) and a link leads `back` to the episode.
+
 **Password lock.** The page is public, so the app locks the file it exports:
 `{ format: 'capslap-locked', kdf: 'PBKDF2-SHA256', iterations, salt, iv, data }`,
 where `data` is the captions file sealed with AES-256-GCM. The page asks for the

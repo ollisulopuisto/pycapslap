@@ -1,5 +1,7 @@
 [tool.uv.workspace]
 members = ["pyside"]
+# The review portal is a separate server with its own lock (portal/uv.lock).
+exclude = ["portal"]
 
 [tool.pytest.ini_options]
 pythonpath = ["pyside"]

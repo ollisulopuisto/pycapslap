@@ -44,6 +44,12 @@ const STRINGS = {
     notCaptions: 'Tämä ei ole tekstitystiedosto.',
     passwordLabel: 'Tekstitykset on lukittu. Salasana (sait sen erikseen):',
     unlockButton: 'Avaa',
+    back: '← Takaisin',
+    send: 'Lähetä tekijälle',
+    sending: 'Lähetetään…',
+    sentToEditor: 'Lähetetty. Kiitos!',
+    sendFailed: 'Lähetys epäonnistui. Lataa tiedosto ja lähetä se muuten.',
+    downloadSecondary: 'Lataa tiedostona',
     wrongPassword: 'Väärä salasana.',
     unlocking: 'Avataan…',
   },
@@ -58,6 +64,10 @@ const EN = {
   wrongVideo: (name) => `Note: these captions were made for ${name}.`,
   notCaptions: 'This is not a captions file.',
   wrongPassword: 'Wrong password.',
+  sending: 'Sending…',
+  sentToEditor: 'Sent. Thank you!',
+  sendFailed: 'Sending failed. Download the file and send it another way.',
+  downloadSecondary: 'Download as a file',
   unlocking: 'Opening…',
 }
 const lang = navigator.language?.toLowerCase().startsWith('fi') ? 'fi' : 'en'
@@ -87,6 +97,8 @@ const state = {
   stopAtMs: null, // "play this caption" stops here
   storageKey: null,
   lock: null, // key of a password-locked file: the draft and the reply are locked too
+  videoFromLink: false, // a linked video's URL says nothing about its file name
+  submitUrl: null, // the review portal takes the reviewed file here (?submit=)
 }
 const history = new History()
 
@@ -216,10 +228,11 @@ async function maybeStart() {
   $('loader').hidden = true
   $('workspace').hidden = false
   $('download').disabled = false
+  $('send').disabled = false
   const expected = state.file.video?.name
   const name = expected || state.videoName
   $('file-name').textContent = name
-  if (expected && state.videoName && expected !== state.videoName) {
+  if (expected && state.videoName && !state.videoFromLink && expected !== state.videoName) {
     $('file-name').textContent = `${state.videoName} — ${t('wrongVideo', expected)}`
   }
   state.storageKey = `capslap-review:${name}:${fingerprint(state.file.segments)}`
@@ -233,6 +246,19 @@ async function loadFromQuery() {
   const params = new URLSearchParams(location.search)
   const captionsUrl = params.get('captions')
   const videoUrl = params.get('video')
+  // Opened from the review portal: send the result there, and offer the way back.
+  const submit = params.get('submit')
+  const back = params.get('back')
+  if (submit && sameSite(submit)) {
+    state.submitUrl = submit
+    $('send').hidden = false
+    $('download').className = 'secondary'
+    $('download').textContent = t('downloadSecondary')
+  }
+  if (back && sameSite(back)) {
+    $('back').href = back
+    $('back').hidden = false
+  }
   try {
     if (captionsUrl) {
       const response = await fetch(captionsUrl)
@@ -243,9 +269,19 @@ async function loadFromQuery() {
   }
   if (videoUrl) {
     state.videoName = decodeURIComponent(videoUrl.split('/').pop().split('?')[0])
+    state.videoFromLink = true
     $('video-status').textContent = state.videoName
     video.src = videoUrl
     maybeStart()
+  }
+}
+
+// Only this site's own addresses: a link must not make the page post a review elsewhere.
+function sameSite(url) {
+  try {
+    return new URL(url, location.href).origin === location.origin
+  } catch {
+    return false
   }
 }
 
@@ -580,6 +616,33 @@ $('download').addEventListener('click', async () => {
   a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   $('summary').textContent = t('downloaded')
+})
+
+$('send').addEventListener('click', async () => {
+  const button = $('send')
+  button.disabled = true
+  $('summary').textContent = t('sending')
+  try {
+    const file = currentReview()
+    const response = await fetch(state.submitUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // The portal link is the protection here; the server reads the captions.
+      body: JSON.stringify(file),
+    })
+    if (!response.ok) throw new Error(response.statusText)
+    $('summary').textContent = t('sentToEditor')
+    try {
+      // Sent is done: the next visit starts from what the editor has.
+      localStorage.removeItem(state.storageKey)
+    } catch {
+      // ignore
+    }
+  } catch {
+    $('summary').textContent = t('sendFailed')
+  } finally {
+    button.disabled = false
+  }
 })
 
 // ── Wiring ────────────────────────────────────────────────────────────────────

@@ -76,6 +76,24 @@ button {
   min-width: 0;
 }
 
+.back {
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.secondary {
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .file-name {
   color: var(--muted);
   font-size: 13px;

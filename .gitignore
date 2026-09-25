@@ -47,3 +47,4 @@ rust/check_output.txt
 __pycache__/
 *.pyc
 Näyttökuva*.png
+portal/data/

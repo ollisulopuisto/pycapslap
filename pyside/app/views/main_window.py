@@ -1,12 +1,15 @@
 import base64
+import hashlib
 import json
 import os
+import threading
 from pathlib import Path
 
 import psutil
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QDesktopServices,
+    QGuiApplication,
     QDragEnterEvent,
     QDropEvent,
     QImage,
@@ -16,6 +19,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -40,6 +44,8 @@ from app.models.captions import (
     apply_orphan_rules,
     combine_separated_syllables,
 )
+from app.portal_client import Portal, PortalError
+from app.views.portal_dialog import PublishDialog, portal_from_settings
 from app.models.review import (
     ReviewMismatch,
     WrongPassword,
@@ -119,6 +125,8 @@ class MainWindow(QMainWindow):
         self._preview_cues: list[dict] = []
         # The password the last review went out with; opens the reply without asking.
         self._review_password = ""
+        # The newest render's files, the default to publish to the portal.
+        self._last_render: dict = {}
         # libass's own rendering of each cue, keyed by the cue's start. The
         # editor draws these instead of painting text itself, so what is on
         # screen is literally what the burn produces. Thrown away whenever
@@ -188,6 +196,9 @@ class MainWindow(QMainWindow):
         review_menu = QMenu(self.review_btn)
         review_menu.addAction("Export for Review…", self._on_export_for_review)
         review_menu.addAction("Import Reviewed Captions…", self._on_import_review)
+        review_menu.addSeparator()
+        review_menu.addAction("Publish to Portal…", self._on_publish_to_portal)
+        review_menu.addAction("Import from Portal", self._on_import_from_portal)
         review_menu.addSeparator()
         review_menu.addAction(
             "Open Review Page",
@@ -892,6 +903,13 @@ class MainWindow(QMainWindow):
                 data = self._unlock_review(data)
                 if data is None:
                     return
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "Import Review", f"Could not read it: {err}")
+            return
+        self.import_review_data(data)
+
+    def import_review_data(self, data: dict) -> None:
+        try:
             segments = list(self.caption_panel.segments)
             result = apply_review(segments, data)
         except (OSError, ValueError) as err:
@@ -966,6 +984,103 @@ class MainWindow(QMainWindow):
         if path:
             self.set_bumper(which, path)
 
+    # ── Review portal ─────────────────────────────────────────────────────
+
+    def _portal_key(self) -> str:
+        """Where the portal id of this video's last publish is kept."""
+        path = str(Path(self.project.video_path).resolve())
+        return "portal/videos/" + hashlib.sha1(path.encode()).hexdigest()
+
+    def _on_publish_to_portal(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        if not self.project.video_path:
+            QMessageBox.information(self, "Publish", "Load a video first.")
+            return
+        render = self._last_render
+        video = render.get("proof") or render.get("video") or ""
+        label = render.get("format", self._export_format())
+        if render.get("proof"):
+            label += " proof"
+        dialog = PublishDialog(video, label, Path(self.project.video_path).stem, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.publish_to_portal(dialog.portal(), dialog.values())
+
+    def publish_to_portal(self, portal: Portal, values: dict) -> None:
+        """Upload in the background; the progress bar and status line follow it."""
+        captions = review_export_dict(self.project) if values["captions"] else None
+        key = self._portal_key()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.status.showMessage("Publishing to the portal…")
+
+        def work() -> None:
+            try:
+                placed = portal.publish(
+                    values["series"],
+                    values["episode"],
+                    values["label"],
+                    Path(self.project.video_path).name,
+                    captions,
+                )
+                portal.upload(
+                    placed["video"]["uploadUrl"],
+                    values["video"],
+                    lambda done: self._in_gui(
+                        lambda: self.progress_bar.setValue(int(done * 100))
+                    ),
+                )
+            except (PortalError, OSError, ValueError, KeyError) as err:
+                message = str(err)
+                self._in_gui(lambda: self._publish_failed(message))
+                return
+            link = portal.url + placed["episodeLink"]
+            self._in_gui(lambda: self._published(key, placed["video"]["id"], link))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _published(self, key: str, video_id: int, link: str) -> None:
+        QSettings().setValue(key, video_id)
+        self.progress_bar.setVisible(False)
+        QGuiApplication.clipboard().setText(link)
+        self.status.showMessage(f"Published: {link} (link copied)", 15000)
+
+    def _publish_failed(self, message: str) -> None:
+        self.progress_bar.setVisible(False)
+        self.status.clearMessage()
+        QMessageBox.warning(self, "Publish to Portal", message)
+
+    def _on_import_from_portal(self) -> None:
+        self.caption_panel.commit_active_editor()
+        portal = portal_from_settings()
+        video_id = (
+            QSettings().value(self._portal_key()) if self.project.video_path else None
+        )
+        if portal is None or not video_id:
+            QMessageBox.information(
+                self,
+                "Import from Portal",
+                "Publish this video to the portal first; its reviewed captions "
+                "come back from there.",
+            )
+            return
+        self.status.showMessage("Fetching captions from the portal…")
+
+        def work() -> None:
+            try:
+                data = portal.latest_captions(int(video_id))
+            except (PortalError, OSError, ValueError) as err:
+                message = str(err)
+                self._in_gui(
+                    lambda: QMessageBox.warning(self, "Import from Portal", message)
+                )
+                return
+            self._in_gui(lambda: self.import_review_data(data))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -1029,6 +1144,11 @@ class MainWindow(QMainWindow):
                 if isinstance(res, list) and res:
                     output_path = res[0].get("captionedVideo", "")
                     proof_path = res[0].get("proofVideo")
+                    self._last_render = {
+                        "video": output_path,
+                        "proof": proof_path,
+                        "format": export_fmt,
+                    }
                     if proof_path:
                         output_path += f" (proof: {os.path.basename(proof_path)})"
                 self._in_gui(lambda: self.render_btn.setEnabled(True))
