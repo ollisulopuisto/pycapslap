@@ -202,6 +202,10 @@ pub struct GenerateCaptionsResult {
 pub struct BurnCaptionsParams {
     pub input_video: String,           // Path to input video file
     pub segments: Vec<CaptionSegment>, // The edited segments to burn
+    #[serde(default)]
+    pub trim_start_ms: u64,
+    #[serde(default)]
+    pub trim_end_ms: u64,
     pub export_formats: Vec<String>,   // List of aspect ratios to export
     pub karaoke: bool,                 // Whether to use karaoke-style highlighting
     #[serde(default)]

@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
     def _setup_connections(self) -> None:
         # Player signals
         self.player.position_changed.connect(self._on_position_changed)
-        self.player.duration_changed.connect(self.timeline.set_duration)
+        self.player.duration_changed.connect(self._on_duration_changed)
         # Pausing stops position updates, so the moment the user settles on a
         # frame is the moment to fetch the renderer's version of it.
         self.player.media_player.playbackStateChanged.connect(
@@ -730,6 +730,9 @@ class MainWindow(QMainWindow):
         # Whatever the editor has been previewing all along.
         export_fmt = self._export_format()
 
+        trim_start_ms = self.timeline.trim_start_ms
+        trim_end_ms = max(0, self.timeline.duration_ms - self.timeline.trim_end_ms)
+
         self.status.showMessage(
             f"Rendering {export_fmt} video with burned-in captions..."
         )
@@ -742,6 +745,8 @@ class MainWindow(QMainWindow):
         params = {
             "inputVideo": str(Path(source_file).resolve()),
             "segments": [s.to_dict() for s in self.project.segments],
+            "trimStartMs": trim_start_ms,
+            "trimEndMs": trim_end_ms,
             "exportFormats": [export_fmt],
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
@@ -790,6 +795,11 @@ class MainWindow(QMainWindow):
                 )
 
         fut.add_done_callback(on_done)
+
+    def _on_duration_changed(self, duration_ms: int) -> None:
+        self.timeline.set_duration(duration_ms)
+        if self.project.video:
+            self.project.video.duration_sec = max(0, duration_ms) / 1000.0
 
     def _on_auto_place_requested(self) -> None:
         if not self.project.segments:
@@ -1017,6 +1027,7 @@ class MainWindow(QMainWindow):
 
     def load_video(self, file_path: str) -> None:
         self.status.showMessage(f"Loading video: {os.path.basename(file_path)}...")
+        self.timeline.reset_trim_range()
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)

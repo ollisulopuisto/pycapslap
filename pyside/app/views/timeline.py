@@ -17,6 +17,7 @@ from app.models.captions import CaptionSegment
 class VisualTimelineWidget(QWidget):
     seek_requested = Signal(int)
     segment_selected = Signal(object)
+    trim_range_changed = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -28,10 +29,35 @@ class VisualTimelineWidget(QWidget):
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
         self._is_scrubbing: bool = False
+        self.trim_start_ms = 0
+        self.trim_end_ms = 0
+        self._trim_drag_handle: str | None = None
+        self._trim_min_gap_ms = 100
+        self.setToolTip("Drag the blue trim handles to shorten the beginning or end")
 
     def set_duration(self, duration_ms: int) -> None:
+        old_duration = self.duration_ms
         self.duration_ms = max(0, int(duration_ms))
+        if old_duration == 0 or self.trim_end_ms == old_duration:
+            self.trim_end_ms = self.duration_ms
+        self.trim_start_ms = min(
+            self.trim_start_ms, max(0, self.duration_ms - self._trim_min_gap_ms)
+        )
+        self.trim_end_ms = max(
+            self.trim_start_ms + min(self._trim_min_gap_ms, self.duration_ms),
+            min(self.trim_end_ms, self.duration_ms),
+        )
         self.update()
+
+    def set_trim_range(self, start_ms: int, end_ms: int) -> None:
+        gap = min(self._trim_min_gap_ms, self.duration_ms)
+        start = max(0, min(int(start_ms), max(0, self.duration_ms - gap)))
+        end = max(start + gap, min(int(end_ms), self.duration_ms))
+        self.trim_start_ms, self.trim_end_ms = start, end
+        self.update()
+
+    def reset_trim_range(self) -> None:
+        self.set_trim_range(0, self.duration_ms)
 
     def set_position(self, position_ms: int) -> None:
         if not self._is_scrubbing:
@@ -49,16 +75,31 @@ class VisualTimelineWidget(QWidget):
     def _ms_to_x(self, ms: int) -> float:
         if self.duration_ms <= 0:
             return 0.0
-        return (ms / self.duration_ms) * self.width()
+        return (ms / self.duration_ms) * max(0, self.width() - 1)
 
     def _x_to_ms(self, x: float) -> int:
         if self.width() <= 0 or self.duration_ms <= 0:
             return 0
-        pct = max(0.0, min(1.0, x / self.width()))
+        pct = max(0.0, min(1.0, x / max(1, self.width() - 1)))
         return int(pct * self.duration_ms)
+
+    def _trim_handle_at(self, x: float) -> str | None:
+        if self.duration_ms <= 0:
+            return None
+        distances = {
+            "start": abs(x - self._ms_to_x(self.trim_start_ms)),
+            "end": abs(x - self._ms_to_x(self.trim_end_ms)),
+        }
+        handle = min(distances, key=distances.get)
+        return handle if distances[handle] <= 10 else None
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            self._trim_drag_handle = self._trim_handle_at(event.position().x())
+            if self._trim_drag_handle:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+                event.accept()
+                return
             self._is_scrubbing = True
             target_ms = self._x_to_ms(event.position().x())
             self.current_position_ms = target_ms
@@ -81,16 +122,36 @@ class VisualTimelineWidget(QWidget):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._is_scrubbing:
+        if self._trim_drag_handle:
+            target_ms = self._x_to_ms(event.position().x())
+            gap = min(self._trim_min_gap_ms, self.duration_ms)
+            if self._trim_drag_handle == "start":
+                self.trim_start_ms = min(target_ms, self.trim_end_ms - gap)
+            else:
+                self.trim_end_ms = max(target_ms, self.trim_start_ms + gap)
+            self.trim_range_changed.emit(self.trim_start_ms, self.trim_end_ms)
+            self.update()
+            event.accept()
+        elif self._is_scrubbing:
             target_ms = self._x_to_ms(event.position().x())
             self.current_position_ms = target_ms
             self.seek_requested.emit(target_ms)
             self.update()
             event.accept()
         else:
+            self.setCursor(
+                Qt.CursorShape.SizeHorCursor
+                if self._trim_handle_at(event.position().x())
+                else Qt.CursorShape.ArrowCursor
+            )
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._trim_drag_handle:
+            self._trim_drag_handle = None
+            self.unsetCursor()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._is_scrubbing:
             self._is_scrubbing = False
             event.accept()
@@ -179,6 +240,22 @@ class VisualTimelineWidget(QWidget):
                     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                     elided,
                 )
+
+        # Dim the portions that will be removed, leaving the selected range clear.
+        if self.duration_ms > 0:
+            start_x = self._ms_to_x(self.trim_start_ms)
+            end_x = self._ms_to_x(self.trim_end_ms)
+            painter.fillRect(QRectF(0, 0, start_x, h), QColor(0, 0, 0, 105))
+            painter.fillRect(
+                QRectF(end_x, 0, max(0.0, w - end_x), h), QColor(0, 0, 0, 105)
+            )
+            painter.setPen(QPen(QColor(96, 165, 250), 3))
+            painter.drawLine(int(start_x), 0, int(start_x), h)
+            painter.drawLine(int(end_x), 0, int(end_x), h)
+            painter.setBrush(QColor(96, 165, 250))
+            painter.setPen(Qt.PenStyle.NoPen)
+            for handle_x in (start_x, end_x):
+                painter.drawRoundedRect(QRectF(handle_x - 4, 14, 8, h - 20), 3, 3)
 
         # Playhead scrubber needle
         if self.duration_ms > 0:

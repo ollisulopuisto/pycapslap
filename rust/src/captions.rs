@@ -144,10 +144,63 @@ pub async fn burn_captions_with_segments(
         // We need to re-probe to get video dimensions
         let probe_result = probe(id, &params.input_video, &mut emit).await?;
 
+        let duration_ms = probe_result
+            .duration
+            .map(|duration| (duration * 1000.0) as u64)
+            .ok_or_else(|| anyhow!("Could not determine video duration for trimming"))?;
+        let trim_start_ms = params.trim_start_ms.min(duration_ms);
+        let trim_end_ms = params
+            .trim_end_ms
+            .min(duration_ms.saturating_sub(trim_start_ms));
+        let trim_end_at_ms = duration_ms.saturating_sub(trim_end_ms);
+        if trim_start_ms >= trim_end_at_ms {
+            return Err(anyhow!("Trim settings must leave at least some video"));
+        }
+        let trimmed_segments: Vec<CaptionSegment> = params
+            .segments
+            .iter()
+            .filter_map(|segment| {
+                let start_ms = segment.start_ms.max(trim_start_ms);
+                let end_ms = segment.end_ms.min(trim_end_at_ms);
+                (end_ms > start_ms).then(|| CaptionSegment {
+                    start_ms: start_ms - trim_start_ms,
+                    end_ms: end_ms - trim_start_ms,
+                    text: segment.text.clone(),
+                    words: segment
+                        .words
+                        .iter()
+                        .filter_map(|word| {
+                            let start_ms = word.start_ms.max(trim_start_ms);
+                            let end_ms = word.end_ms.min(trim_end_at_ms);
+                            (end_ms > start_ms).then(|| crate::types::WordSpan {
+                                start_ms: start_ms - trim_start_ms,
+                                end_ms: end_ms - trim_start_ms,
+                                text: word.text.clone(),
+                                glue_to_previous: word.glue_to_previous,
+                            })
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+        let trimmed_overrides: Vec<PositionOverride> = params
+            .position_overrides
+            .iter()
+            .filter_map(|item| {
+                let start_ms = item.start_ms.max(trim_start_ms);
+                let end_ms = item.end_ms.min(trim_end_at_ms);
+                (end_ms > start_ms).then(|| PositionOverride {
+                    start_ms: start_ms - trim_start_ms,
+                    end_ms: end_ms - trim_start_ms,
+                    y_pct: item.y_pct,
+                })
+            })
+            .collect();
+
         optimized_multi_format_encode(
             id,
             &params.input_video,
-            &params.segments,
+            &trimmed_segments,
             &params.export_formats,
             &probe_result,
             &temp_dir,
@@ -165,8 +218,10 @@ pub async fn burn_captions_with_segments(
             params.position,
             params.output_size,
             params.crop_strategy,
-            &params.position_overrides,
+            &trimmed_overrides,
             &params.blocked_bands,
+            trim_start_ms as f64 / 1000.0,
+            (trim_end_at_ms - trim_start_ms) as f64 / 1000.0,
             &mut emit,
         )
         .await
@@ -229,6 +284,8 @@ pub async fn generate_captions_single_pass(
             params.crop_strategy,
             &params.position_overrides,
             &params.blocked_bands,
+            0.0,
+            probe_result.duration.unwrap_or(0.0),
             &mut emit,
         )
         .await?;
@@ -1036,6 +1093,8 @@ async fn optimized_multi_format_encode(
     crop_strategy: Option<String>,
     position_overrides: &[PositionOverride],
     blocked_bands: &[(f32, f32)],
+    trim_start_seconds: f64,
+    output_duration_seconds: f64,
     emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     // Fail fast if libass is not available (required for burning subtitles)
@@ -1155,6 +1214,8 @@ async fn optimized_multi_format_encode(
         let task_id = format!("{}_{}", id, idx);
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
+        let trim_start_seconds = trim_start_seconds;
+        let output_duration_seconds = output_duration_seconds;
         let tx = tx.clone();
 
         tasks.spawn(async move {
@@ -1175,6 +1236,8 @@ async fn optimized_multi_format_encode(
                 target_h,
                 &crop_strat,
                 &probe_result,
+                trim_start_seconds,
+                output_duration_seconds,
                 tx,
                 idx,
             )
@@ -1252,6 +1315,8 @@ async fn optimized_single_format_encode(
     target_h: u32,
     crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
+    trim_start_seconds: f64,
+    output_duration_seconds: f64,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
 ) -> Result<()> {
@@ -1268,6 +1333,8 @@ async fn optimized_single_format_encode(
         target_h,
         crop_strategy,
         probe_result,
+        trim_start_seconds,
+        output_duration_seconds,
         hardware_encoder,
         tx.clone(),
         index,
@@ -1285,6 +1352,8 @@ async fn optimized_single_format_encode(
             target_h,
             crop_strategy,
             probe_result,
+            trim_start_seconds,
+            output_duration_seconds,
             crate::video::HardwareEncoder::Software,
             tx,
             index,
@@ -1306,6 +1375,8 @@ async fn try_encode_with_encoder(
     target_h: u32,
     crop_strategy: &str,
     probe_result: &crate::video::ProbeResult,
+    trim_start_seconds: f64,
+    output_duration_seconds: f64,
     hardware_encoder: crate::video::HardwareEncoder,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
@@ -1342,13 +1413,20 @@ async fn try_encode_with_encoder(
     let mut cmd = TokioCommand::new(&ffmpeg_path);
     cmd.kill_on_drop(true);
 
-    let duration_us = probe_result.duration.map(|s| (s * 1_000_000.0) as u64);
+    let duration_us = Some((output_duration_seconds * 1_000_000.0) as u64);
+    let trim_start_arg = format!("{trim_start_seconds:.3}");
+    let output_duration_arg = format!("{output_duration_seconds:.3}");
 
     cmd.args({
-        let mut args = vec![
-            "-y",
+        let mut args = vec!["-y"];
+        if trim_start_seconds > 0.0 {
+            args.extend_from_slice(&["-ss", &trim_start_arg]);
+        }
+        args.extend_from_slice(&[
             "-i",
             input_video,
+            "-t",
+            &output_duration_arg,
             "-progress",
             "pipe:1", // Enable progress reporting
             "-vf",
@@ -1361,7 +1439,7 @@ async fn try_encode_with_encoder(
             "0:v:0", // Map first video stream
             "-map",
             "0:a?", // Map audio if present (optional)
-        ];
+        ]);
 
         // Add hardware-optimized encoding parameters
         match hardware_encoder {
@@ -2350,7 +2428,9 @@ fn build_ass_document(
     }
     crate::debug_log!(
         "DEBUG: build_ass_document start. karaoke={}, multiline={}, glow={}",
-        karaoke, multiline, glow_effect
+        karaoke,
+        multiline,
+        glow_effect
     );
 
     let header = format!(
