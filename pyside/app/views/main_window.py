@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QDesktopServices,
     QDragEnterEvent,
@@ -75,6 +75,13 @@ MAX_LAYER_RENDERS = 3
 
 
 class MainWindow(QMainWindow):
+    # Core replies arrive on the core client's reader thread. They reach the GUI
+    # through this signal, queued onto the window's thread. QTimer.singleShot called
+    # from that thread makes a timer object there and hands it to the GUI thread's
+    # timer list, and the macOS test run crashed inside that list
+    # (QTimerInfoList::activateTimers) with such timers pending.
+    _gui_call = Signal(object)
+
     def __init__(
         self, core_client: CoreClient | None = None, parent: QWidget | None = None
     ):
@@ -85,6 +92,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.core = core_client or CoreClient(parent=self)
+        self._gui_call.connect(self._run_gui_call, Qt.ConnectionType.QueuedConnection)
         self.project = ProjectState()
 
         self._seek_latencies: list[float] = []
@@ -467,7 +475,7 @@ class MainWindow(QMainWindow):
             # thread, which has no event loop, so a timer created there would
             # never fire. Passing `self` as the context object queues the call
             # onto the GUI thread instead.
-            QTimer.singleShot(0, self, apply)
+            self._in_gui(apply)
 
         fut.add_done_callback(on_done)
 
@@ -619,17 +627,17 @@ class MainWindow(QMainWindow):
             try:
                 result = f.result()
             except Exception:
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
             data_uri = (result or {}).get("imageData", "")
             raw = data_uri.split(",", 1)[1] if "," in data_uri else ""
             if not raw:
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
             try:
                 image = QImage.fromData(base64.b64decode(raw))
             except (ValueError, TypeError):
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
 
             def store(image=image) -> None:
@@ -648,7 +656,7 @@ class MainWindow(QMainWindow):
                 if current is not None and int(current.get("startMs", 0)) == key:
                     self.overlay.set_caption_layer(pixmap)
 
-            QTimer.singleShot(0, self, store)
+            self._in_gui(store)
 
         fut.add_done_callback(on_done)
         return True
@@ -758,6 +766,14 @@ class MainWindow(QMainWindow):
             )
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
+
+    def _in_gui(self, fn) -> None:
+        """Run `fn` on the GUI thread, after the current event. Safe from any thread."""
+        self._gui_call.emit(fn)
+
+    @staticmethod
+    def _run_gui_call(fn) -> None:
+        fn()
 
     def _on_export_for_review(self) -> None:
         self.caption_panel.commit_active_editor()
@@ -893,28 +909,20 @@ class MainWindow(QMainWindow):
                     proof_path = res[0].get("proofVideo")
                     if proof_path:
                         output_path += f" (proof: {os.path.basename(proof_path)})"
-                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(
-                    0, self, lambda: self.render_btn.setText("Render Video")
-                )
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.render_btn.setEnabled(True))
+                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Render complete: {output_path}", 8000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(
-                    0, self, lambda: self.render_btn.setText("Render Video")
-                )
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.render_btn.setEnabled(True))
+                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg),
                 )
 
@@ -1008,21 +1016,17 @@ class MainWindow(QMainWindow):
                     PositionOverride.from_dict(o) for o in overrides_data
                 ]
                 self.project.is_dirty = True
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Auto Dodge complete: moved {moved} captions.", 4000
                     ),
                 )
-                QTimer.singleShot(0, self, self.overlay.update)
+                self._in_gui(self.overlay.update)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Auto Dodge Error", msg
                     ),
@@ -1073,21 +1077,17 @@ class MainWindow(QMainWindow):
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(0, self, lambda: self.set_caption_segments(new_segs))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(lambda: self.set_caption_segments(new_segs))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Transcription finished: {len(new_segs)} segments.", 4000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Transcription Error", msg
                     ),
@@ -1268,7 +1268,7 @@ class MainWindow(QMainWindow):
                         self.progress_bar.setVisible(False)
                         self.status.showMessage("Thumbnail loaded.", 2000)
 
-                    QTimer.singleShot(0, self, update_ui)
+                    self._in_gui(update_ui)
                 else:
 
                     def reset_no_img():
@@ -1277,7 +1277,7 @@ class MainWindow(QMainWindow):
                         self.progress_bar.setRange(0, 100)
                         self.progress_bar.setVisible(False)
 
-                    QTimer.singleShot(0, self, reset_no_img)
+                    self._in_gui(reset_no_img)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
 
@@ -1288,7 +1288,7 @@ class MainWindow(QMainWindow):
                     self.progress_bar.setVisible(False)
                     QMessageBox.warning(self, "Error", msg)
 
-                QTimer.singleShot(0, self, reset_err)
+                self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
 

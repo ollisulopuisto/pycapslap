@@ -656,3 +656,25 @@ def test_render_asks_for_the_chosen_proof_copy(qtbot, tmp_path):
     burn = [p for m, p in calls if m == "burn"][-1]
     assert burn["proofShortSide"] is None
     window.close()
+
+
+def test_core_replies_reach_the_gui_thread(qtbot):
+    """Work handed over from the core's reader thread runs on the GUI thread, later."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    ran_on = []
+
+    def from_reader():
+        window._in_gui(lambda: ran_on.append(QThread.currentThread()))
+
+    worker = threading.Thread(target=from_reader)
+    worker.start()
+    worker.join()
+    assert ran_on == []  # queued, not run on the reader thread
+    qtbot.waitUntil(lambda: bool(ran_on), timeout=2000)
+    assert ran_on[0] == window.thread()
+    window.close()
