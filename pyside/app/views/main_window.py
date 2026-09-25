@@ -254,9 +254,7 @@ class MainWindow(QMainWindow):
         self.overlay.anchor_changed.connect(self._on_overlay_anchor_changed)
         # Until a frame has been decoded the frame size is a guess, and every
         # layout computed from it is a guess too. Redo them once it is known.
-        self.player.canvas.video_size_changed.connect(
-            self._on_video_size_changed
-        )
+        self.player.canvas.video_size_changed.connect(self._on_video_size_changed)
 
         # Caption Panel signals
         self.caption_panel.segment_selected.connect(self._on_segment_selected)

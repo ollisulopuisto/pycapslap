@@ -485,7 +485,10 @@ def test_caption_panel_delete_empty_slot_stretches_previous_cue(qtbot):
         start_ms=0, end_ms=1000, text="First", words=[WordSpan(0, 1000, "First")]
     )
     seg2 = CaptionSegment(
-        start_ms=1000, end_ms=1800, text="Second", words=[WordSpan(1000, 1800, "Second")]
+        start_ms=1000,
+        end_ms=1800,
+        text="Second",
+        words=[WordSpan(1000, 1800, "Second")],
     )
     panel.set_segments([seg1, seg2])
 

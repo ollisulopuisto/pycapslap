@@ -434,9 +434,7 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
             "endMs": (i + 1) * 300,
             "lines": [
                 {
-                    "words": [
-                        {"text": w, "isHighlighted": w == word} for w in words
-                    ],
+                    "words": [{"text": w, "isHighlighted": w == word} for w in words],
                     "fontSizePx": 44,
                 }
             ],
@@ -465,9 +463,7 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
     assert len(window._layer_pending) <= 3
 
     def rendered():
-        return {
-            c[1]["timestampMs"] for c in calls if c[0] == "generatePreviewFrame"
-        }
+        return {c[1]["timestampMs"] for c in calls if c[0] == "generatePreviewFrame"}
 
     qtbot.waitUntil(lambda: len(window._layer_cache) == len(cues), timeout=5000)
     # Every window rendered, each exactly once.

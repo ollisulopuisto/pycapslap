@@ -1214,8 +1214,6 @@ async fn optimized_multi_format_encode(
         let task_id = format!("{}_{}", id, idx);
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
-        let trim_start_seconds = trim_start_seconds;
-        let output_duration_seconds = output_duration_seconds;
         let tx = tx.clone();
 
         tasks.spawn(async move {
@@ -1909,7 +1907,7 @@ fn assemble_justified(
         if line_idx > 0 {
             s.push_str(r"\N");
         }
-        for i in line.start..line.end {
+        for (i, token) in tokens.iter().enumerate().take(line.end).skip(line.start) {
             let color = if hi != usize::MAX && i == hi {
                 hi_bgr
             } else {
@@ -1919,12 +1917,12 @@ fn assemble_justified(
             // to the box, so growing one word would break the justification.
             s.push_str(&format!("{{\\1c&H{}&\\fs{}}}", color, line.font_px));
             s.push_str(
-                &tokens[i]
+                &token
                     .replace('\\', r"\\")
                     .replace('{', r"\{")
                     .replace('}', r"\}"),
             );
-            if i + 1 < line.end && !(tokens[i].ends_with('-') && tokens[i].len() > 1) {
+            if i + 1 < line.end && !(token.ends_with('-') && token.len() > 1) {
                 s.push(' ');
             }
         }
