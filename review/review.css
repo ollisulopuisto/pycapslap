@@ -202,6 +202,34 @@ button {
   color: var(--muted);
 }
 
+.unlock {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.unlock label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.unlock-row {
+  display: flex;
+  gap: 8px;
+}
+
+.unlock input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
 .error {
   color: var(--error);
 }

@@ -11,6 +11,14 @@ build step, no dependencies, no server: open `index.html` from any static host
   captions, plus `review: { status, reviewer, reviewedAt, comments, changes }`.
   Import it in the app with *Client Review → Import Reviewed Captions…*.
 
+**Password lock.** The page is public, so the app locks the file it exports:
+`{ format: 'capslap-locked', kdf: 'PBKDF2-SHA256', iterations, salt, iv, data }`,
+where `data` is the captions file sealed with AES-256-GCM. The page asks for the
+password, keeps the draft in `localStorage` locked with the same key, and locks the
+file it downloads with it. `lock.js` holds this; `app/models/review.py` does the
+same in the app, and `testdata/locked.capslap.json` (password
+`k7mq-x2fp-9tza-hw4c`) is opened by both test suites. The video is not locked.
+
 Captions are edited, never added or removed, so the file lines up with the
 project cue by cue. `core.js` holds the logic and is tested with
 `node --test review/*.test.js`; `review.js` is the page.

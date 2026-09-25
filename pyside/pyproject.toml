@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "cryptography>=46",
     # Pure-Python ctypes wrapper. Spell checking stays silently off until the
     # native library is installed too (macOS: brew install libvoikko).
     "libvoikko>=4.3",

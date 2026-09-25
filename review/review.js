@@ -10,6 +10,7 @@ import {
   retimeWords,
   reviewFileName,
 } from './core.js'
+import { isLocked, lockText, unlock, WrongPassword } from './lock.js'
 
 // ── Language: Finnish for Finnish browsers, English otherwise ────────────────
 
@@ -41,6 +42,10 @@ const STRINGS = {
     downloaded: 'Tiedosto ladattu. Lähetä se takaisin tekijälle.',
     wrongVideo: (name) => `Huom: tekstitykset on tehty videolle ${name}.`,
     notCaptions: 'Tämä ei ole tekstitystiedosto.',
+    passwordLabel: 'Tekstitykset on lukittu. Salasana (sait sen erikseen):',
+    unlockButton: 'Avaa',
+    wrongPassword: 'Väärä salasana.',
+    unlocking: 'Avataan…',
   },
 }
 const EN = {
@@ -52,6 +57,8 @@ const EN = {
   downloaded: 'File downloaded. Send it back to the editor.',
   wrongVideo: (name) => `Note: these captions were made for ${name}.`,
   notCaptions: 'This is not a captions file.',
+  wrongPassword: 'Wrong password.',
+  unlocking: 'Opening…',
 }
 const lang = navigator.language?.toLowerCase().startsWith('fi') ? 'fi' : 'en'
 const t = (key, ...args) => {
@@ -79,6 +86,7 @@ const state = {
   videoUrl: null,
   stopAtMs: null, // "play this caption" stops here
   storageKey: null,
+  lock: null, // key of a password-locked file: the draft and the reply are locked too
 }
 const history = new History()
 
@@ -135,14 +143,59 @@ function loadVideo(file) {
 }
 
 async function loadCaptions(file) {
+  await openCaptions(await file.text(), file.name)
+}
+
+// A locked file waits here for its password.
+let lockedFile = null
+
+async function openCaptions(text, name) {
   try {
-    setCaptions(parseCaptionsFile(await file.text()))
-    $('captions-status').textContent = file.name
+    let data
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = null
+    }
+    if (isLocked(data)) {
+      lockedFile = { data, name }
+      $('unlock').hidden = false
+      $('password').focus()
+      $('load-error').textContent = ''
+      return
+    }
+    state.lock = null
+    setCaptions(parseCaptionsFile(text))
+    $('captions-status').textContent = name
     $('load-error').textContent = ''
   } catch (err) {
     $('load-error').textContent = `${t('notCaptions')} ${err.message}`
   }
 }
+
+$('unlock').addEventListener('submit', async (e) => {
+  e.preventDefault()
+  if (!lockedFile) return
+  const button = $('unlock').querySelector('button')
+  button.disabled = true
+  $('load-error').textContent = t('unlocking')
+  try {
+    const opened = await unlock(lockedFile.data, $('password').value)
+    const file = parseCaptionsFile(opened.text)
+    state.lock = opened.lock
+    $('password').value = ''
+    $('unlock').hidden = true
+    $('captions-status').textContent = lockedFile.name
+    $('load-error').textContent = ''
+    lockedFile = null
+    setCaptions(file)
+  } catch (err) {
+    $('load-error').textContent = err instanceof WrongPassword ? t('wrongPassword') : `${t('notCaptions')} ${err.message}`
+    $('password').select()
+  } finally {
+    button.disabled = false
+  }
+})
 
 function setCaptions(file) {
   state.file = file
@@ -158,7 +211,7 @@ function handleFiles(files) {
   }
 }
 
-function maybeStart() {
+async function maybeStart() {
   if (!state.file || !video.src) return
   $('loader').hidden = true
   $('workspace').hidden = false
@@ -170,7 +223,7 @@ function maybeStart() {
     $('file-name').textContent = `${state.videoName} — ${t('wrongVideo', expected)}`
   }
   state.storageKey = `capslap-review:${name}:${fingerprint(state.file.segments)}`
-  restoreDraft()
+  await restoreDraft()
   renderCues()
   updateSummary()
 }
@@ -183,8 +236,7 @@ async function loadFromQuery() {
   try {
     if (captionsUrl) {
       const response = await fetch(captionsUrl)
-      setCaptions(parseCaptionsFile(await response.text()))
-      $('captions-status').textContent = decodeURIComponent(captionsUrl.split('/').pop())
+      await openCaptions(await response.text(), decodeURIComponent(captionsUrl.split('/').pop()))
     }
   } catch (err) {
     $('load-error').textContent = `${t('notCaptions')} ${err.message}`
@@ -207,20 +259,30 @@ function fingerprint(segments) {
   return (hash >>> 0).toString(36)
 }
 
+// A draft of a locked file is locked with the same key. Saves run one after another,
+// so a slow one can't overwrite a newer one.
+let saving = Promise.resolve()
+
 function saveDraft() {
-  try {
-    localStorage.setItem(
-      state.storageKey,
-      JSON.stringify({ segments: state.segments, comments: state.comments, reviewer: $('reviewer').value })
-    )
-  } catch {
-    // Private windows and full storage: the review still works, just isn't kept.
-  }
+  const draft = JSON.stringify({ segments: state.segments, comments: state.comments, reviewer: $('reviewer').value })
+  const key = state.storageKey
+  const lock = state.lock
+  saving = saving.then(async () => {
+    try {
+      localStorage.setItem(key, lock ? JSON.stringify(await lockText(draft, lock)) : draft)
+    } catch {
+      // Private windows and full storage: the review still works, just isn't kept.
+    }
+  })
 }
 
-function restoreDraft() {
+async function restoreDraft() {
   try {
-    const saved = JSON.parse(localStorage.getItem(state.storageKey) || 'null')
+    let saved = JSON.parse(localStorage.getItem(state.storageKey) || 'null')
+    if (isLocked(saved)) {
+      // Only the password this file was opened with opens its draft.
+      saved = state.lock ? JSON.parse((await unlock(saved, '', state.lock)).text) : null
+    }
     if (saved?.segments?.length === state.file.segments.length) {
       state.segments = saved.segments
       state.comments = saved.comments || {}
@@ -507,9 +569,11 @@ $('reviewer').addEventListener('input', () => {
   if (state.file) saveDraft()
 })
 
-$('download').addEventListener('click', () => {
+$('download').addEventListener('click', async () => {
   const file = currentReview()
-  const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' })
+  // A locked file goes back locked, with the password it came with.
+  const out = state.lock ? await lockText(JSON.stringify(file), state.lock) : file
+  const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
   a.download = reviewFileName(file.video ? file : { video: { name: state.videoName } })

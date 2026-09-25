@@ -18,9 +18,11 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMenu,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -38,7 +40,16 @@ from app.models.captions import (
     apply_orphan_rules,
     combine_separated_syllables,
 )
-from app.models.review import ReviewMismatch, apply_review, review_export_dict
+from app.models.review import (
+    ReviewMismatch,
+    WrongPassword,
+    apply_review,
+    is_locked,
+    lock_file,
+    new_review_password,
+    review_export_dict,
+    unlock_file,
+)
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
 from app.views.timeline import VisualTimelineWidget
@@ -101,6 +112,8 @@ class MainWindow(QMainWindow):
         # same blocks the burn will. Refreshed off a timer because every
         # keystroke in the cue table would otherwise hit the core.
         self._preview_cues: list[dict] = []
+        # The password the last review went out with; opens the reply without asking.
+        self._review_password = ""
         # libass's own rendering of each cue, keyed by the cue's start. The
         # editor draws these instead of painting text itself, so what is on
         # screen is literally what the burn produces. Thrown away whenever
@@ -789,19 +802,61 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        password = self._ask_export_password()
+        if password is None:
+            return
+        data = review_export_dict(self.project)
+        if password:
+            data = lock_file(data, password)
         try:
-            Path(path).write_text(
-                json.dumps(review_export_dict(self.project), indent=2),
-                encoding="utf-8",
-            )
+            Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
         except OSError as err:
             QMessageBox.warning(self, "Client Review", f"Could not save: {err}")
             return
-        self.status.showMessage(
-            "Exported for review. Send the file and the video to the client; "
-            f"they open both on {REVIEW_PAGE_URL}",
-            8000,
+        self._review_password = password
+        how = (
+            "Send the file and the video to the client, and the password some "
+            "other way (a text message); "
+            if password
+            else "Send the file and the video to the client; "
         )
+        self.status.showMessage(
+            f"Exported for review. {how}they open both on {REVIEW_PAGE_URL}", 10000
+        )
+
+    def _ask_export_password(self) -> str | None:
+        """The password to lock the review file with: '' for none, None to cancel."""
+        password, ok = QInputDialog.getText(
+            self,
+            "Export for Review",
+            "Password for the client. Send it separately from the file, "
+            "e.g. by text message.\nClear it to export without a password.",
+            QLineEdit.EchoMode.Normal,
+            new_review_password(),
+        )
+        return password.strip() if ok else None
+
+    def _ask_import_password(self, wrong: bool) -> str | None:
+        prompt = "Wrong password. Try again:" if wrong else "Password for this file:"
+        password, ok = QInputDialog.getText(
+            self, "Import Review", prompt, QLineEdit.EchoMode.Password
+        )
+        return password if ok else None
+
+    def _unlock_review(self, data: dict) -> dict | None:
+        """The file inside a locked review: the export's password first, then asks."""
+        if self._review_password:
+            try:
+                return unlock_file(data, self._review_password)
+            except WrongPassword:
+                pass
+        wrong = False
+        while (password := self._ask_import_password(wrong)) is not None:
+            try:
+                return unlock_file(data, password)
+            except WrongPassword:
+                wrong = True
+        return None
 
     def _on_import_review(self) -> None:
         self.caption_panel.commit_active_editor()
@@ -820,6 +875,10 @@ class MainWindow(QMainWindow):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             if not isinstance(data, dict):
                 raise ValueError("not a captions file")
+            if is_locked(data):
+                data = self._unlock_review(data)
+                if data is None:
+                    return
             segments = list(self.caption_panel.segments)
             result = apply_review(segments, data)
         except (OSError, ValueError) as err:

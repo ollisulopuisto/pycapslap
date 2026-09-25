@@ -46,6 +46,13 @@
         </div>
         <p class="privacy" data-i18n="privacy">Nothing is uploaded: the video and captions stay on this computer.</p>
       </div>
+      <form class="unlock" id="unlock" hidden>
+        <label for="password" data-i18n="passwordLabel">The captions are locked. Password (you got it separately):</label>
+        <div class="unlock-row">
+          <input id="password" type="password" autocomplete="off" required />
+          <button class="primary" type="submit" data-i18n="unlockButton">Open</button>
+        </div>
+      </form>
       <p class="error" id="load-error" role="alert"></p>
     </section>
 

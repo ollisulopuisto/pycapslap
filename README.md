@@ -52,8 +52,8 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
   * Real-time drag-and-drop vertical subtitle positioning on video canvas.
   * Automated computer-vision activity detection ("Auto Dodge") to avoid obscuring faces or high-motion areas.
 * ✅ **Client Review**: send the captions to a client, who checks and corrects them in their browser on the [review page](https://ollisulopuisto.github.io/pycapslap/) and sends the file back.
-  * **Client Review → Export for Review…** saves a `.review.capslap.json`. Send it with the video (a smaller preview is fine).
-  * The client opens both on the page, watches the video with the captions on it, fixes wording or timing, leaves comments, and downloads the reviewed file. Nothing is uploaded; a half-done review survives a closed tab.
+  * **Client Review → Export for Review…** saves a `.review.capslap.json`, locked with a password it offers to generate. Send the file with the video (a smaller preview is fine), and the password another way, such as a text message. The page is public, but a locked file is useless without the password; share the video through a link that needs a login or a password.
+  * The client opens both on the page, watches the video with the captions on it, fixes wording or timing, leaves comments, and downloads the reviewed file, locked with the same password. Nothing is uploaded; a half-done review survives a closed tab, locked too.
   * **Client Review → Import Reviewed Captions…** applies their fixes cue by cue (word timings are rebuilt from yours, style and positions stay) and lists their comments. Save, render.
 * 💾 **Non-destructive Sidecar Storage**:
   * Projects are automatically saved as lightweight `.capslap.json` sidecar files next to your source video.

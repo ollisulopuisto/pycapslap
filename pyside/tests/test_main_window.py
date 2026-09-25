@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 
 from app.models.captions import CaptionSegment
 from app.views.main_window import MainWindow
@@ -603,6 +604,88 @@ def test_import_review_of_other_captions_changes_nothing(
 
     assert [s.text for s in window.caption_panel.segments] == ["Yksi"]
     assert no_modal_message_boxes[-1][0] == "warning"
+    window.close()
+
+
+def test_export_locks_the_file_and_the_reply_opens_with_the_same_password(
+    qtbot, tmp_path, monkeypatch, no_modal_message_boxes
+):
+    import json
+
+    from app.models.project import VideoMetadata
+    from app.models.review import is_locked, lock_file, unlock_file
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Kylläpä on sää")])
+    window.project.video = VideoMetadata(
+        path=str(tmp_path / "talk.mp4"), width=1920, height=1080, duration_sec=2.0
+    )
+    out = tmp_path / "talk.mp4.review.capslap.json"
+    monkeypatch.setattr(
+        "app.views.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), ""),
+    )
+    monkeypatch.setattr(window, "_ask_export_password", lambda: "k7mq-x2fp")
+
+    window._on_export_for_review()
+
+    locked = json.loads(out.read_text(encoding="utf-8"))
+    assert is_locked(locked)
+    sent = unlock_file(locked, "k7mq-x2fp")
+    assert sent["segments"][0]["text"] == "Kylläpä on sää"
+
+    # The client's reply comes back locked with the same password: no prompt.
+    sent["segments"][0]["text"] = "Kyllä on sää"
+    reply = tmp_path / "talk.mp4.reviewed.capslap.json"
+    reply.write_text(json.dumps(lock_file(sent, "k7mq-x2fp", iterations=1000)))
+    monkeypatch.setattr(
+        window,
+        "_ask_import_password",
+        lambda wrong: pytest.fail("asked for a password it already had"),
+    )
+    window.import_review_file(str(reply))
+    assert window.caption_panel.segments[0].text == "Kyllä on sää"
+    window.close()
+
+
+def test_import_asks_again_after_a_wrong_password(
+    qtbot, tmp_path, monkeypatch, no_modal_message_boxes
+):
+    import json
+
+    from app.models.review import lock_file
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    reply = tmp_path / "reply.json"
+    reply.write_text(
+        json.dumps(
+            lock_file(
+                {"segments": [{"startMs": 0, "endMs": 2000, "text": "Kaksi"}]},
+                "oikea",
+                iterations=1000,
+            )
+        )
+    )
+    answers = iter(["väärä", "oikea"])
+    asked = []
+
+    def ask(wrong):
+        asked.append(wrong)
+        return next(answers)
+
+    monkeypatch.setattr(window, "_ask_import_password", ask)
+    window.import_review_file(str(reply))
+    assert asked == [False, True]
+    assert window.caption_panel.segments[0].text == "Kaksi"
+
+    # Cancelling the prompt leaves the captions alone.
+    monkeypatch.setattr(window, "_ask_import_password", lambda wrong: None)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    window.import_review_file(str(reply))
+    assert window.caption_panel.segments[0].text == "Yksi"
     window.close()
 
 

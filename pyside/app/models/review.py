@@ -6,9 +6,18 @@ stays a valid sidecar; importing it here applies only the captions, cue by cue,
 so the local style, positions and word timings stay authoritative.
 """
 
+import base64
+import json
+import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from app.models.captions import (
     CaptionsFile,
@@ -18,6 +27,80 @@ from app.models.captions import (
 )
 
 REVIEW_FORMAT = "capslap-review"
+
+# Password-locked files: the whole captions file, AES-256-GCM with a key from
+# PBKDF2-SHA256. The review page reads and writes the same (review/lock.js).
+LOCKED_FORMAT = "capslap-locked"
+LOCK_ITERATIONS = 600_000
+# No look-alikes (0/o, 1/l/i), so a password read out over the phone survives.
+_PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+class WrongPassword(ValueError):
+    """The password doesn't open the locked file."""
+
+    def __init__(self) -> None:
+        super().__init__("Wrong password.")
+
+
+def new_review_password() -> str:
+    """Something like `k7mq-x2fp-9tza-hw4c`: easy to send, about 79 bits."""
+    groups = (
+        "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(4)) for _ in range(4)
+    )
+    return "-".join(groups)
+
+
+def is_locked(data: Any) -> bool:
+    return isinstance(data, dict) and data.get("format") == LOCKED_FORMAT
+
+
+def _key(password: str, salt: bytes, iterations: int) -> bytes:
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(), length=32, salt=salt, iterations=iterations
+    )
+    return kdf.derive(password.encode("utf-8"))
+
+
+def lock_file(
+    data: dict[str, Any], password: str, iterations: int = LOCK_ITERATIONS
+) -> dict[str, Any]:
+    """`data` locked with `password`, as a file the review page can open."""
+    salt, iv = os.urandom(16), os.urandom(12)
+    plain = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    sealed = AESGCM(_key(password, salt, iterations)).encrypt(iv, plain, None)
+
+    def b64(raw: bytes) -> str:
+        return base64.b64encode(raw).decode("ascii")
+
+    return {
+        "format": LOCKED_FORMAT,
+        "formatVersion": 1,
+        "kdf": "PBKDF2-SHA256",
+        "iterations": iterations,
+        "salt": b64(salt),
+        "iv": b64(iv),
+        "data": b64(sealed),
+    }
+
+
+def unlock_file(locked: dict[str, Any], password: str) -> dict[str, Any]:
+    """The captions file inside `locked`. Raises WrongPassword."""
+    try:
+        key = _key(
+            password, base64.b64decode(locked["salt"]), int(locked["iterations"])
+        )
+        plain = AESGCM(key).decrypt(
+            base64.b64decode(locked["iv"]), base64.b64decode(locked["data"]), None
+        )
+    except (KeyError, TypeError, ValueError) as err:
+        raise ValueError(f"damaged locked file ({err})") from err
+    except InvalidTag as err:
+        raise WrongPassword() from err
+    data = json.loads(plain.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("not a captions file")
+    return data
 
 
 def review_export_dict(project: ProjectState) -> dict[str, Any]:

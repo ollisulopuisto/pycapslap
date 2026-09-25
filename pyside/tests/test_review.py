@@ -1,8 +1,25 @@
 import json
+from pathlib import Path
+
+import pytest
 
 from app.models.captions import CaptionSegment, ProjectState, WordSpan
 from app.models.project import VideoMetadata
-from app.models.review import ReviewMismatch, apply_review, review_export_dict
+from app.models.review import (
+    ReviewMismatch,
+    WrongPassword,
+    apply_review,
+    is_locked,
+    lock_file,
+    new_review_password,
+    review_export_dict,
+    unlock_file,
+)
+
+# Locked with the same code; the review page's tests open it too (review/lock.test.js).
+LOCKED_FIXTURE = (
+    Path(__file__).parents[2] / "review" / "testdata" / "locked.capslap.json"
+)
 
 
 def _segments():
@@ -111,3 +128,33 @@ def test_a_review_of_other_captions_is_refused():
     else:
         raise AssertionError("expected ReviewMismatch")
     assert [s.text for s in segments] == [s.text for s in _segments()]
+
+
+def test_a_locked_file_hides_the_captions_and_opens_with_the_password():
+    data = {"segments": [{"startMs": 0, "endMs": 1000, "text": "Salainen sää"}]}
+    locked = lock_file(data, "k7mq-x2fp", iterations=1000)
+    assert is_locked(locked) and not is_locked(data)
+    assert "Salainen" not in json.dumps(locked)
+    assert unlock_file(locked, "k7mq-x2fp") == data
+    with pytest.raises(WrongPassword):
+        unlock_file(locked, "k7mq-x2fq")
+
+
+def test_opens_the_file_the_review_page_tests_open():
+    data = unlock_file(json.loads(LOCKED_FIXTURE.read_text()), "k7mq-x2fp-9tza-hw4c")
+    assert data["segments"][1]["text"] == "tekoäly yhtiöt"
+
+
+def test_a_damaged_locked_file_is_not_a_wrong_password():
+    locked = lock_file({"segments": []}, "pw", iterations=1000)
+    locked["iv"] = "not base64!"
+    with pytest.raises(ValueError) as err:
+        unlock_file(locked, "pw")
+    assert not isinstance(err.value, WrongPassword)
+
+
+def test_new_passwords_are_readable_and_differ():
+    a, b = new_review_password(), new_review_password()
+    assert a != b
+    assert len(a) == 19 and a.count("-") == 3
+    assert not set(a) & set("01ilo")
