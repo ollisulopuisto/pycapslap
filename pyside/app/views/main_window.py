@@ -1,10 +1,15 @@
 import base64
+import hashlib
+import json
 import os
+import threading
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
+    QDesktopServices,
+    QGuiApplication,
     QDragEnterEvent,
     QDropEvent,
     QImage,
@@ -14,10 +19,14 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
+    QMenu,
+    QLineEdit,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -34,6 +43,18 @@ from app.models.captions import (
     ProjectState,
     apply_orphan_rules,
     combine_separated_syllables,
+)
+from app.portal_client import Portal, PortalError
+from app.views.portal_dialog import PublishDialog, portal_from_settings
+from app.models.review import (
+    ReviewMismatch,
+    WrongPassword,
+    apply_review,
+    is_locked,
+    lock_file,
+    new_review_password,
+    review_export_dict,
+    unlock_file,
 )
 from app.views.caption_panel import CaptionPanelWidget
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
@@ -52,6 +73,21 @@ EXPORT_FORMATS: list[tuple[str, str]] = [
     ("Export: 4:5 Vertical", "4:5"),
 ]
 
+# Proof copy next to the full-size render: label, short side in pixels (0 = none).
+PROOF_COPIES = [
+    ("No proof copy", 0),
+    ("+ 720p proof", 720),
+    ("+ 540p proof", 540),
+]
+
+# Ready-made clips joined before and after every render (a channel ident, "listen
+# to the new episode"), kept between sessions: which one, its QSettings key.
+BUMPERS = {"intro": "render/intro_video", "outro": "render/outro_video"}
+BUMPER_FILES = "Video (*.mp4 *.mov *.m4v *.mkv *.webm)"
+
+# Where the review page (review/ in this repo) is published by GitHub Pages.
+REVIEW_PAGE_URL = "https://ollisulopuisto.github.io/pycapslap/"
+
 # How many rendered cues to keep. Each is a full-frame ARGB pixmap, so this
 # is a memory budget, not a hit-rate tuning knob.
 LAYER_CACHE_SIZE = 24
@@ -61,6 +97,13 @@ MAX_LAYER_RENDERS = 3
 
 
 class MainWindow(QMainWindow):
+    # Core replies arrive on the core client's reader thread. They reach the GUI
+    # through this signal, queued onto the window's thread. QTimer.singleShot called
+    # from that thread makes a timer object there and hands it to the GUI thread's
+    # timer list, and the macOS test run crashed inside that list
+    # (QTimerInfoList::activateTimers) with such timers pending.
+    _gui_call = Signal(object)
+
     def __init__(
         self, core_client: CoreClient | None = None, parent: QWidget | None = None
     ):
@@ -71,6 +114,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.core = core_client or CoreClient(parent=self)
+        self._gui_call.connect(self._run_gui_call, Qt.ConnectionType.QueuedConnection)
         self.project = ProjectState()
 
         self._seek_latencies: list[float] = []
@@ -79,6 +123,10 @@ class MainWindow(QMainWindow):
         # same blocks the burn will. Refreshed off a timer because every
         # keystroke in the cue table would otherwise hit the core.
         self._preview_cues: list[dict] = []
+        # The password the last review went out with; opens the reply without asking.
+        self._review_password = ""
+        # The newest render's files, the default to publish to the portal.
+        self._last_render: dict = {}
         # libass's own rendering of each cue, keyed by the cue's start. The
         # editor draws these instead of painting text itself, so what is on
         # screen is literally what the burn produces. Thrown away whenever
@@ -139,6 +187,27 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(False)
         action_bar.addWidget(self.save_btn)
 
+        # Client review: send the captions to a client's browser, take the fixes back
+        self.review_btn = QPushButton("Client Review")
+        self.review_btn.setToolTip(
+            "Send captions to a client to check and correct on the review page, "
+            "then import what they send back"
+        )
+        review_menu = QMenu(self.review_btn)
+        review_menu.addAction("Export for Review…", self._on_export_for_review)
+        review_menu.addAction("Import Reviewed Captions…", self._on_import_review)
+        review_menu.addSeparator()
+        review_menu.addAction("Publish to Portal…", self._on_publish_to_portal)
+        review_menu.addAction("Import from Portal", self._on_import_from_portal)
+        review_menu.addSeparator()
+        review_menu.addAction(
+            "Open Review Page",
+            lambda: QDesktopServices.openUrl(QUrl(REVIEW_PAGE_URL)),
+        )
+        self.review_btn.setMenu(review_menu)
+        self.review_btn.setEnabled(False)
+        action_bar.addWidget(self.review_btn)
+
         # The export format belongs here, not in a dialog at render time: it
         # decides the canvas the captions are laid out on, so the preview
         # cannot be honest about anything until it knows which one it is.
@@ -150,6 +219,25 @@ class MainWindow(QMainWindow):
         )
         self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
         action_bar.addWidget(self.format_combo)
+
+        # A smaller copy from the same encode: small for clients to proof, the
+        # full-size one for publishing.
+        self.proof_combo = QComboBox()
+        for label, side in PROOF_COPIES:
+            self.proof_combo.addItem(label, side)
+        self.proof_combo.setCurrentIndex(1)
+        self.proof_combo.setToolTip(
+            "Also render a smaller proof copy, in the same pass as the full-size video"
+        )
+        action_bar.addWidget(self.proof_combo)
+
+        # Intro and outro clips, joined to the render in the same encode.
+        self.bumpers_btn = QPushButton()
+        self.bumpers_menu = QMenu(self.bumpers_btn)
+        self.bumpers_menu.aboutToShow.connect(self._fill_bumpers_menu)
+        self.bumpers_btn.setMenu(self.bumpers_menu)
+        action_bar.addWidget(self.bumpers_btn)
+        self._update_bumpers_button()
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
@@ -424,7 +512,7 @@ class MainWindow(QMainWindow):
             # thread, which has no event loop, so a timer created there would
             # never fire. Passing `self` as the context object queues the call
             # onto the GUI thread instead.
-            QTimer.singleShot(0, self, apply)
+            self._in_gui(apply)
 
         fut.add_done_callback(on_done)
 
@@ -576,17 +664,17 @@ class MainWindow(QMainWindow):
             try:
                 result = f.result()
             except Exception:
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
             data_uri = (result or {}).get("imageData", "")
             raw = data_uri.split(",", 1)[1] if "," in data_uri else ""
             if not raw:
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
             try:
                 image = QImage.fromData(base64.b64decode(raw))
             except (ValueError, TypeError):
-                QTimer.singleShot(0, self, release)
+                self._in_gui(release)
                 return
 
             def store(image=image) -> None:
@@ -605,7 +693,7 @@ class MainWindow(QMainWindow):
                 if current is not None and int(current.get("startMs", 0)) == key:
                     self.overlay.set_caption_layer(pixmap)
 
-            QTimer.singleShot(0, self, store)
+            self._in_gui(store)
 
         fut.add_done_callback(on_done)
         return True
@@ -716,6 +804,283 @@ class MainWindow(QMainWindow):
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
+    def _in_gui(self, fn) -> None:
+        """Run `fn` on the GUI thread, after the current event. Safe from any thread."""
+        self._gui_call.emit(fn)
+
+    @staticmethod
+    def _run_gui_call(fn) -> None:
+        fn()
+
+    def _on_export_for_review(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        if not self.project.video_path or not self.project.segments:
+            QMessageBox.information(
+                self, "Client Review", "Load a video with captions first."
+            )
+            return
+        default = f"{self.project.video_path}.review.capslap.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export for Review", default, "Captions (*.capslap.json *.json)"
+        )
+        if not path:
+            return
+        password = self._ask_export_password()
+        if password is None:
+            return
+        data = review_export_dict(self.project)
+        if password:
+            data = lock_file(data, password)
+        try:
+            Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except OSError as err:
+            QMessageBox.warning(self, "Client Review", f"Could not save: {err}")
+            return
+        self._review_password = password
+        how = (
+            "Send the file and the video to the client, and the password some "
+            "other way (a text message); "
+            if password
+            else "Send the file and the video to the client; "
+        )
+        self.status.showMessage(
+            f"Exported for review. {how}they open both on {REVIEW_PAGE_URL}", 10000
+        )
+
+    def _ask_export_password(self) -> str | None:
+        """The password to lock the review file with: '' for none, None to cancel."""
+        password, ok = QInputDialog.getText(
+            self,
+            "Export for Review",
+            "Password for the client. Send it separately from the file, "
+            "e.g. by text message.\nClear it to export without a password.",
+            QLineEdit.EchoMode.Normal,
+            new_review_password(),
+        )
+        return password.strip() if ok else None
+
+    def _ask_import_password(self, wrong: bool) -> str | None:
+        prompt = "Wrong password. Try again:" if wrong else "Password for this file:"
+        password, ok = QInputDialog.getText(
+            self, "Import Review", prompt, QLineEdit.EchoMode.Password
+        )
+        return password if ok else None
+
+    def _unlock_review(self, data: dict) -> dict | None:
+        """The file inside a locked review: the export's password first, then asks."""
+        if self._review_password:
+            try:
+                return unlock_file(data, self._review_password)
+            except WrongPassword:
+                pass
+        wrong = False
+        while (password := self._ask_import_password(wrong)) is not None:
+            try:
+                return unlock_file(data, password)
+            except WrongPassword:
+                wrong = True
+        return None
+
+    def _on_import_review(self) -> None:
+        self.caption_panel.commit_active_editor()
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Reviewed Captions",
+            os.path.dirname(self.project.video_path or ""),
+            "Reviewed captions (*.capslap.json *.json)",
+        )
+        if path:
+            self.import_review_file(path)
+
+    def import_review_file(self, path: str) -> None:
+        """Apply a client's reviewed captions and show what they changed and said."""
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                raise ValueError("not a captions file")
+            if is_locked(data):
+                data = self._unlock_review(data)
+                if data is None:
+                    return
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "Import Review", f"Could not read it: {err}")
+            return
+        self.import_review_data(data)
+
+    def import_review_data(self, data: dict) -> None:
+        try:
+            segments = list(self.caption_panel.segments)
+            result = apply_review(segments, data)
+        except (OSError, ValueError) as err:
+            reason = (
+                str(err)
+                if isinstance(err, ReviewMismatch)
+                else f"Could not read it: {err}"
+            )
+            QMessageBox.warning(self, "Import Review", reason)
+            return
+        if result.changed:
+            self.project.segments = segments
+            self.project.is_dirty = True
+            self.set_caption_segments(segments)
+            self._on_position_changed(self.player.media_player.position())
+        message = result.summary()
+        if result.comments:
+            notes = "\n\n".join(
+                f"#{n} “{text}”\n→ {comment}" for n, text, comment in result.comments
+            )
+            message += f"\n\nComments:\n\n{notes}"
+        if result.changed:
+            message += "\n\nSave the project to keep the changes."
+        self.status.showMessage(result.summary(), 8000)
+        QMessageBox.information(self, "Import Review", message)
+
+    def bumper_path(self, which: str) -> str:
+        """The intro or outro clip to join to renders; '' for none."""
+        return str(QSettings().value(BUMPERS[which], "", type=str) or "")
+
+    def set_bumper(self, which: str, path: str) -> None:
+        QSettings().setValue(BUMPERS[which], path)
+        self._update_bumpers_button()
+
+    def _update_bumpers_button(self) -> None:
+        intro, outro = self.bumper_path("intro"), self.bumper_path("outro")
+        parts = [name for name, path in (("intro", intro), ("outro", outro)) if path]
+        self.bumpers_btn.setText(
+            "+ " + " & ".join(parts) if parts else "No intro/outro"
+        )
+        lines = [
+            f"{which.capitalize()}: {Path(path).name if path else 'none'}"
+            for which, path in (("intro", intro), ("outro", outro))
+        ]
+        self.bumpers_btn.setToolTip(
+            "Clips played before and after the captioned video in every render.\n"
+            + "\n".join(lines)
+        )
+
+    def _fill_bumpers_menu(self) -> None:
+        menu = self.bumpers_menu
+        menu.clear()
+        for which in BUMPERS:
+            path = self.bumper_path(which)
+            title = which.capitalize()
+            current = menu.addAction(
+                f"{title}: {Path(path).name}" if path else f"{title}: none"
+            )
+            current.setEnabled(False)
+            menu.addAction(f"Choose {title}…", lambda w=which: self._choose_bumper(w))
+            if path:
+                menu.addAction(f"No {title}", lambda w=which: self.set_bumper(w, ""))
+            menu.addSeparator()
+
+    def _choose_bumper(self, which: str) -> None:
+        start = self.bumper_path(which) or os.path.dirname(
+            self.project.video_path or ""
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Choose {which.capitalize()} Clip", start, BUMPER_FILES
+        )
+        if path:
+            self.set_bumper(which, path)
+
+    # ── Review portal ─────────────────────────────────────────────────────
+
+    def _portal_key(self) -> str:
+        """Where the portal id of this video's last publish is kept."""
+        path = str(Path(self.project.video_path).resolve())
+        return "portal/videos/" + hashlib.sha1(path.encode()).hexdigest()
+
+    def _on_publish_to_portal(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        if not self.project.video_path:
+            QMessageBox.information(self, "Publish", "Load a video first.")
+            return
+        render = self._last_render
+        video = render.get("proof") or render.get("video") or ""
+        label = render.get("format", self._export_format())
+        if render.get("proof"):
+            label += " proof"
+        dialog = PublishDialog(video, label, Path(self.project.video_path).stem, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.publish_to_portal(dialog.portal(), dialog.values())
+
+    def publish_to_portal(self, portal: Portal, values: dict) -> None:
+        """Upload in the background; the progress bar and status line follow it."""
+        captions = review_export_dict(self.project) if values["captions"] else None
+        key = self._portal_key()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.status.showMessage("Publishing to the portal…")
+
+        def work() -> None:
+            try:
+                placed = portal.publish(
+                    values["series"],
+                    values["episode"],
+                    values["label"],
+                    Path(self.project.video_path).name,
+                    captions,
+                )
+                portal.upload(
+                    placed["video"]["uploadUrl"],
+                    values["video"],
+                    lambda done: self._in_gui(
+                        lambda: self.progress_bar.setValue(int(done * 100))
+                    ),
+                )
+            except (PortalError, OSError, ValueError, KeyError) as err:
+                message = str(err)
+                self._in_gui(lambda: self._publish_failed(message))
+                return
+            link = portal.url + placed["episodeLink"]
+            self._in_gui(lambda: self._published(key, placed["video"]["id"], link))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _published(self, key: str, video_id: int, link: str) -> None:
+        QSettings().setValue(key, video_id)
+        self.progress_bar.setVisible(False)
+        QGuiApplication.clipboard().setText(link)
+        self.status.showMessage(f"Published: {link} (link copied)", 15000)
+
+    def _publish_failed(self, message: str) -> None:
+        self.progress_bar.setVisible(False)
+        self.status.clearMessage()
+        QMessageBox.warning(self, "Publish to Portal", message)
+
+    def _on_import_from_portal(self) -> None:
+        self.caption_panel.commit_active_editor()
+        portal = portal_from_settings()
+        video_id = (
+            QSettings().value(self._portal_key()) if self.project.video_path else None
+        )
+        if portal is None or not video_id:
+            QMessageBox.information(
+                self,
+                "Import from Portal",
+                "Publish this video to the portal first; its reviewed captions "
+                "come back from there.",
+            )
+            return
+        self.status.showMessage("Fetching captions from the portal…")
+
+        def work() -> None:
+            try:
+                data = portal.latest_captions(int(video_id))
+            except (PortalError, OSError, ValueError) as err:
+                message = str(err)
+                self._in_gui(
+                    lambda: QMessageBox.warning(self, "Import from Portal", message)
+                )
+                return
+            self._in_gui(lambda: self.import_review_data(data))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -754,6 +1119,9 @@ class MainWindow(QMainWindow):
             "trimStartMs": trim_start_ms,
             "trimEndMs": trim_end_ms,
             "exportFormats": [export_fmt],
+            "proofShortSide": self.proof_combo.currentData() or None,
+            "introVideo": self.bumper_path("intro") or None,
+            "outroVideo": self.bumper_path("outro") or None,
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
             "justifyLines": self.project.style.justify_lines,
@@ -775,28 +1143,28 @@ class MainWindow(QMainWindow):
                 output_path = ""
                 if isinstance(res, list) and res:
                     output_path = res[0].get("captionedVideo", "")
-                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(
-                    0, self, lambda: self.render_btn.setText("Render Video")
-                )
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                    proof_path = res[0].get("proofVideo")
+                    self._last_render = {
+                        "video": output_path,
+                        "proof": proof_path,
+                        "format": export_fmt,
+                    }
+                    if proof_path:
+                        output_path += f" (proof: {os.path.basename(proof_path)})"
+                self._in_gui(lambda: self.render_btn.setEnabled(True))
+                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Render complete: {output_path}", 8000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.render_btn.setEnabled(True))
-                QTimer.singleShot(
-                    0, self, lambda: self.render_btn.setText("Render Video")
-                )
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.render_btn.setEnabled(True))
+                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg),
                 )
 
@@ -890,21 +1258,17 @@ class MainWindow(QMainWindow):
                     PositionOverride.from_dict(o) for o in overrides_data
                 ]
                 self.project.is_dirty = True
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Auto Dodge complete: moved {moved} captions.", 4000
                     ),
                 )
-                QTimer.singleShot(0, self, self.overlay.update)
+                self._in_gui(self.overlay.update)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Auto Dodge Error", msg
                     ),
@@ -955,21 +1319,17 @@ class MainWindow(QMainWindow):
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(0, self, lambda: self.set_caption_segments(new_segs))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(lambda: self.set_caption_segments(new_segs))
+                self._in_gui(
                     lambda: self.status.showMessage(
                         f"Transcription finished: {len(new_segs)} segments.", 4000
                     ),
                 )
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
-                QTimer.singleShot(0, self, lambda: self.progress_bar.setVisible(False))
-                QTimer.singleShot(
-                    0,
-                    self,
+                self._in_gui(lambda: self.progress_bar.setVisible(False))
+                self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(
                         self, "Transcription Error", msg
                     ),
@@ -1067,6 +1427,7 @@ class MainWindow(QMainWindow):
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
+        self.review_btn.setEnabled(True)
         self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})
@@ -1149,7 +1510,7 @@ class MainWindow(QMainWindow):
                         self.progress_bar.setVisible(False)
                         self.status.showMessage("Thumbnail loaded.", 2000)
 
-                    QTimer.singleShot(0, self, update_ui)
+                    self._in_gui(update_ui)
                 else:
 
                     def reset_no_img():
@@ -1158,7 +1519,7 @@ class MainWindow(QMainWindow):
                         self.progress_bar.setRange(0, 100)
                         self.progress_bar.setVisible(False)
 
-                    QTimer.singleShot(0, self, reset_no_img)
+                    self._in_gui(reset_no_img)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
 
@@ -1169,11 +1530,15 @@ class MainWindow(QMainWindow):
                     self.progress_bar.setVisible(False)
                     QMessageBox.warning(self, "Error", msg)
 
-                QTimer.singleShot(0, self, reset_err)
+                self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
 
     def closeEvent(self, event) -> None:
+        # Nothing of this window should fire after it is gone.
         self.perf_timer.stop()
+        self._layout_timer.stop()
+        self._layer_timer.stop()
+        self.player.release()
         self.core.close()
         super().closeEvent(event)

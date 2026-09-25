@@ -102,6 +102,90 @@ pub fn justify_two_lines(
     }]
 }
 
+/// Line breaks for a cue at the style's own size, decided once for the whole
+/// cue so they never move while its words are highlighted one by one.
+///
+/// Every line must fit `target_w` even with its widest word grown by `grow`
+/// (the highlighted word is set bigger) and the whole line stretched by
+/// `stretch` (the entrance animation). Within the fewest lines that fit, the
+/// breaks are balanced the way libass's smart wrap balances them: the widest
+/// line as narrow as it can be. Returns one line when the font can't be
+/// measured; the caller then leaves wrapping to libass.
+#[allow(clippy::needless_range_loop)] // j is a split point, not just an index
+pub fn steady_lines(
+    tokens: &[String],
+    font_family: &str,
+    target_w: f32,
+    base_px: u32,
+    grow: f32,
+    stretch: f32,
+) -> Vec<JustifiedLine> {
+    let one_line = || {
+        vec![JustifiedLine {
+            start: 0,
+            end: tokens.len(),
+            font_px: base_px,
+        }]
+    };
+    let Some(metrics) = text_metrics::metrics_for(font_family) else {
+        return one_line();
+    };
+    let n = tokens.len();
+    if n <= 1 || target_w <= 0.0 {
+        return one_line();
+    }
+    let px = base_px as f32;
+    let word_w: Vec<f32> = tokens.iter().map(|t| metrics.measure(t, px)).collect();
+    let space = metrics.measure(" ", px);
+    // Worst-case width of tokens[a..b] as one line.
+    let width = |a: usize, b: usize| -> f32 {
+        let text: f32 = word_w[a..b].iter().sum::<f32>() + space * (b - a - 1) as f32;
+        let widest = word_w[a..b].iter().cloned().fold(0.0, f32::max);
+        (text + widest * (grow - 1.0).max(0.0)) * stretch
+    };
+
+    // best[k][i]: the narrowest possible widest line when tokens[i..] are set
+    // on k lines, and where the first of them ends. A single word wider than
+    // the box still gets a line of its own.
+    let fits = |a: usize, b: usize| b - a == 1 || width(a, b) <= target_w;
+    let mut best: Vec<Vec<Option<(f32, usize)>>> = vec![vec![None; n + 1]; n + 1];
+    best[0][n] = Some((0.0, n));
+    for k in 1..=n {
+        for i in (0..n).rev() {
+            let mut choice: Option<(f32, usize)> = None;
+            for j in i + 1..=n {
+                if !fits(i, j) {
+                    break;
+                }
+                let Some((rest, _)) = best[k - 1][j] else {
+                    continue;
+                };
+                let worst = rest.max(width(i, j));
+                if choice.is_none_or(|(w, _)| worst < w) {
+                    choice = Some((worst, j));
+                }
+            }
+            best[k][i] = choice;
+        }
+        if best[k][0].is_some() {
+            let mut lines = Vec::with_capacity(k);
+            let (mut start, mut left) = (0, k);
+            while start < n {
+                let (_, end) = best[left][start].expect("a layout was found");
+                lines.push(JustifiedLine {
+                    start,
+                    end,
+                    font_px: base_px,
+                });
+                start = end;
+                left -= 1;
+            }
+            return lines;
+        }
+    }
+    one_line()
+}
+
 fn line_text(tokens: &[String], start: usize, end: usize) -> String {
     tokens[start..end].join(" ")
 }
@@ -176,6 +260,68 @@ mod tests {
     }
 
     #[test]
+    fn steady_lines_fit_the_box_even_with_the_biggest_word_highlighted() {
+        let tokens = toks(&[
+            "AGENTIT,",
+            "OLIVAT",
+            "LÖYTÄNEET",
+            "TAVAN",
+            "KOMMUNIKOIDA",
+            "KESKENÄÄN.",
+        ]);
+        let (target, px, grow, stretch) = (600.0, 70, 1.1, 1.03);
+        let lines = steady_lines(&tokens, "Montserrat Black", target, px, grow, stretch);
+        assert!(lines.len() >= 2);
+        assert_eq!(lines.first().unwrap().start, 0);
+        assert_eq!(lines.last().unwrap().end, tokens.len());
+        let m = text_metrics::metrics_for("Montserrat Black").unwrap();
+        for line in &lines {
+            assert_eq!(line.font_px, px);
+            let words = &tokens[line.start..line.end];
+            let widest = words
+                .iter()
+                .map(|w| m.measure(w, px as f32))
+                .fold(0.0, f32::max);
+            let w = (m.measure(&words.join(" "), px as f32) + widest * 0.1) * stretch;
+            assert!(words.len() == 1 || w <= target, "{words:?} is {w}px");
+        }
+    }
+
+    #[test]
+    fn steady_lines_are_balanced_not_greedy() {
+        // Greedy would put five words on top and one below.
+        let tokens = toks(&["YKSI", "KAKSI", "KOLME", "NELJÄ", "VIISI", "KUUSI"]);
+        let m = text_metrics::metrics_for("Montserrat Black").unwrap();
+        let all = m.measure(&tokens.join(" "), 60.0);
+        let lines = steady_lines(&tokens, "Montserrat Black", all * 0.9, 60, 1.0, 1.0);
+        assert_eq!(lines.len(), 2);
+        let sizes: Vec<usize> = lines.iter().map(|l| l.end - l.start).collect();
+        assert_eq!(sizes, [3, 3]);
+    }
+
+    #[test]
+    fn steady_lines_keep_a_short_cue_on_one_line() {
+        let lines = steady_lines(
+            &toks(&["JA", "SITTEN"]),
+            "Montserrat Black",
+            900.0,
+            60,
+            1.1,
+            1.03,
+        );
+        assert_eq!(lines.len(), 1);
+        let unknown = steady_lines(
+            &toks(&["JA", "SITTEN"]),
+            "No Such Font 123",
+            10.0,
+            60,
+            1.1,
+            1.03,
+        );
+        assert_eq!(unknown.len(), 1);
+    }
+
+    #[test]
     fn a_single_word_stays_on_one_line() {
         let lines = justify_two_lines(&toks(&["KAUPPAKESKUS"]), "Montserrat Black", 900.0, 80);
         assert_eq!(lines.len(), 1);
@@ -194,4 +340,3 @@ mod tests {
         }
     }
 }
-

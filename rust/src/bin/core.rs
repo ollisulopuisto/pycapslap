@@ -127,7 +127,10 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                     write_err(&id, format!("Task with id {} not found", target_id));
                 }
             } else {
-                write_err(&id, "Invalid params for cancel, expected string id".to_string());
+                write_err(
+                    &id,
+                    "Invalid params for cancel, expected string id".to_string(),
+                );
             }
         }
         "generateCaptions" => {
@@ -176,9 +179,12 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
         "extractFirstFrame" => {
             match serde_json::from_value::<core::types::ExtractFirstFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_first_frame(&p.video_path) {
-                    Ok(base64_img) => write_ok(&id, &core::types::ExtractFirstFrameResult {
-                        image_data: base64_img,
-                    }),
+                    Ok(base64_img) => write_ok(
+                        &id,
+                        &core::types::ExtractFirstFrameResult {
+                            image_data: base64_img,
+                        },
+                    ),
                     Err(e) => write_err(&id, e.to_string()),
                 },
                 Err(e) => write_err(&id, format!("Invalid params for extractFirstFrame: {}", e)),
@@ -276,7 +282,10 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                     Ok(v) => write_ok(&id, &v),
                     Err(e) => write_err(&id, e.to_string()),
                 },
-                Err(e) => write_err(&id, format!("Invalid params for generatePreviewFrame: {}", e)),
+                Err(e) => write_err(
+                    &id,
+                    format!("Invalid params for generatePreviewFrame: {}", e),
+                ),
             }
         }
         _ => write_err(&id, format!("Unknown method: {}", r.method)),

@@ -14,6 +14,10 @@ pub struct FontMetrics {
     advances: HashMap<char, f32>,
     units_per_em: f32,
     fallback_advance: f32,
+    /// The em size, in px, of one px of ASS font size (`\fs`). libass, like
+    /// VSFilter, sizes a font so its Windows ascent + descent is `\fs` tall,
+    /// not its em: a font with tall ascenders sets narrower than its em says.
+    em_per_font_px: f32,
 }
 
 impl FontMetrics {
@@ -45,20 +49,40 @@ impl FontMetrics {
             return None;
         }
 
+        // usWinAscent + usWinDescent, as libass reads it (ass_face_set_size);
+        // hhea's ascent - descent when a font has no OS/2 numbers.
+        let win_height = face
+            .tables()
+            .os2
+            .map(|os2| os2.windows_ascender() as f32 - os2.windows_descender() as f32)
+            .filter(|h| *h > 0.0);
+        let hhea_height =
+            Some(face.ascender() as f32 - face.descender() as f32).filter(|h| *h > 0.0);
+        let em_per_font_px = win_height
+            .or(hhea_height)
+            .map(|h| units_per_em / h)
+            .unwrap_or(1.0);
+
         Some(FontMetrics {
             advances,
             units_per_em,
             fallback_advance: total / counted as f32,
+            em_per_font_px,
         })
     }
 
-    /// Width of `text` when set at `font_px`, in pixels.
+    /// Width of `text` when libass sets it at ASS font size `font_px`, in pixels.
     pub fn measure(&self, text: &str, font_px: f32) -> f32 {
         let em_width: f32 = text
             .chars()
-            .map(|c| self.advances.get(&c).copied().unwrap_or(self.fallback_advance))
+            .map(|c| {
+                self.advances
+                    .get(&c)
+                    .copied()
+                    .unwrap_or(self.fallback_advance)
+            })
             .sum();
-        em_width * font_px
+        em_width * font_px * self.em_per_font_px
     }
 
     /// The font size at which `text` is exactly `target_px` wide.
@@ -213,6 +237,16 @@ mod tests {
     }
 
     #[test]
+    fn sizes_like_libass_does_from_the_windows_ascent_and_descent() {
+        // Anton's ascent + descent is far taller than its em, so at the same
+        // \fs it sets much narrower than an em-based measure would say.
+        let anton = metrics_for("Anton").expect("bundled font should load");
+        assert!(anton.em_per_font_px < 0.75, "{}", anton.em_per_font_px);
+        let montserrat = metrics_for("Montserrat Black").unwrap();
+        assert!(montserrat.em_per_font_px > 0.7 && montserrat.em_per_font_px < 1.0);
+    }
+
+    #[test]
     fn unknown_family_measures_nothing_rather_than_the_wrong_font() {
         // Silently measuring against whatever font the directory listed first
         // is worse than not measuring: the caller can fall back honestly, but
@@ -246,6 +280,9 @@ mod tests {
 
         let full = metrics_for("Montserrat Black").expect("bundled font");
         let family = metrics_for("Montserrat").expect("same file by family name");
-        assert_eq!(full.measure("KANNETTAVA", 60.0), family.measure("KANNETTAVA", 60.0));
+        assert_eq!(
+            full.measure("KANNETTAVA", 60.0),
+            family.measure("KANNETTAVA", 60.0)
+        );
     }
 }

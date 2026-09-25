@@ -79,3 +79,25 @@ jobs:
       - name: pytest
         run: uv run python -m pytest
 
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Review page tests
+        run: node --test review/*.test.js
+
+  portal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Portal tests
+        working-directory: portal
+        run: uv sync && uv run pytest
+      - name: Portal image builds
+        run: docker build -f portal/Dockerfile -t capslap-portal .

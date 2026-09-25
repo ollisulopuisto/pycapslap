@@ -6,10 +6,8 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
-    QFontMetrics,
     QMouseEvent,
     QPainter,
-    QPainterPath,
     QPen,
     QPixmap,
 )
@@ -18,25 +16,6 @@ from PySide6.QtWidgets import QWidget
 
 from app.fonts import init_app_fonts
 from app.models.captions import CaptionSegment, CaptionStyle
-
-
-# Mirrors captions.rs: the renderer keeps this much of the frame width free on
-# each side, and libass wraps lines against what is left.
-CAPTION_SIDE_MARGIN_PCT = 7.0
-
-# The reference frame the renderer scales its font size against
-# (captions.rs::calculate_proportional_font_size).
-FONT_REFERENCE_W = 608.0
-FONT_REFERENCE_H = 1080.0
-MIN_RENDER_FONT_PX = 18
-
-
-def proportional_font_size(frame_w: int, frame_h: int, base_size: int) -> int:
-    """The font size the burner would use for this frame — same formula."""
-    if frame_w <= 0 or frame_h <= 0:
-        return max(MIN_RENDER_FONT_PX, base_size)
-    scale = math.sqrt((frame_w * frame_h) / (FONT_REFERENCE_W * FONT_REFERENCE_H))
-    return max(MIN_RENDER_FONT_PX, round(base_size * scale))
 
 
 @dataclass
@@ -126,10 +105,14 @@ class VideoCanvasWidget(QWidget):
         self.style: CaptionStyle = CaptionStyle()
         # The renderer's own pixels for the current cue: libass drawing the
         # same ASS document the burn uses, on a transparent canvas the size of
-        # the video frame. When one is present it IS the preview; the vector
-        # drawing below is only for the moments there isn't one (playback,
-        # dragging, the wait for the first answer).
+        # the video frame. This is the only caption the preview shows; until it
+        # arrives the frame is simply without one, so what is on screen is
+        # always what the render will have.
         self.caption_layer: QPixmap | None = None
+        # While a caption is dragged, the layer it had when the drag began,
+        # moved with the pointer; the renderer's answer for the new position
+        # replaces it. (layer, anchor % when the drag began)
+        self._drag_ghost: tuple[QPixmap, float] | None = None
         # Layout handed down by the renderer for the current playback position,
         # and the frame size it was computed for.
         self.layout_cue: dict | None = None
@@ -163,6 +146,8 @@ class VideoCanvasWidget(QWidget):
     def set_caption_layer(self, pixmap: QPixmap | None) -> None:
         """Hand the canvas libass's own rendering of the current cue."""
         self.caption_layer = pixmap
+        if pixmap is not None and not self.is_dragging:
+            self._drag_ghost = None
         self.update()
 
     def layer_height(self) -> int:
@@ -214,6 +199,8 @@ class VideoCanvasWidget(QWidget):
         anchor_y_pct: float = 80.0,
         current_pos_ms: int = 0,
     ) -> None:
+        if segment is not self.current_segment:
+            self._drag_ghost = None
         self.current_segment = segment
         self.anchor_y_pct = float(anchor_y_pct)
         self.current_pos_ms = int(current_pos_ms)
@@ -280,6 +267,9 @@ class VideoCanvasWidget(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_dragging = True
+            layer = self.caption_layer
+            if layer is not None and not layer.isNull():
+                self._drag_ghost = (layer, self.anchor_y_pct)
             self._update_anchor_from_pos(event.position().toPoint())
             event.accept()
         else:
@@ -370,20 +360,21 @@ class VideoCanvasWidget(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        # 5. Render Active Subtitle — the renderer's own pixels when we have
-        # them, our approximation of them when we don't.
-        if (
-            self.caption_layer is not None
-            and not self.caption_layer.isNull()
-            and not self.is_dragging
-        ):
+        # 5. The caption: the renderer's own pixels, or none yet. A dragged
+        # caption is its last layer moved with the pointer until the renderer
+        # answers for the new position.
+        layer = self.caption_layer
+        if layer is not None and not layer.isNull() and not self.is_dragging:
+            painter.drawPixmap(canvas_rect, layer, QRectF(layer.rect()))
+        elif self._drag_ghost is not None:
+            ghost, start_pct = self._drag_ghost
+            dy = canvas_rect.height() * (self.anchor_y_pct - start_pct) / 100.0
+            painter.save()
+            painter.setClipRect(canvas_rect)
             painter.drawPixmap(
-                canvas_rect,
-                self.caption_layer,
-                QRectF(self.caption_layer.rect()),
+                canvas_rect.translated(0, dy), ghost, QRectF(ghost.rect())
             )
-        elif self.current_segment and self.current_segment.text.strip():
-            self._paint_caption(painter, canvas_rect, anchor_y)
+            painter.restore()
 
     def _paint_safe_areas(self, painter: QPainter, canvas_rect: QRectF) -> None:
         """Paint the platforms' own interface over the frame that gets exported."""
@@ -427,180 +418,16 @@ class VideoCanvasWidget(QWidget):
 
         painter.restore()
 
-    # ---- Caption painting -------------------------------------------------
-    #
-    # Everything below draws the layout the RENDERER produced (the Rust
-    # `previewLayout` call), not a second layout of its own. That is the whole
-    # point: line breaks, per-line font size, uppercasing, which word is
-    # highlighted and the anchor all come from the same code that writes the
-    # ASS document, so the preview and the burn agree. Only the drawing —
-    # pixels, outline, box — happens here, scaled from frame pixels into the
-    # on-screen video rectangle.
-
     def set_layout_cue(
         self,
         cue: dict | None,
         frame_size: tuple[int, int] | None = None,
     ) -> None:
-        """Hand the canvas the renderer's layout for the current position."""
+        """The renderer's layout (`previewLayout`) for the current position.
+
+        Not drawn: the caption on screen is only ever the renderer's layer.
+        """
         self.layout_cue = cue
         if frame_size and frame_size[0] > 0 and frame_size[1] > 0:
             self.layout_frame_size = frame_size
         self.update()
-
-    def _fallback_cue(self) -> dict | None:
-        """A stand-in layout for before the renderer has answered.
-
-        Mirrors what the burner does with a cue it is not justifying: one
-        flowing, uppercased line at the style's proportional size.
-        """
-        seg = self.current_segment
-        if not seg or not seg.text.strip():
-            return None
-        frame_w, frame_h = self.layout_frame_size
-        font_px = proportional_font_size(frame_w, frame_h, self.style.font_size)
-        words = [w.text.strip() for w in (seg.words or []) if w.text.strip()]
-        if not words:
-            words = seg.text.split()
-        return {
-            "lines": [
-                {
-                    "words": [
-                        {"text": w.upper(), "isHighlighted": False} for w in words
-                    ],
-                    "fontSizePx": font_px,
-                }
-            ],
-            "yPct": self.anchor_y_pct,
-            "anchor": "bottom",
-        }
-
-    def _paint_caption(
-        self, painter: QPainter, canvas_rect: QRectF, anchor_y: float
-    ) -> None:
-        cue = self.layout_cue or self._fallback_cue()
-        if not cue:
-            return
-
-        frame_w, frame_h = self.layout_frame_size
-        if frame_w <= 0 or frame_h <= 0:
-            return
-        scale = canvas_rect.width() / float(frame_w)
-        if scale <= 0:
-            return
-
-        font_family = self.style.font_name or "Montserrat Black"
-        max_width = canvas_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
-
-        # Lay the cue out line by line. A layout line may still be wider than
-        # the box when the renderer left the wrapping to libass (\q0), so wrap
-        # it here the same way: greedily, at the same margins.
-        drawn_lines: list[tuple[list[dict], QFont, QFontMetrics]] = []
-        for line in cue.get("lines", []):
-            font_px = max(1.0, float(line.get("fontSizePx", 0)) * scale)
-            font = QFont(font_family)
-            font.setPixelSize(max(1, round(font_px)))
-            metrics = QFontMetrics(font)
-            words = line.get("words", [])
-            for chunk in _wrap_words(words, metrics, max_width):
-                drawn_lines.append((chunk, font, metrics))
-
-        if not drawn_lines:
-            return
-
-        line_heights = [metrics.height() for _, _, metrics in drawn_lines]
-        total_h = sum(line_heights)
-
-        # The renderer anchors a bottom-aligned block by its bottom edge
-        # (\an2), a centered one by its middle (\an5); while dragging, the
-        # pointer wins so the caption follows the mouse.
-        y_pct = float(cue.get("yPct", self.anchor_y_pct))
-        anchor_kind = str(cue.get("anchor", "bottom"))
-        if self.is_dragging:
-            block_y = anchor_y
-            anchor_kind = "center"
-        else:
-            block_y = canvas_rect.top() + canvas_rect.height() * (y_pct / 100.0)
-
-        if anchor_kind == "center":
-            block_top = block_y - total_h / 2.0
-        elif anchor_kind == "top":
-            block_top = block_y
-        else:
-            block_top = block_y - total_h
-
-        outline_px = max(1.0, self.style.outline_width * scale)
-        outline_pen = QPen(
-            QColor(self.style.outline_color or "#000000"), outline_px * 2
-        )
-        outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        text_color = QColor(self.style.text_color or "#ffffff")
-        highlight_color = QColor(self.style.highlight_color or "#ffff00")
-
-        y = block_top
-        for words, font, metrics in drawn_lines:
-            line_text = _join_words(words)
-            line_w = metrics.horizontalAdvance(line_text)
-            x = canvas_rect.left() + (canvas_rect.width() - line_w) / 2.0
-            baseline = y + metrics.ascent()
-
-            if self.style.background_box:
-                # BorderStyle 3: an opaque, square-cornered box the height of
-                # the line, padded proportionally to the font — libass has no
-                # rounded corners, so neither does this.
-                pad = max(6.0, round(metrics.height() * 0.22))
-                painter.fillRect(
-                    QRectF(
-                        x - pad,
-                        y,
-                        line_w + pad * 2,
-                        metrics.height(),
-                    ),
-                    QColor(self.style.outline_color or "#000000"),
-                )
-
-            if self.is_dragging:
-                painter.setPen(QPen(QColor(99, 102, 241, 255), 1.5))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRect(QRectF(x - 6, y, line_w + 12, metrics.height()))
-
-            cursor_x = x
-            for i, word in enumerate(words):
-                text = str(word.get("text", ""))
-                if i > 0:
-                    text = " " + text
-                path = QPainterPath()
-                path.addText(cursor_x, baseline, font, text)
-                if not self.style.background_box:
-                    painter.strokePath(path, outline_pen)
-                painter.fillPath(
-                    path,
-                    highlight_color if word.get("isHighlighted") else text_color,
-                )
-                cursor_x += metrics.horizontalAdvance(text)
-
-            y += metrics.height()
-
-
-def _join_words(words: list[dict]) -> str:
-    return " ".join(str(w.get("text", "")) for w in words)
-
-
-def _wrap_words(
-    words: list[dict], metrics: QFontMetrics, max_width: float
-) -> list[list[dict]]:
-    r"""Greedy wrap, mirroring libass \q0 against the same caption box."""
-    if not words:
-        return []
-    lines: list[list[dict]] = []
-    current: list[dict] = []
-    for word in words:
-        candidate = current + [word]
-        if current and metrics.horizontalAdvance(_join_words(candidate)) > max_width:
-            lines.append(current)
-            current = [word]
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return lines

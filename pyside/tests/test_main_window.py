@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 
 from app.models.captions import CaptionSegment
 from app.views.main_window import MainWindow
@@ -542,4 +543,241 @@ def test_i_and_o_buttons_set_the_trim_at_the_playhead(qtbot):
 
     assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (1500, 6000)
     assert (window.player._range_start_ms, window.player._range_end_ms) == (1500, 6000)
+    window.close()
+
+
+def test_import_review_applies_fixes_and_shows_comments(
+    qtbot, tmp_path, no_modal_message_boxes
+):
+    import json
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments(
+        [
+            CaptionSegment(0, 2000, "Kylläpä on sää"),
+            CaptionSegment(2000, 4000, "tekoäly yhtiöt"),
+        ]
+    )
+    reviewed = {
+        "segments": [
+            {"startMs": 0, "endMs": 2000, "text": "Kyllä on sää"},
+            {"startMs": 2000, "endMs": 4000, "text": "tekoäly yhtiöt"},
+        ],
+        "review": {
+            "status": "changed",
+            "reviewer": "Asiakas",
+            "comments": [{"index": 1, "text": "Yhdyssana?"}],
+        },
+    }
+    path = tmp_path / "talk.mp4.reviewed.capslap.json"
+    path.write_text(json.dumps(reviewed), encoding="utf-8")
+
+    window.import_review_file(str(path))
+
+    assert [s.text for s in window.caption_panel.segments] == [
+        "Kyllä on sää",
+        "tekoäly yhtiöt",
+    ]
+    assert window.project.is_dirty
+    kind, text = no_modal_message_boxes[-1]
+    assert kind == "information"
+    assert "1 text change(s)" in text and "Yhdyssana?" in text
+    window.close()
+
+
+def test_import_review_of_other_captions_changes_nothing(
+    qtbot, tmp_path, no_modal_message_boxes
+):
+    import json
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    path = tmp_path / "other.json"
+    path.write_text(
+        json.dumps({"segments": [{"startMs": 0, "endMs": 1, "text": "a"}] * 2}),
+        encoding="utf-8",
+    )
+
+    window.import_review_file(str(path))
+
+    assert [s.text for s in window.caption_panel.segments] == ["Yksi"]
+    assert no_modal_message_boxes[-1][0] == "warning"
+    window.close()
+
+
+def test_export_locks_the_file_and_the_reply_opens_with_the_same_password(
+    qtbot, tmp_path, monkeypatch, no_modal_message_boxes
+):
+    import json
+
+    from app.models.project import VideoMetadata
+    from app.models.review import is_locked, lock_file, unlock_file
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Kylläpä on sää")])
+    window.project.video = VideoMetadata(
+        path=str(tmp_path / "talk.mp4"), width=1920, height=1080, duration_sec=2.0
+    )
+    out = tmp_path / "talk.mp4.review.capslap.json"
+    monkeypatch.setattr(
+        "app.views.main_window.QFileDialog.getSaveFileName",
+        lambda *a, **k: (str(out), ""),
+    )
+    monkeypatch.setattr(window, "_ask_export_password", lambda: "k7mq-x2fp")
+
+    window._on_export_for_review()
+
+    locked = json.loads(out.read_text(encoding="utf-8"))
+    assert is_locked(locked)
+    sent = unlock_file(locked, "k7mq-x2fp")
+    assert sent["segments"][0]["text"] == "Kylläpä on sää"
+
+    # The client's reply comes back locked with the same password: no prompt.
+    sent["segments"][0]["text"] = "Kyllä on sää"
+    reply = tmp_path / "talk.mp4.reviewed.capslap.json"
+    reply.write_text(json.dumps(lock_file(sent, "k7mq-x2fp", iterations=1000)))
+    monkeypatch.setattr(
+        window,
+        "_ask_import_password",
+        lambda wrong: pytest.fail("asked for a password it already had"),
+    )
+    window.import_review_file(str(reply))
+    assert window.caption_panel.segments[0].text == "Kyllä on sää"
+    window.close()
+
+
+def test_import_asks_again_after_a_wrong_password(
+    qtbot, tmp_path, monkeypatch, no_modal_message_boxes
+):
+    import json
+
+    from app.models.review import lock_file
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    reply = tmp_path / "reply.json"
+    reply.write_text(
+        json.dumps(
+            lock_file(
+                {"segments": [{"startMs": 0, "endMs": 2000, "text": "Kaksi"}]},
+                "oikea",
+                iterations=1000,
+            )
+        )
+    )
+    answers = iter(["väärä", "oikea"])
+    asked = []
+
+    def ask(wrong):
+        asked.append(wrong)
+        return next(answers)
+
+    monkeypatch.setattr(window, "_ask_import_password", ask)
+    window.import_review_file(str(reply))
+    assert asked == [False, True]
+    assert window.caption_panel.segments[0].text == "Kaksi"
+
+    # Cancelling the prompt leaves the captions alone.
+    monkeypatch.setattr(window, "_ask_import_password", lambda wrong: None)
+    window.set_caption_segments([CaptionSegment(0, 2000, "Yksi")])
+    window.import_review_file(str(reply))
+    assert window.caption_panel.segments[0].text == "Yksi"
+    window.close()
+
+
+def test_render_asks_for_the_chosen_proof_copy(qtbot, tmp_path):
+    from PySide6.QtCore import QObject, QUrl, Signal
+
+    calls: list[tuple[str, dict]] = []
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            from concurrent.futures import Future
+
+            calls.append((method, params))
+            f: Future = Future()
+            if method == "burn":
+                f.set_result(
+                    [
+                        {
+                            "captionedVideo": "/out/talk_16x9.mp4",
+                            "proofVideo": "/out/talk_16x9_proof720p.mp4",
+                        }
+                    ]
+                )
+            else:
+                f.set_result({"cues": [], "frameWidth": 1920, "frameHeight": 1080})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    window.player.media_player.source = lambda: QUrl.fromLocalFile(str(video))
+    window.set_caption_segments([CaptionSegment(0, 2000, "Ja")])
+
+    # 720p is the default: the proof copy is on unless turned off.
+    assert window.proof_combo.currentData() == 720
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert burn["proofShortSide"] == 720
+    qtbot.waitUntil(lambda: "proof" in window.status.currentMessage(), timeout=2000)
+    assert "talk_16x9_proof720p.mp4" in window.status.currentMessage()
+
+    window.proof_combo.setCurrentIndex(window.proof_combo.findData(0))
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert burn["proofShortSide"] is None
+    # No intro or outro chosen: none asked for.
+    assert (burn["introVideo"], burn["outroVideo"]) == (None, None)
+
+    # Chosen clips go with every render, and outlive the window.
+    window.set_bumper("outro", "/clips/listen-now.mp4")
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert (burn["introVideo"], burn["outroVideo"]) == (None, "/clips/listen-now.mp4")
+    assert window.bumpers_btn.text() == "+ outro"
+    window.close()
+
+    again = MainWindow(core_client=MockCore())
+    qtbot.addWidget(again)
+    assert again.bumper_path("outro") == "/clips/listen-now.mp4"
+    again._fill_bumpers_menu()
+    labels = [a.text() for a in again.bumpers_menu.actions() if a.text()]
+    assert "Outro: listen-now.mp4" in labels and "No Outro" in labels
+    assert "No Intro" not in labels
+    again.set_bumper("outro", "")
+    assert again.bumpers_btn.text() == "No intro/outro"
+    again.close()
+
+
+def test_core_replies_reach_the_gui_thread(qtbot):
+    """Work handed over from the core's reader thread runs on the GUI thread, later."""
+    import threading
+
+    from PySide6.QtCore import QThread
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    ran_on = []
+
+    def from_reader():
+        window._in_gui(lambda: ran_on.append(QThread.currentThread()))
+
+    worker = threading.Thread(target=from_reader)
+    worker.start()
+    worker.join()
+    assert ran_on == []  # queued, not run on the reader thread
+    qtbot.waitUntil(lambda: bool(ran_on), timeout=2000)
+    assert ran_on[0] == window.thread()
     window.close()

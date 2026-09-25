@@ -51,10 +51,19 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 * 🎯 **Interactive Timeline & Auto-Dodge**:
   * Real-time drag-and-drop vertical subtitle positioning on video canvas.
   * Automated computer-vision activity detection ("Auto Dodge") to avoid obscuring faces or high-motion areas.
+* ✅ **Client Review**: send the captions to a client, who checks and corrects them in their browser on the [review page](https://ollisulopuisto.github.io/pycapslap/) and sends the file back.
+  * **Client Review → Export for Review…** saves a `.review.capslap.json`, locked with a password it offers to generate. Send the file with the video (a smaller preview is fine), and the password another way, such as a text message. The page is public, but a locked file is useless without the password; share the video through a link that needs a login or a password.
+  * The client opens both on the page, watches the video with the captions on it, fixes wording or timing, leaves comments, and downloads the reviewed file, locked with the same password. Nothing is uploaded; a half-done review survives a closed tab, locked too.
+  * **Client Review → Import Reviewed Captions…** applies their fixes cue by cue (word timings are rebuilt from yours, style and positions stay) and lists their comments. Save, render.
+* 🗂️ **Review portal** ([`portal/`](portal/README.md)): a small server of your own where clients see their series and episodes through one secret link per series, play and download the proof renders, check the captions on the review page and send the fixes straight back, and leave free-form feedback, optionally pinned to a moment in a video.
+  * **Client Review → Publish to Portal…** uploads the latest render (its proof copy, by default) and the captions into a series and episode, made when new, and copies the episode's link.
+  * **Client Review → Import from Portal** fetches the newest captions for this video, with the client's corrections, and applies them like an imported review. The admin page (`/admin`) lists every captions version and all feedback.
 * 💾 **Non-destructive Sidecar Storage**:
   * Projects are automatically saved as lightweight `.capslap.json` sidecar files next to your source video.
 * 🎬 **Multi-Format Video Rendering**:
   * Burn captions with one click into **9:16 (TikTok / Reels / Shorts)**, **1:1 (Square)**, **4:5 (Instagram)**, or **16:9 (YouTube)** with Apple VideoToolbox hardware encoding.
+  * A smaller **proof copy** (720p or 540p) is encoded in the same pass as the full-size video: send the small one to be checked, publish the big one.
+  * **Intro and outro clips**: pick a ready-made clip to play before the video, after it, or both (a channel ident, a "listen to the new episode" end card). They are scaled and padded to the output frame, keep their own sound (or get silence), and are joined in the same encode, proof copy included. The choice is remembered for later renders.
 
 ---
 

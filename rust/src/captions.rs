@@ -118,9 +118,13 @@ pub async fn extract_and_transcribe_with_server(
             video_file: Some(input_video.to_string()),
             whisper_base_url,
         };
-        let transcription =
-            whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit)
-                .await?;
+        let transcription = whisper::transcribe_segments_with_temp(
+            id,
+            transcribe_params,
+            Some(&temp_dir),
+            &mut emit,
+        )
+        .await?;
 
         Ok::<_, anyhow::Error>((probe_result, audio_result.audio, transcription))
     }
@@ -197,6 +201,11 @@ pub async fn burn_captions_with_segments(
             })
             .collect();
 
+        let bumpers = Bumpers {
+            intro: probe_bumper(id, params.intro_video.as_deref(), "Intro", &mut emit).await?,
+            outro: probe_bumper(id, params.outro_video.as_deref(), "Outro", &mut emit).await?,
+        };
+
         optimized_multi_format_encode(
             id,
             &params.input_video,
@@ -222,6 +231,8 @@ pub async fn burn_captions_with_segments(
             &params.blocked_bands,
             trim_start_ms as f64 / 1000.0,
             (trim_end_at_ms - trim_start_ms) as f64 / 1000.0,
+            params.proof_short_side.filter(|&side| side > 0),
+            &bumpers,
             &mut emit,
         )
         .await
@@ -286,6 +297,8 @@ pub async fn generate_captions_single_pass(
             &params.blocked_bands,
             0.0,
             probe_result.duration.unwrap_or(0.0),
+            None, // the one-shot generate path makes no proof copy
+            &Bumpers::default(),
             &mut emit,
         )
         .await?;
@@ -604,12 +617,13 @@ async fn render_caption_layer(
     let (black_slice, white_slice) = raw.split_at(total_pixels * 3);
     let mut out_buffer = vec![0u8; total_pixels * 4];
 
-    for (out_px, (b_px, w_px)) in out_buffer
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(black_slice.as_chunks::<3>().0.iter().zip(white_slice.as_chunks::<3>().0.iter()))
-    {
+    for (out_px, (b_px, w_px)) in out_buffer.as_chunks_mut::<4>().0.iter_mut().zip(
+        black_slice
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(white_slice.as_chunks::<3>().0.iter()),
+    ) {
         let diff0 = w_px[0].saturating_sub(b_px[0]);
         let diff1 = w_px[1].saturating_sub(b_px[1]);
         let diff2 = w_px[2].saturating_sub(b_px[2]);
@@ -790,7 +804,9 @@ pub async fn generate_preview_frame(
         let mime = if as_jpeg { "jpeg" } else { "png" };
         let data_uri = format!("data:image/{};base64,{}", mime, encoded);
 
-        Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult { image_data: data_uri })
+        Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult {
+            image_data: data_uri,
+        })
     }
     .await;
 
@@ -1095,6 +1111,8 @@ async fn optimized_multi_format_encode(
     blocked_bands: &[(f32, f32)],
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof_short_side: Option<u32>,
+    bumpers: &Bumpers,
     emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     // Fail fast if libass is not available (required for burning subtitles)
@@ -1215,14 +1233,23 @@ async fn optimized_multi_format_encode(
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
         let tx = tx.clone();
+        let bumpers = bumpers.clone();
 
         tasks.spawn(async move {
             // Acquire semaphore permit for bounded concurrency
             let _permit = semaphore.acquire().await.unwrap();
 
             let safe_format = format.replace(':', "x");
-            let captioned_path =
-                unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
+            let captioned_path = unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
+            // Only when the video is bigger than the proof; a copy the same size is waste.
+            let proof = proof_short_side
+                .filter(|&side| side < target_w.min(target_h))
+                .map(|side| {
+                    (
+                        side,
+                        unique_output_path(&proof_output_path(&captioned_path, side)),
+                    )
+                });
 
             // Single-pass format conversion + caption burning with hardware acceleration
             optimized_single_format_encode(
@@ -1236,6 +1263,8 @@ async fn optimized_multi_format_encode(
                 &probe_result,
                 trim_start_seconds,
                 output_duration_seconds,
+                proof.as_ref().map(|(side, path)| (*side, path.as_str())),
+                &bumpers,
                 tx,
                 idx,
             )
@@ -1247,6 +1276,7 @@ async fn optimized_multi_format_encode(
                 captioned_video: captioned_path,
                 width: target_w,
                 height: target_h,
+                proof_video: proof.map(|(_, path)| path),
             })
         });
     }
@@ -1315,6 +1345,8 @@ async fn optimized_single_format_encode(
     probe_result: &crate::video::ProbeResult,
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof: Option<(u32, &str)>,
+    bumpers: &Bumpers,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
 ) -> Result<()> {
@@ -1333,6 +1365,8 @@ async fn optimized_single_format_encode(
         probe_result,
         trim_start_seconds,
         output_duration_seconds,
+        proof,
+        bumpers,
         hardware_encoder,
         tx.clone(),
         index,
@@ -1352,6 +1386,8 @@ async fn optimized_single_format_encode(
             probe_result,
             trim_start_seconds,
             output_duration_seconds,
+            proof,
+            bumpers,
             crate::video::HardwareEncoder::Software,
             tx,
             index,
@@ -1375,6 +1411,8 @@ async fn try_encode_with_encoder(
     probe_result: &crate::video::ProbeResult,
     trim_start_seconds: f64,
     output_duration_seconds: f64,
+    proof: Option<(u32, &str)>,
+    bumpers: &Bumpers,
     hardware_encoder: crate::video::HardwareEncoder,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
@@ -1411,7 +1449,37 @@ async fn try_encode_with_encoder(
     let mut cmd = TokioCommand::new(&ffmpeg_path);
     cmd.kill_on_drop(true);
 
-    let duration_us = Some((output_duration_seconds * 1_000_000.0) as u64);
+    // With a proof copy the burned frame is split in two: the full-size output as
+    // before, and a scaled-down copy encoded alongside it, so the captions are drawn
+    // and the source decoded only once. With an intro or outro, the clips are joined
+    // to the burned video in the same graph, and the audio comes out of it too.
+    let proof_scale = proof.map(|(side, _)| proof_scale_filter(target_w, target_h, side));
+    let filter_complex = if bumpers.is_empty() {
+        proof_scale
+            .as_ref()
+            .map(|scale| format!("[0:v:0]{vf},split=2[full][small];[small]{scale}[proof]"))
+    } else {
+        Some(bumper_graph(
+            &vf,
+            target_w,
+            target_h,
+            probe_result.fps.filter(|f| *f > 0.0).unwrap_or(30.0),
+            pixel_format(hardware_encoder),
+            probe_result.audio,
+            output_duration_seconds,
+            bumpers,
+            proof_scale.as_deref(),
+        ))
+    };
+    // Audio of the joined video comes from the graph, of a plain one from the source.
+    let (full_audio, proof_audio) = if bumpers.is_empty() {
+        ("0:a?", "0:a?")
+    } else {
+        ("[afull]", "[aproof]")
+    };
+
+    let total_duration_seconds = output_duration_seconds + bumpers.duration();
+    let duration_us = Some((total_duration_seconds * 1_000_000.0) as u64);
     let trim_start_arg = format!("{trim_start_seconds:.3}");
     let output_duration_arg = format!("{output_duration_seconds:.3}");
 
@@ -1420,23 +1488,24 @@ async fn try_encode_with_encoder(
         if trim_start_seconds > 0.0 {
             args.extend_from_slice(&["-ss", &trim_start_arg]);
         }
+        // -t before -i limits this input only, so the clips joined to it keep theirs.
+        args.extend_from_slice(&["-t", &output_duration_arg, "-i", input_video]);
+        for clip in bumpers.clips() {
+            args.extend_from_slice(&["-i", &clip.path]);
+        }
+        args.extend_from_slice(&["-progress", "pipe:1"]); // Enable progress reporting
+        match &filter_complex {
+            Some(graph) => args.extend_from_slice(&["-filter_complex", graph, "-map", "[full]"]),
+            // Map first video stream
+            None => args.extend_from_slice(&["-vf", &vf, "-map", "0:v:0"]),
+        }
         args.extend_from_slice(&[
-            "-i",
-            input_video,
-            "-t",
-            &output_duration_arg,
-            "-progress",
-            "pipe:1", // Enable progress reporting
-            "-vf",
-            &vf,
             "-fps_mode",
             "passthrough", // Modern replacement for -vsync
             "-threads",
             "0", // Use all available CPU cores
             "-map",
-            "0:v:0", // Map first video stream
-            "-map",
-            "0:a?", // Map audio if present (optional)
+            full_audio, // Audio if present (optional)
         ]);
 
         // Add hardware-optimized encoding parameters
@@ -1489,15 +1558,20 @@ async fn try_encode_with_encoder(
             }
         }
 
-        args.push("-c:a");
-        args.push(audio_codec);
+        if bumpers.is_empty() {
+            args.push("-c:a");
+            args.push(audio_codec);
 
-        // Add audio-specific args
-        args.extend(audio_args.iter().copied());
+            // Add audio-specific args
+            args.extend(audio_args.iter().copied());
 
-        // Add explicit bitrate for re-encoded audio if not using copy
-        if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
-            args.extend_from_slice(&["-b:a", "160k"]);
+            // Add explicit bitrate for re-encoded audio if not using copy
+            if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
+                args.extend_from_slice(&["-b:a", "160k"]);
+            }
+        } else {
+            // Joined audio is new audio: nothing to copy.
+            args.extend_from_slice(&["-c:a", "aac", "-b:a", "160k"]);
         }
 
         args.extend_from_slice(&[
@@ -1505,6 +1579,14 @@ async fn try_encode_with_encoder(
             "+faststart", // Fast web playback
             output_path,
         ]);
+
+        // Second output: the proof copy, same encoder family at a proofing bitrate.
+        if let Some((_, proof_path)) = proof {
+            args.extend_from_slice(&["-map", "[proof]", "-map", proof_audio]);
+            args.extend(proof_video_args(hardware_encoder).iter().copied());
+            args.extend_from_slice(&["-g", &gop_size_str, "-c:a", "aac", "-b:a", "128k"]);
+            args.extend_from_slice(&["-movflags", "+faststart", proof_path]);
+        }
         args
     });
 
@@ -1567,6 +1649,176 @@ async fn try_encode_with_encoder(
     }
 
     Ok(())
+}
+
+/// A ready-made clip joined before or after the captioned video.
+#[derive(Clone, Debug)]
+struct Bumper {
+    path: String,
+    duration: f64,
+    has_audio: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Bumpers {
+    intro: Option<Bumper>,
+    outro: Option<Bumper>,
+}
+
+impl Bumpers {
+    fn is_empty(&self) -> bool {
+        self.intro.is_none() && self.outro.is_none()
+    }
+
+    /// In input order: the intro is input 1 when there is one, the outro after it.
+    fn clips(&self) -> impl Iterator<Item = &Bumper> {
+        self.intro.iter().chain(self.outro.iter())
+    }
+
+    fn duration(&self) -> f64 {
+        self.clips().map(|c| c.duration).sum()
+    }
+}
+
+async fn probe_bumper(
+    id: &str,
+    path: Option<&str>,
+    what: &str,
+    emit: &mut impl FnMut(RpcEvent),
+) -> Result<Option<Bumper>> {
+    let Some(path) = path.filter(|p| !p.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if !std::path::Path::new(path).is_file() {
+        return Err(anyhow!("{what} clip not found: {path}"));
+    }
+    let probed = probe(id, path, &mut *emit).await?;
+    let duration = probed.duration.filter(|d| *d > 0.0);
+    match (probed.video, duration) {
+        (true, Some(duration)) => Ok(Some(Bumper {
+            path: path.to_string(),
+            duration,
+            has_audio: probed.audio,
+        })),
+        _ => Err(anyhow!("{what} clip has no video to show: {path}")),
+    }
+}
+
+fn pixel_format(encoder: crate::video::HardwareEncoder) -> &'static str {
+    match encoder {
+        crate::video::HardwareEncoder::Software => "yuv420p",
+        _ => "nv12",
+    }
+}
+
+/// The filter graph for a captioned video with an intro and/or outro: every part
+/// brought to the output's frame, rate and pixel format, audio to 48 kHz stereo
+/// (silence for a part without any), then concatenated. Outputs `[full]` and
+/// `[afull]`, plus `[proof]` and `[aproof]` when `proof_scale` is given.
+#[allow(clippy::too_many_arguments)]
+fn bumper_graph(
+    vf: &str,
+    target_w: u32,
+    target_h: u32,
+    fps: f64,
+    pix_fmt: &str,
+    main_has_audio: bool,
+    main_duration: f64,
+    bumpers: &Bumpers,
+    proof_scale: Option<&str>,
+) -> String {
+    const AUDIO: &str = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
+    let silence =
+        |secs: f64| format!("anullsrc=r=48000:cl=stereo,atrim=duration={secs:.3},{AUDIO}");
+    let mut chains = vec![
+        format!("[0:v:0]{vf},setsar=1,fps={fps:.3}[v0]"),
+        if main_has_audio {
+            format!("[0:a:0]{AUDIO}[a0]")
+        } else {
+            format!("{}[a0]", silence(main_duration))
+        },
+    ];
+    // Intro, main, outro, by input number.
+    let mut order = Vec::new();
+    let mut input = 1;
+    for (clip, is_intro) in [(&bumpers.intro, true), (&bumpers.outro, false)] {
+        let Some(clip) = clip else { continue };
+        chains.push(format!(
+            "[{input}:v:0]scale={target_w}:{target_h}:flags=lanczos:force_original_aspect_ratio=decrease,\
+             pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps:.3},format={pix_fmt}[v{input}]"
+        ));
+        chains.push(if clip.has_audio {
+            format!("[{input}:a:0]{AUDIO}[a{input}]")
+        } else {
+            format!("{}[a{input}]", silence(clip.duration))
+        });
+        if is_intro {
+            order.push(input);
+        }
+        input += 1;
+    }
+    order.push(0);
+    if bumpers.outro.is_some() {
+        order.push(input - 1);
+    }
+    let parts: String = order.iter().map(|i| format!("[v{i}][a{i}]")).collect();
+    let n = order.len();
+    match proof_scale {
+        None => chains.push(format!("{parts}concat=n={n}:v=1:a=1[full][afull]")),
+        Some(scale) => {
+            chains.push(format!("{parts}concat=n={n}:v=1:a=1[joined][ajoined]"));
+            chains.push(format!(
+                "[joined]split=2[full][small];[small]{scale}[proof]"
+            ));
+            chains.push("[ajoined]asplit=2[afull][aproof]".to_string());
+        }
+    }
+    chains.join(";")
+}
+
+/// Scales a proof copy so its short side is `short_side`, keeping the aspect ratio
+/// (the other side rounded to even, as H.264 needs).
+fn proof_scale_filter(target_w: u32, target_h: u32, short_side: u32) -> String {
+    if target_w < target_h {
+        format!("scale={short_side}:-2")
+    } else {
+        format!("scale=-2:{short_side}")
+    }
+}
+
+/// `clip_9x16.mp4` → `clip_9x16_proof720p.mp4`
+fn proof_output_path(captioned_path: &str, short_side: u32) -> String {
+    match captioned_path.strip_suffix(".mp4") {
+        Some(stem) => format!("{stem}_proof{short_side}p.mp4"),
+        None => format!("{captioned_path}_proof{short_side}p.mp4"),
+    }
+}
+
+/// Encoder settings for a proof copy: small files meant for watching, not publishing.
+fn proof_video_args(encoder: crate::video::HardwareEncoder) -> &'static [&'static str] {
+    match encoder {
+        crate::video::HardwareEncoder::VideoToolbox => &[
+            "-c:v",
+            "h264_videotoolbox",
+            "-b:v",
+            "2500k",
+            "-allow_sw",
+            "1",
+        ],
+        crate::video::HardwareEncoder::Nvenc => &[
+            "-c:v",
+            "h264_nvenc",
+            "-cq",
+            "26",
+            "-preset",
+            "p5",
+            "-rc",
+            "vbr",
+        ],
+        crate::video::HardwareEncoder::Software => {
+            &["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
+        }
+    }
 }
 
 // ---- Constants for horizontal stretch animation ----
@@ -1668,7 +1920,11 @@ fn segment_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
                     tail.text.push_str(&syllable.text);
                     tail.end_ms = tail.end_ms.max(syllable.end_ms);
                 }
-                previous.end_ms = previous.spans.last().map(|w| w.end_ms).unwrap_or(previous.end_ms);
+                previous.end_ms = previous
+                    .spans
+                    .last()
+                    .map(|w| w.end_ms)
+                    .unwrap_or(previous.end_ms);
                 previous.tokens = previous.spans.iter().map(|x| x.text.clone()).collect();
                 if spans.is_empty() {
                     continue;
@@ -1762,8 +2018,7 @@ pub(crate) fn horizontal_margin(frame_w: u32) -> u32 {
     ((frame_w as f32) * CAPTION_SIDE_MARGIN_PCT / 100.0).round() as u32
 }
 
-/// Percentage of frame width kept free on each side. Mirrored by the PySide
-/// preview (`video_canvas.CAPTION_SIDE_MARGIN_PCT`) — change both together.
+/// Percentage of frame width kept free on each side.
 pub(crate) const CAPTION_SIDE_MARGIN_PCT: f32 = 7.0;
 
 // ---- time quantization (ASS is 1/100s) ----
@@ -1824,8 +2079,6 @@ fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
         .collect()
 }
 
-
-
 // Color tags use BBGGRR (no alpha) for \1c
 fn bgr_from_aa_bgrr(aa_bgrr: &str) -> String {
     aa_bgrr.trim_start_matches("&H").chars().skip(2).collect() // drop AA
@@ -1856,11 +2109,27 @@ fn cue_lines(
             return lines;
         }
     }
-    vec![crate::justify::JustifiedLine {
-        start: 0,
-        end: tokens.len(),
-        font_px: base_px,
-    }]
+    // Breaks decided here, for the whole cue: the highlighted word is set
+    // bigger and each karaoke window opens with a stretch, and letting libass
+    // wrap every window on its own made the lines jump from word to word.
+    crate::justify::steady_lines(
+        tokens,
+        font_family,
+        caption_box_width(frame_w) * STEADY_WRAP_SLACK,
+        base_px,
+        BIG_FONT_SIZE_MULTIPLIER,
+        // Karaoke windows open stretched, plain cues bounce in: room for either.
+        STRETCH_X_PEAK.max(BOUNCE_PEAK),
+    )
+}
+
+/// Our advance-width sum ignores kerning and outline; leave libass a little room.
+const STEADY_WRAP_SLACK: f32 = 0.97;
+
+/// Whether cues carry their own line breaks (`\q2`) or libass wraps them (`\q0`):
+/// only a font we can't measure is left to libass.
+fn breaks_are_ours(font_family: &str, justify_lines: bool) -> bool {
+    justify_lines || crate::text_metrics::metrics_for(font_family).is_some()
 }
 
 /// Render one cue's text body, justified or free-flowing.
@@ -1878,15 +2147,7 @@ fn assemble_cue(
     if justify_lines {
         assemble_justified(tokens, layout, hi, white_bgr, hi_bgr, header)
     } else {
-        assemble_colored_two_lines(
-            tokens,
-            hi,
-            white_bgr,
-            hi_bgr,
-            usize::MAX, // no forced break; \q0 wraps on real metrics
-            header,
-            font_size,
-        )
+        assemble_colored_lines(tokens, layout, hi, white_bgr, hi_bgr, header, font_size)
     }
 }
 
@@ -1930,52 +2191,47 @@ fn assemble_justified(
     s
 }
 
-fn assemble_colored_two_lines(
+/// A cue's words at the style's size, the highlighted one bigger, broken into
+/// `lines` (one line: libass wraps it).
+fn assemble_colored_lines(
     tokens: &[String],
+    lines: &[crate::justify::JustifiedLine],
     hi: usize,
     white_bgr: &str,
     hi_bgr: &str,
-    line1_count: usize,
     header: &str,
     font_size: u32,
 ) -> String {
     let white = format!("{{\\1c&H{}&\\fs{}}}", white_bgr, font_size);
-    // Only create bigger font style if we're actually highlighting something
     let has_highlighting = hi != usize::MAX;
     let hi_style = if has_highlighting {
         let big_font_size = (font_size as f32 * BIG_FONT_SIZE_MULTIPLIER) as u32;
         format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, big_font_size)
     } else {
-        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size) // Same size, just different color
+        format!("{{\\1c&H{}&\\fs{}}}", hi_bgr, font_size)
     };
+    let line_starts: Vec<usize> = lines.iter().skip(1).map(|l| l.start).collect();
 
-    let mut s = String::from(header); // will include \an2 \pos \q0 and stretch
+    let mut s = String::from(header);
     for i in 0..tokens.len() {
-        if i == line1_count {
+        if line_starts.contains(&i) {
             s.push_str(r"\N");
         }
-        // Only highlight if hi is a valid index (not usize::MAX)
-        let should_highlight = has_highlighting && i == hi;
-        s.push_str(if should_highlight { &hi_style } else { &white });
-        let t = tokens[i]
-            .replace('\\', r"\\")
-            .replace('{', r"\{")
-            .replace('}', r"\}");
-        s.push_str(&t); // Moved s.push_str(&t) earlier to use t for check? No wait.
-
-        // original was:
-        // let t = ...
-        // s.push_str(&t);
-        // if i + 1 < tokens.len() { s.push(' '); }
-
-        // New logic:
-        // Check if CURRENT token (not t, but tokens[i]) ends with '-'
-        // Note: tokens[i] might be raw string.
-        if i + 1 < tokens.len() {
-            let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
-            if !ends_with_hyphen {
-                s.push(' ');
-            }
+        s.push_str(if has_highlighting && i == hi {
+            &hi_style
+        } else {
+            &white
+        });
+        s.push_str(
+            &tokens[i]
+                .replace('\\', r"\\")
+                .replace('{', r"\{")
+                .replace('}', r"\}"),
+        );
+        let ends_line = line_starts.contains(&(i + 1));
+        let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
+        if i + 1 < tokens.len() && !ends_line && !ends_with_hyphen {
+            s.push(' ');
         }
     }
     s
@@ -2461,18 +2717,21 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
     );
 
     let mut lines = String::new();
-    // Justified cues carry their own breaks and exact widths, so libass must
-    // not re-wrap them; everything else wraps on real metrics.
-    let wrap_tag = if justify_lines { r"\q2" } else { r"\q0" };
+    // Cues carry their own breaks (see cue_lines), so libass must not re-wrap
+    // them; only a font we can't measure is left to libass's wrapping.
+    let wrap_tag = if breaks_are_ours(&style.font_name, justify_lines) {
+        r"\q2"
+    } else {
+        r"\q0"
+    };
 
     if karaoke {
         let phrases = segment_phrases(segments);
         let white_bgr = bgr_from_aa_bgrr(&style.primary);
         let hi_bgr = bgr_from_aa_bgrr(&style.highlight);
 
-        // One cue per authored segment. Lines are wrapped by libass against the
-        // real font metrics (\q0 + the style margins), not by a character-count
-        // estimate, so nothing overflows the frame and nothing gets re-cut.
+        // One cue per authored segment, its lines decided once for the whole
+        // cue (cue_lines) so every karaoke window below breaks them the same.
         for ph in phrases {
             let tokens_upper = normalize_tokens(&ph.spans);
             let cue_layout = cue_lines(
@@ -2609,7 +2868,7 @@ Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
             crate::debug_log!("DEBUG: Processing phrase {}/{}", p_idx, phrases.len());
             let tokens_upper = normalize_tokens(&phrase.spans);
 
-            // One cue per authored segment; libass wraps it (\q0 + margins).
+            // One cue per authored segment, broken into lines by cue_lines.
             let segments = vec![(tokens_upper, phrase.spans.clone())];
 
             for (segment_tokens, segment_spans) in segments {
@@ -2787,8 +3046,6 @@ fn default_ass_style(
     }
 }
 
-
-
 /// Convert hex color string (e.g., "#ffffff") to ASS color format (e.g., "&H00FFFFFF")
 fn hex_to_ass_color(hex: &str) -> String {
     let hex = hex.trim_start_matches('#');
@@ -2803,36 +3060,132 @@ fn hex_to_ass_color(hex: &str) -> String {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-
     #[test]
-    fn test_assemble_colored_two_lines_hyphenation() {
+    fn test_assemble_colored_lines_hyphenation() {
         let tokens = vec!["SAKSALAIS-".to_string(), "ROOMALAINEN".to_string()];
-
-        // We need to provide dummy args for assemble_colored_two_lines
-        // It requires: tokens, hi, white_bgr, hi_bgr, line1_count, header, font_size
-        let result = assemble_colored_two_lines(
+        let one_line = [crate::justify::JustifiedLine {
+            start: 0,
+            end: 2,
+            font_px: 20,
+        }];
+        let result = assemble_colored_lines(
             &tokens,
-            usize::MAX, // no highlight
+            &one_line,
+            usize::MAX,
             "FFFFFF",
             "0000FF",
-            usize::MAX, // no break
             "{\\an2}",
             20,
         );
-
-        println!("Result: {}", result);
         assert!(
             !result.contains("SAKSALAIS- "),
             "Should not contain space after hyphen"
         );
     }
 
+    fn karaoke_block(words: &[&str]) -> Vec<CaptionSegment> {
+        let spans: Vec<WordSpan> = words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| WordSpan {
+                start_ms: i as u64 * 400,
+                end_ms: (i as u64 + 1) * 400,
+                text: (*w).into(),
+                glue_to_previous: false,
+            })
+            .collect();
+        vec![CaptionSegment {
+            start_ms: 0,
+            end_ms: spans.len() as u64 * 400,
+            text: words.join(" "),
+            words: spans,
+        }]
+    }
+
+    #[test]
+    fn a_karaoke_block_keeps_its_line_breaks_on_every_word() {
+        let segments = karaoke_block(&[
+            "agentit,",
+            "olivat",
+            "löytäneet",
+            "tavan",
+            "kommunikoida",
+            "keskenään.",
+        ]);
+        let style = default_ass_style(
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
+        );
+        let doc = build_ass_document(
+            1080,
+            1920,
+            &style,
+            &segments,
+            true,
+            false,
+            false,
+            false,
+            &[],
+            &[],
+        )
+        .expect("document builds");
+        // Where each window breaks its lines, as the words before each \N.
+        let layouts: Vec<Vec<String>> = doc
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .map(|l| {
+                let plain = regex_free_text(l);
+                plain
+                    .split(r"\N")
+                    .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect()
+            })
+            .collect();
+        assert_eq!(layouts.len(), 6, "one window per word");
+        assert!(
+            layouts[0].len() >= 2,
+            "a long block needs lines: {:?}",
+            layouts[0]
+        );
+        assert!(
+            layouts.iter().all(|l| l == &layouts[0]),
+            "lines moved between words: {layouts:#?}"
+        );
+        // libass must not wrap on top of our breaks.
+        assert!(doc
+            .lines()
+            .filter(|l| l.starts_with("Dialogue:"))
+            .all(|l| l.contains(r"\q2")));
+    }
+
+    /// A dialogue line's text with the {override} blocks taken out.
+    fn regex_free_text(line: &str) -> String {
+        let text = line.splitn(10, ',').nth(9).unwrap_or("");
+        let mut out = String::new();
+        let mut depth = 0;
+        for c in text.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ if depth == 0 => out.push(c),
+                _ => {}
+            }
+        }
+        out
+    }
 
     #[test]
     fn justified_cues_carry_one_font_size_per_line() {
@@ -2841,23 +3194,57 @@ mod tests {
             end_ms: 2000,
             text: "vähän niinku huonosta miesvalinnasta".to_string(),
             words: vec![
-                WordSpan { start_ms: 0, end_ms: 500, text: "vähän".into(), glue_to_previous: false },
-                WordSpan { start_ms: 500, end_ms: 1000, text: "niinku".into(), glue_to_previous: false },
-                WordSpan { start_ms: 1000, end_ms: 1500, text: "huonosta".into(), glue_to_previous: false },
-                WordSpan { start_ms: 1500, end_ms: 2000, text: "miesvalinnasta".into(), glue_to_previous: false },
+                WordSpan {
+                    start_ms: 0,
+                    end_ms: 500,
+                    text: "vähän".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 500,
+                    end_ms: 1000,
+                    text: "niinku".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 1000,
+                    end_ms: 1500,
+                    text: "huonosta".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 1500,
+                    end_ms: 2000,
+                    text: "miesvalinnasta".into(),
+                    glue_to_previous: false,
+                },
             ],
         }];
 
         let style = default_ass_style(
-            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
         );
         let doc = build_ass_document(
-            1080, 1920, &style, &segments,
+            1080,
+            1920,
+            &style,
+            &segments,
             false, // karaoke
             false, // multiline
             true,  // justify_lines
             false, // glow
-            &[], &[],
+            &[],
+            &[],
         )
         .expect("document builds");
 
@@ -2867,7 +3254,10 @@ mod tests {
             .expect("a dialogue line");
 
         // Two lines, and the shorter one is set larger so both fill the box.
-        assert!(dialogue.contains(r"\N"), "expected a line break in {dialogue}");
+        assert!(
+            dialogue.contains(r"\N"),
+            "expected a line break in {dialogue}"
+        );
         let sizes: Vec<u32> = dialogue
             .match_indices(r"\fs")
             .filter_map(|(i, _)| {
@@ -2889,22 +3279,51 @@ mod tests {
     }
 
     #[test]
-    fn unjustified_cues_keep_one_size_and_let_libass_wrap() {
+    fn unjustified_short_cues_stay_on_one_line_at_one_size() {
         let segments = vec![CaptionSegment {
             start_ms: 0,
             end_ms: 1000,
-            text: "yksi kaksi".to_string(),
+            text: "ja se".to_string(),
             words: vec![
-                WordSpan { start_ms: 0, end_ms: 500, text: "yksi".into(), glue_to_previous: false },
-                WordSpan { start_ms: 500, end_ms: 1000, text: "kaksi".into(), glue_to_previous: false },
+                WordSpan {
+                    start_ms: 0,
+                    end_ms: 500,
+                    text: "ja".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 500,
+                    end_ms: 1000,
+                    text: "se".into(),
+                    glue_to_previous: false,
+                },
             ],
         }];
 
         let style = default_ass_style(
-            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
         );
         let doc = build_ass_document(
-            1080, 1920, &style, &segments, false, false, false, false, &[], &[],
+            1080,
+            1920,
+            &style,
+            &segments,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect("document builds");
 
@@ -2912,7 +3331,127 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("Dialogue:"))
             .expect("a dialogue line");
-        assert!(dialogue.contains(r"\q0"), "expected \\q0 in {dialogue}");
-        assert!(!dialogue.contains(r"\N"), "no forced break expected in {dialogue}");
+        // Our breaks, not libass's: a short cue simply has none.
+        assert!(dialogue.contains(r"\q2"), "expected \\q2 in {dialogue}");
+        assert!(
+            !dialogue.contains(r"\N"),
+            "no forced break expected in {dialogue}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_proof_copy {
+    use super::*;
+
+    #[test]
+    fn proof_scales_the_short_side() {
+        assert_eq!(proof_scale_filter(1920, 1080, 720), "scale=-2:720");
+        assert_eq!(proof_scale_filter(1080, 1920, 720), "scale=720:-2");
+        assert_eq!(proof_scale_filter(1080, 1080, 540), "scale=-2:540");
+    }
+
+    #[test]
+    fn proof_sits_next_to_the_full_size_video() {
+        assert_eq!(
+            proof_output_path("/v/talk.mp4_9x16.mp4", 720),
+            "/v/talk.mp4_9x16_proof720p.mp4"
+        );
+        assert_eq!(proof_output_path("/v/raw", 540), "/v/raw_proof540p.mp4");
+    }
+
+    fn clip(path: &str, duration: f64, has_audio: bool) -> Bumper {
+        Bumper {
+            path: path.into(),
+            duration,
+            has_audio,
+        }
+    }
+
+    #[test]
+    fn intro_and_outro_play_around_the_video() {
+        let bumpers = Bumpers {
+            intro: Some(clip("intro.mp4", 3.0, true)),
+            outro: Some(clip("outro.mov", 5.5, false)),
+        };
+        assert_eq!(bumpers.duration(), 8.5);
+        let paths: Vec<_> = bumpers.clips().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, ["intro.mp4", "outro.mov"]);
+        let graph = bumper_graph("VF", 1080, 1920, 25.0, "nv12", true, 60.0, &bumpers, None);
+        assert!(graph.contains("[0:v:0]VF,setsar=1,fps=25.000[v0]"));
+        assert!(graph.contains("[1:v:0]scale=1080:1920:"));
+        assert!(graph.contains(
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25.000,format=nv12[v1]"
+        ));
+        assert!(graph.contains("[1:a:0]aresample=48000"));
+        // The outro has no sound of its own: silence as long as it is.
+        assert!(graph.contains("anullsrc=r=48000:cl=stereo,atrim=duration=5.500,"));
+        assert!(graph.ends_with("[v1][a1][v0][a0][v2][a2]concat=n=3:v=1:a=1[full][afull]"));
+    }
+
+    #[test]
+    fn an_outro_alone_is_input_one_and_comes_last() {
+        let bumpers = Bumpers {
+            intro: None,
+            outro: Some(clip("outro.mp4", 4.0, true)),
+        };
+        let graph = bumper_graph(
+            "VF", 1920, 1080, 30.0, "yuv420p", false, 12.0, &bumpers, None,
+        );
+        assert!(graph.contains("atrim=duration=12.000,")); // silent main video
+        assert!(graph.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[full][afull]"));
+    }
+
+    #[test]
+    fn the_proof_copy_is_split_after_the_join() {
+        let bumpers = Bumpers {
+            intro: Some(clip("i.mp4", 2.0, true)),
+            outro: None,
+        };
+        let graph = bumper_graph(
+            "VF",
+            1920,
+            1080,
+            30.0,
+            "nv12",
+            true,
+            10.0,
+            &bumpers,
+            Some("scale=-2:720"),
+        );
+        assert!(graph.contains("concat=n=2:v=1:a=1[joined][ajoined]"));
+        assert!(graph.contains("[joined]split=2[full][small];[small]scale=-2:720[proof]"));
+        assert!(graph.ends_with("[ajoined]asplit=2[afull][aproof]"));
+    }
+
+    #[test]
+    fn intro_and_outro_are_optional_in_burn_params() {
+        let base = serde_json::json!({
+            "inputVideo": "in.mp4", "segments": [], "exportFormats": ["16:9"],
+            "karaoke": false, "fontName": null
+        });
+        let without: BurnCaptionsParams = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!((without.intro_video, without.outro_video), (None, None));
+        let mut with = base;
+        with["outroVideo"] = serde_json::json!("/clips/outro.mp4");
+        let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
+        assert_eq!(with.outro_video.as_deref(), Some("/clips/outro.mp4"));
+    }
+
+    #[test]
+    fn proof_copy_is_optional_in_burn_params() {
+        let base = serde_json::json!({
+            "inputVideo": "in.mp4",
+            "segments": [],
+            "exportFormats": ["16:9"],
+            "karaoke": false,
+            "fontName": null
+        });
+        let without: BurnCaptionsParams = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(without.proof_short_side, None);
+        let mut with = base;
+        with["proofShortSide"] = serde_json::json!(720);
+        let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
+        assert_eq!(with.proof_short_side, Some(720));
     }
 }

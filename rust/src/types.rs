@@ -140,24 +140,24 @@ fn default_true() -> bool {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateCaptionsParams {
-    pub input_video: String,         // Path to input video file
+    pub input_video: String, // Path to input video file
     #[serde(default)]
     pub export_formats: Vec<String>, // List of aspect ratios to export (e.g., ["9:16", "16:9"])
     #[serde(default)]
-    pub karaoke: bool,               // Whether to use karaoke-style highlighting
+    pub karaoke: bool, // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
     /// Two lines flush to the same width, each sized to fill it.
     #[serde(default)]
     pub justify_lines: bool,
-    pub font_name: Option<String>,   // Font name for captions (defaults to "Montserrat Black")
+    pub font_name: Option<String>, // Font name for captions (defaults to "Montserrat Black")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size (at 1080p reference)
     #[serde(default = "default_true")]
-    pub split_by_words: bool,        // Whether to split transcription by words or segments
-    pub model: Option<String>,       // Whisper model to use (default: "whisper-1")
-    pub language: Option<String>,    // Language hint for better accuracy
-    pub prompt: Option<String>,      // Context prompt to improve accuracy
+    pub split_by_words: bool, // Whether to split transcription by words or segments
+    pub model: Option<String>,     // Whisper model to use (default: "whisper-1")
+    pub language: Option<String>,  // Language hint for better accuracy
+    pub prompt: Option<String>,    // Context prompt to improve accuracy
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>, // Text color as hex string (e.g., "#ffffff")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,7 +172,7 @@ pub struct GenerateCaptionsParams {
     pub glow_effect: bool, // Whether to apply glow effect
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<String>, // Caption position: "bottom" or "center"
-    pub api_key: Option<String>,     // OpenAI API key
+    pub api_key: Option<String>, // OpenAI API key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_size: Option<String>, // Target output size (e.g., "1080p", "original")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,14 +206,25 @@ pub struct BurnCaptionsParams {
     pub trim_start_ms: u64,
     #[serde(default)]
     pub trim_end_ms: u64,
-    pub export_formats: Vec<String>,   // List of aspect ratios to export
-    pub karaoke: bool,                 // Whether to use karaoke-style highlighting
+    pub export_formats: Vec<String>, // List of aspect ratios to export
+    /// Also write a smaller proof copy whose short side is this many pixels (e.g. 720),
+    /// from the same encode. None or 0: no proof copy.
+    #[serde(default)]
+    pub proof_short_side: Option<u32>,
+    /// A ready-made clip played before the captioned video (a channel ident, say).
+    /// Scaled and padded to the output frame; its own audio, or silence.
+    #[serde(default)]
+    pub intro_video: Option<String>,
+    /// A ready-made clip played after it ("listen to the new episode").
+    #[serde(default)]
+    pub outro_video: Option<String>,
+    pub karaoke: bool, // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
     /// Two lines flush to the same width, each sized to fill it.
     #[serde(default)]
     pub justify_lines: bool,
-    pub font_name: Option<String>,     // Font name
+    pub font_name: Option<String>, // Font name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,6 +262,9 @@ pub struct CaptionedVideoResult {
     pub captioned_video: String, // Path to final video with captions
     pub width: u32,              // Video width
     pub height: u32,             // Video height
+    /// The smaller proof copy, when one was asked for and the video is bigger than it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proof_video: Option<String>,
 }
 
 // Model download types
@@ -408,7 +422,7 @@ pub struct PreviewFrameParams {
     /// Two lines flush to the same width, each sized to fill it.
     #[serde(default)]
     pub justify_lines: bool,
-    pub font_name: Option<String>,     // Font name
+    pub font_name: Option<String>, // Font name
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_size: Option<u32>, // Base font size
     #[serde(skip_serializing_if = "Option::is_none")]

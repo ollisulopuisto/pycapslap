@@ -23,12 +23,12 @@ macro_rules! debug_log {
     };
 }
 
-pub mod rpc;
-pub mod types;
 pub mod audio;
-pub mod video;
 pub mod captions;
-pub mod placement;
 pub mod justify;
+pub mod placement;
+pub mod rpc;
 pub mod text_metrics;
+pub mod types;
+pub mod video;
 pub mod whisper;
