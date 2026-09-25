@@ -6,6 +6,7 @@ import {
   clampTimes,
   diffSegments,
   formatTime,
+  History,
   parseCaptionsFile,
   parseTime,
   rescaleWords,
@@ -131,4 +132,41 @@ test('builds the file to send back, keeping the rest of the sidecar', () => {
 test('names the file after the video', () => {
   assert.equal(reviewFileName(sidecar), 'talk.mp4.reviewed.capslap.json')
   assert.equal(reviewFileName({}), 'captions.reviewed.capslap.json')
+})
+
+test('undoes and redoes whole steps', () => {
+  const h = new History()
+  h.record('a', null, 0)
+  h.record('b', null, 10)
+  assert.equal(h.undo('c'), 'b')
+  assert.equal(h.undo('b'), 'a')
+  assert.equal(h.undo('a'), null)
+  assert.equal(h.redo('a'), 'b')
+  assert.equal(h.redo('b'), 'c')
+  assert.equal(h.redo('c'), null)
+})
+
+test('merges typing in one field into one step', () => {
+  const h = new History({ mergeMs: 1000 })
+  h.record('before', 'text:0', 0)
+  h.record('k1', 'text:0', 300)
+  h.record('k2', 'text:0', 900)
+  h.record('other', 'text:1', 950)
+  h.record('later', 'text:1', 5000)
+  assert.deepEqual(h.past, ['before', 'other', 'later'])
+})
+
+test('a new change drops the redo steps', () => {
+  const h = new History()
+  h.record('a', null, 0)
+  h.undo('b')
+  assert.ok(h.canRedo)
+  h.record('a2', null, 10)
+  assert.ok(!h.canRedo)
+})
+
+test('keeps at most `limit` steps', () => {
+  const h = new History({ limit: 2 })
+  for (const s of ['a', 'b', 'c']) h.record(s)
+  assert.deepEqual(h.past, ['b', 'c'])
 })

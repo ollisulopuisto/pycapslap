@@ -157,3 +157,54 @@ export function reviewFileName(file) {
   const base = file.video?.name || 'captions'
   return `${base}.reviewed.capslap.json`
 }
+
+/**
+ * Undo/redo over whole-review snapshots. `record` is called with the state *before*
+ * a change. Typing in one field is one step, not one per keystroke: a record with the
+ * same `key` as the last one within `mergeMs` is merged into it.
+ */
+export class History {
+  constructor({ limit = 200, mergeMs = 1500 } = {}) {
+    this.past = []
+    this.future = []
+    this.limit = limit
+    this.mergeMs = mergeMs
+    this.lastKey = null
+    this.lastAt = 0
+  }
+
+  record(snapshot, key = null, now = Date.now()) {
+    if (key !== null && key === this.lastKey && now - this.lastAt < this.mergeMs) {
+      this.lastAt = now
+      return
+    }
+    this.past.push(snapshot)
+    if (this.past.length > this.limit) this.past.shift()
+    this.future = []
+    this.lastKey = key
+    this.lastAt = now
+  }
+
+  /** The state to go back to, given the current one; null when there is none. */
+  undo(current) {
+    if (!this.past.length) return null
+    this.future.push(current)
+    this.lastKey = null
+    return this.past.pop()
+  }
+
+  redo(current) {
+    if (!this.future.length) return null
+    this.past.push(current)
+    this.lastKey = null
+    return this.future.pop()
+  }
+
+  get canUndo() {
+    return this.past.length > 0
+  }
+
+  get canRedo() {
+    return this.future.length > 0
+  }
+}

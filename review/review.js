@@ -3,6 +3,7 @@ import {
   buildReviewFile,
   clampTimes,
   formatTime,
+  History,
   parseCaptionsFile,
   parseTime,
   rescaleWords,
@@ -26,7 +27,7 @@ const STRINGS = {
     pickVideo: 'Valitse video',
     pickCaptions: 'Valitse tekstitykset',
     privacy: 'Mitään ei lähetetä minnekään: video ja tekstit pysyvät tällä koneella.',
-    keys: 'Välilyönti toisto/tauko · Alt+↑/↓ edellinen/seuraava teksti · Ctrl+Enter toista muokattava teksti',
+    keys: 'Välilyönti toisto/tauko · Alt+↑/↓ edellinen/seuraava teksti · Ctrl+Enter toista muokattava teksti · Ctrl/⌘+Z kumoa, Vaihto+Ctrl/⌘+Z tee uudelleen',
     restored: 'Keskeneräinen tarkistuksesi palautettiin.',
     startOver: 'Aloita alusta',
     changed: 'muutettu',
@@ -78,6 +79,48 @@ const state = {
   videoUrl: null,
   stopAtMs: null, // "play this caption" stops here
   storageKey: null,
+}
+const history = new History()
+
+// ── Undo ──────────────────────────────────────────────────────────────────────
+
+function snapshot() {
+  return structuredClone({ segments: state.segments, comments: state.comments })
+}
+
+// Call before changing the review. Typing in one field (same key) is one step.
+function remember(key = null) {
+  history.record(snapshot(), key)
+}
+
+function restore(step) {
+  if (!step) return
+  // Put the cursor back where it was, in the same caption and box.
+  const focused = document.activeElement
+  const cue = focused?.closest?.('.cue')
+  const index = cue ? Number(cue.dataset.index) : null
+  const field = ['text', 'note', 'start', 'end'].find((c) => focused?.classList?.contains(c))
+  state.segments = step.segments
+  state.comments = step.comments
+  renderCues()
+  if (index !== null && field) {
+    const el = cueItem(index)?.querySelector(`.${field}`)
+    if (el && !el.hidden) {
+      el.focus()
+      if (typeof el.value === 'string') el.setSelectionRange?.(el.value.length, el.value.length)
+    }
+  }
+  updateSummary()
+  showCaption()
+  saveDraft()
+}
+
+function undo() {
+  restore(history.undo(snapshot()))
+}
+
+function redo() {
+  restore(history.redo(snapshot()))
 }
 
 // ── Loading ───────────────────────────────────────────────────────────────────
@@ -196,6 +239,7 @@ function restoreDraft() {
 }
 
 $('start-over').addEventListener('click', () => {
+  remember()
   try {
     localStorage.removeItem(state.storageKey)
   } catch {
@@ -240,6 +284,7 @@ function renderCues() {
     }
 
     text.addEventListener('input', () => {
+      remember(`text:${index}`)
       editText(index, text.value)
       autoGrow(text)
     })
@@ -254,6 +299,7 @@ function renderCues() {
       input.addEventListener('change', () => editTimes(index, li))
     }
     note.addEventListener('input', () => {
+      remember(`note:${index}`)
       state.comments[index] = note.value
       markCue(li, index)
       updateSummary()
@@ -324,6 +370,8 @@ function editTimes(index, li) {
   start.classList.toggle('invalid', !fitted)
   end.classList.toggle('invalid', !fitted)
   if (!fitted) return
+  if (fitted.startMs === seg.startMs && fitted.endMs === seg.endMs) return
+  remember()
   seg.startMs = fitted.startMs
   seg.endMs = fitted.endMs
   seg.words = wordsFor(index)
@@ -335,6 +383,7 @@ function editTimes(index, li) {
 }
 
 function revertCue(index) {
+  remember()
   state.segments[index] = structuredClone(state.file.segments[index])
   const li = cueItem(index)
   li.querySelector('.text').value = state.segments[index].text
@@ -419,6 +468,17 @@ video.addEventListener('pause', () => {
 
 document.addEventListener('keydown', (e) => {
   if ($('workspace').hidden) return
+  // One undo for the whole review: a text box's own undo would only know its box,
+  // and would miss time edits, comments and Undo-button reverts.
+  const mod = e.ctrlKey || e.metaKey
+  const key = e.key.toLowerCase()
+  if (mod && !e.altKey && (key === 'z' || key === 'y')) {
+    if (document.activeElement?.id === 'reviewer') return
+    e.preventDefault()
+    if (key === 'y' || e.shiftKey) redo()
+    else undo()
+    return
+  }
   const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)
   if (e.key === ' ' && !typing) {
     e.preventDefault()
