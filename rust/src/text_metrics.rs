@@ -56,7 +56,12 @@ impl FontMetrics {
     pub fn measure(&self, text: &str, font_px: f32) -> f32 {
         let em_width: f32 = text
             .chars()
-            .map(|c| self.advances.get(&c).copied().unwrap_or(self.fallback_advance))
+            .map(|c| {
+                self.advances
+                    .get(&c)
+                    .copied()
+                    .unwrap_or(self.fallback_advance)
+            })
             .sum();
         em_width * font_px
     }
@@ -246,6 +251,9 @@ mod tests {
 
         let full = metrics_for("Montserrat Black").expect("bundled font");
         let family = metrics_for("Montserrat").expect("same file by family name");
-        assert_eq!(full.measure("KANNETTAVA", 60.0), family.measure("KANNETTAVA", 60.0));
+        assert_eq!(
+            full.measure("KANNETTAVA", 60.0),
+            family.measure("KANNETTAVA", 60.0)
+        );
     }
 }

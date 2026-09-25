@@ -16,7 +16,6 @@ static CACHED_WHISPER_PATH: OnceLock<Option<String>> = OnceLock::new();
 static CACHED_FFMPEG_PATH: OnceLock<Option<String>> = OnceLock::new();
 static CACHED_FFPROBE_PATH: OnceLock<Option<String>> = OnceLock::new();
 
-
 /// Bounded buffer for subprocess log collection that retains head lines (for startup logs)
 /// and a rolling tail (for error reporting), avoiding unbounded memory growth on long runs.
 #[derive(Debug)]
@@ -68,7 +67,11 @@ impl BoundedLogBuffer {
 
     pub fn error_summary(&self, count: usize) -> String {
         if !self.tail_lines.is_empty() {
-            let tail: String = self.tail_lines.iter().flat_map(|l| [l.as_str(), "\n"]).collect();
+            let tail: String = self
+                .tail_lines
+                .iter()
+                .flat_map(|l| [l.as_str(), "\n"])
+                .collect();
             tail.chars().take(count).collect()
         } else {
             self.head.chars().take(count).collect()
@@ -217,7 +220,11 @@ pub async fn transcribe_with_whisper_cpp(
             if let Some(idx) = line.find("progress = ") {
                 let rest = &line[idx + "progress = ".len()..];
                 if let Some(pct_part) = rest.split('%').next() {
-                    if let Ok(pct) = pct_part.trim().trim_start_matches('=').trim().parse::<f32>()
+                    if let Ok(pct) = pct_part
+                        .trim()
+                        .trim_start_matches('=')
+                        .trim()
+                        .parse::<f32>()
                     {
                         emit(RpcEvent::Progress {
                             id: id.into(),
@@ -243,10 +250,7 @@ pub async fn transcribe_with_whisper_cpp(
     });
     emit(RpcEvent::Log {
         id: id.into(),
-        message: format!(
-            "whisper.cpp stderr: {}",
-            stderr_buf.head_chars(500)
-        ),
+        message: format!("whisper.cpp stderr: {}", stderr_buf.head_chars(500)),
     });
 
     if !status.success() {
@@ -419,10 +423,7 @@ pub fn binary_runnable(path: &Path) -> bool {
 
         let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
         // Fat/universal binaries contain all architectures.
-        if matches!(
-            magic,
-            0xcafe_babe | 0xbeba_feca | 0xcafe_babf | 0xbfba_feca
-        ) {
+        if matches!(magic, 0xcafe_babe | 0xbeba_feca | 0xcafe_babf | 0xbfba_feca) {
             return true;
         }
         // Anything that isn't a thin Mach-O is accepted as-is.
@@ -454,7 +455,9 @@ pub async fn find_whisper_binary() -> anyhow::Result<String> {
     if let Some(cached) = CACHED_WHISPER_PATH.get() {
         return match cached {
             Some(p) => Ok(p.clone()),
-            None => Err(anyhow::anyhow!("whisper.cpp binary not found in any location")),
+            None => Err(anyhow::anyhow!(
+                "whisper.cpp binary not found in any location"
+            )),
         };
     }
 
@@ -1585,8 +1588,7 @@ pub async fn transcribe_segments_with_temp(
                 let segments = whisper_to_caption_segments(&whisper_response, p.split_by_words);
 
                 // Save to cache
-                if let Err(e) =
-                    save_cached_whisper_response(&p.audio, &p, &whisper_response).await
+                if let Err(e) = save_cached_whisper_response(&p.audio, &p, &whisper_response).await
                 {
                     emit(RpcEvent::Log {
                         id: id.into(),
@@ -1833,10 +1835,7 @@ pub async fn transcribe_with_remote_server(
         .to_string_lossy()
         .to_string();
     let mime = MimeGuess::from_path(audio_path).first_or_octet_stream();
-    let file_size = fs::metadata(audio_path)
-        .await
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let file_size = fs::metadata(audio_path).await.map(|m| m.len()).unwrap_or(0);
 
     emit(RpcEvent::Log {
         id: id.into(),
@@ -1937,8 +1936,16 @@ pub async fn transcribe_with_remote_server(
         message: format!(
             "Remote transcription completed. Duration: {:.2}s, Segments: {}, Words: {}",
             whisper_response.duration.unwrap_or(0.0),
-            whisper_response.segments.as_ref().map(|s| s.len()).unwrap_or(0),
-            whisper_response.words.as_ref().map(|w| w.len()).unwrap_or(0)
+            whisper_response
+                .segments
+                .as_ref()
+                .map(|s| s.len())
+                .unwrap_or(0),
+            whisper_response
+                .words
+                .as_ref()
+                .map(|w| w.len())
+                .unwrap_or(0)
         ),
     });
 

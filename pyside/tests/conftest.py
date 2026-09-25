@@ -3,10 +3,23 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QCoreApplication, QSettings
 from PySide6.QtWidgets import QMessageBox
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_VIDEO = REPO_ROOT / "rust" / "bin" / "test_input.mp4"
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(tmp_path):
+    """Each test gets empty QSettings, never the user's own."""
+    QCoreApplication.setOrganizationName("PyCapSlapTests")
+    QCoreApplication.setApplicationName("PyCapSlapTests")
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(
+        QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path)
+    )
+    yield
 
 
 @pytest.fixture(autouse=True)

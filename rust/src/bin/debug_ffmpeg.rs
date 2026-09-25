@@ -1,4 +1,3 @@
-
 use std::process::Command;
 
 fn main() {
@@ -26,7 +25,7 @@ fn main() {
         "/opt/homebrew/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
         "/usr/bin/ffmpeg",
-        "ffmpeg"
+        "ffmpeg",
     ];
 
     for path in paths {
@@ -38,7 +37,7 @@ fn main() {
 fn check_path(path: &str) {
     let exists = std::path::Path::new(path).exists();
     println!("  -> Exists (std::fs): {}", exists);
-    
+
     let which_res = which::which(path);
     println!("  -> Which result: {:?}", which_res);
 
@@ -47,7 +46,7 @@ fn check_path(path: &str) {
         match Command::new(path).arg("-version").output() {
             Ok(output) => {
                 println!("  -> Execution successful. Status: {}", output.status);
-            },
+            }
             Err(e) => {
                 println!("  -> Execution failed: {}", e);
             }

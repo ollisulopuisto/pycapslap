@@ -738,7 +738,27 @@ def test_render_asks_for_the_chosen_proof_copy(qtbot, tmp_path):
     window._on_render_video_requested()
     burn = [p for m, p in calls if m == "burn"][-1]
     assert burn["proofShortSide"] is None
+    # No intro or outro chosen: none asked for.
+    assert (burn["introVideo"], burn["outroVideo"]) == (None, None)
+
+    # Chosen clips go with every render, and outlive the window.
+    window.set_bumper("outro", "/clips/listen-now.mp4")
+    window._on_render_video_requested()
+    burn = [p for m, p in calls if m == "burn"][-1]
+    assert (burn["introVideo"], burn["outroVideo"]) == (None, "/clips/listen-now.mp4")
+    assert window.bumpers_btn.text() == "+ outro"
     window.close()
+
+    again = MainWindow(core_client=MockCore())
+    qtbot.addWidget(again)
+    assert again.bumper_path("outro") == "/clips/listen-now.mp4"
+    again._fill_bumpers_menu()
+    labels = [a.text() for a in again.bumpers_menu.actions() if a.text()]
+    assert "Outro: listen-now.mp4" in labels and "No Outro" in labels
+    assert "No Intro" not in labels
+    again.set_bumper("outro", "")
+    assert again.bumpers_btn.text() == "No intro/outro"
+    again.close()
 
 
 def test_core_replies_reach_the_gui_thread(qtbot):

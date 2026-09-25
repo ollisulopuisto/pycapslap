@@ -212,7 +212,10 @@ pub fn row_activity(gray: &[u8], width: usize, height: usize) -> Vec<f32> {
             let b_next = r_bot[x + 1] as f32;
 
             let gx = -t_prev - 2.0 * m_prev - b_prev + t_next + 2.0 * m_next + b_next;
-            let gy = -t_prev - 2.0 * (r_top[x] as f32) - t_next + b_prev + 2.0 * (r_bot[x] as f32) + b_next;
+            let gy = -t_prev - 2.0 * (r_top[x] as f32) - t_next
+                + b_prev
+                + 2.0 * (r_bot[x] as f32)
+                + b_next;
             energy += gx.abs() + gy.abs();
 
             let v = r_curr[x] as f32;
@@ -542,10 +545,9 @@ pub async fn auto_place_captions(params: AutoPlaceParams) -> Result<AutoPlaceRes
 
     let mut captions: Vec<PlacementCaption> = Vec::new();
     for cue in &layout.cues {
-        if captions
-            .last()
-            .is_some_and(|last| last.start_ms == cue.group_start_ms && last.end_ms == cue.group_end_ms)
-        {
+        if captions.last().is_some_and(|last| {
+            last.start_ms == cue.group_start_ms && last.end_ms == cue.group_end_ms
+        }) {
             continue;
         }
         captions.push(PlacementCaption {

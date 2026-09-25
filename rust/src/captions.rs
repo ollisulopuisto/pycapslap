@@ -118,9 +118,13 @@ pub async fn extract_and_transcribe_with_server(
             video_file: Some(input_video.to_string()),
             whisper_base_url,
         };
-        let transcription =
-            whisper::transcribe_segments_with_temp(id, transcribe_params, Some(&temp_dir), &mut emit)
-                .await?;
+        let transcription = whisper::transcribe_segments_with_temp(
+            id,
+            transcribe_params,
+            Some(&temp_dir),
+            &mut emit,
+        )
+        .await?;
 
         Ok::<_, anyhow::Error>((probe_result, audio_result.audio, transcription))
     }
@@ -197,6 +201,11 @@ pub async fn burn_captions_with_segments(
             })
             .collect();
 
+        let bumpers = Bumpers {
+            intro: probe_bumper(id, params.intro_video.as_deref(), "Intro", &mut emit).await?,
+            outro: probe_bumper(id, params.outro_video.as_deref(), "Outro", &mut emit).await?,
+        };
+
         optimized_multi_format_encode(
             id,
             &params.input_video,
@@ -223,6 +232,7 @@ pub async fn burn_captions_with_segments(
             trim_start_ms as f64 / 1000.0,
             (trim_end_at_ms - trim_start_ms) as f64 / 1000.0,
             params.proof_short_side.filter(|&side| side > 0),
+            &bumpers,
             &mut emit,
         )
         .await
@@ -288,6 +298,7 @@ pub async fn generate_captions_single_pass(
             0.0,
             probe_result.duration.unwrap_or(0.0),
             None, // the one-shot generate path makes no proof copy
+            &Bumpers::default(),
             &mut emit,
         )
         .await?;
@@ -606,12 +617,13 @@ async fn render_caption_layer(
     let (black_slice, white_slice) = raw.split_at(total_pixels * 3);
     let mut out_buffer = vec![0u8; total_pixels * 4];
 
-    for (out_px, (b_px, w_px)) in out_buffer
-        .as_chunks_mut::<4>()
-        .0
-        .iter_mut()
-        .zip(black_slice.as_chunks::<3>().0.iter().zip(white_slice.as_chunks::<3>().0.iter()))
-    {
+    for (out_px, (b_px, w_px)) in out_buffer.as_chunks_mut::<4>().0.iter_mut().zip(
+        black_slice
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(white_slice.as_chunks::<3>().0.iter()),
+    ) {
         let diff0 = w_px[0].saturating_sub(b_px[0]);
         let diff1 = w_px[1].saturating_sub(b_px[1]);
         let diff2 = w_px[2].saturating_sub(b_px[2]);
@@ -792,7 +804,9 @@ pub async fn generate_preview_frame(
         let mime = if as_jpeg { "jpeg" } else { "png" };
         let data_uri = format!("data:image/{};base64,{}", mime, encoded);
 
-        Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult { image_data: data_uri })
+        Ok::<_, anyhow::Error>(crate::types::PreviewFrameResult {
+            image_data: data_uri,
+        })
     }
     .await;
 
@@ -1098,6 +1112,7 @@ async fn optimized_multi_format_encode(
     trim_start_seconds: f64,
     output_duration_seconds: f64,
     proof_short_side: Option<u32>,
+    bumpers: &Bumpers,
     emit: &mut impl FnMut(RpcEvent),
 ) -> Result<Vec<CaptionedVideoResult>> {
     // Fail fast if libass is not available (required for burning subtitles)
@@ -1218,18 +1233,23 @@ async fn optimized_multi_format_encode(
         let input_path = input_path.clone();
         let crop_strat = crop_strategy.clone().unwrap_or_else(|| "fit".to_string());
         let tx = tx.clone();
+        let bumpers = bumpers.clone();
 
         tasks.spawn(async move {
             // Acquire semaphore permit for bounded concurrency
             let _permit = semaphore.acquire().await.unwrap();
 
             let safe_format = format.replace(':', "x");
-            let captioned_path =
-                unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
+            let captioned_path = unique_output_path(&format!("{}_{}.mp4", input_path, safe_format));
             // Only when the video is bigger than the proof; a copy the same size is waste.
             let proof = proof_short_side
                 .filter(|&side| side < target_w.min(target_h))
-                .map(|side| (side, unique_output_path(&proof_output_path(&captioned_path, side))));
+                .map(|side| {
+                    (
+                        side,
+                        unique_output_path(&proof_output_path(&captioned_path, side)),
+                    )
+                });
 
             // Single-pass format conversion + caption burning with hardware acceleration
             optimized_single_format_encode(
@@ -1244,6 +1264,7 @@ async fn optimized_multi_format_encode(
                 trim_start_seconds,
                 output_duration_seconds,
                 proof.as_ref().map(|(side, path)| (*side, path.as_str())),
+                &bumpers,
                 tx,
                 idx,
             )
@@ -1325,6 +1346,7 @@ async fn optimized_single_format_encode(
     trim_start_seconds: f64,
     output_duration_seconds: f64,
     proof: Option<(u32, &str)>,
+    bumpers: &Bumpers,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
 ) -> Result<()> {
@@ -1344,6 +1366,7 @@ async fn optimized_single_format_encode(
         trim_start_seconds,
         output_duration_seconds,
         proof,
+        bumpers,
         hardware_encoder,
         tx.clone(),
         index,
@@ -1364,6 +1387,7 @@ async fn optimized_single_format_encode(
             trim_start_seconds,
             output_duration_seconds,
             proof,
+            bumpers,
             crate::video::HardwareEncoder::Software,
             tx,
             index,
@@ -1388,6 +1412,7 @@ async fn try_encode_with_encoder(
     trim_start_seconds: f64,
     output_duration_seconds: f64,
     proof: Option<(u32, &str)>,
+    bumpers: &Bumpers,
     hardware_encoder: crate::video::HardwareEncoder,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
@@ -1426,15 +1451,35 @@ async fn try_encode_with_encoder(
 
     // With a proof copy the burned frame is split in two: the full-size output as
     // before, and a scaled-down copy encoded alongside it, so the captions are drawn
-    // and the source decoded only once.
-    let filter_complex = proof.map(|(side, _)| {
-        format!(
-            "[0:v:0]{vf},split=2[full][small];[small]{}[proof]",
-            proof_scale_filter(target_w, target_h, side)
-        )
-    });
+    // and the source decoded only once. With an intro or outro, the clips are joined
+    // to the burned video in the same graph, and the audio comes out of it too.
+    let proof_scale = proof.map(|(side, _)| proof_scale_filter(target_w, target_h, side));
+    let filter_complex = if bumpers.is_empty() {
+        proof_scale
+            .as_ref()
+            .map(|scale| format!("[0:v:0]{vf},split=2[full][small];[small]{scale}[proof]"))
+    } else {
+        Some(bumper_graph(
+            &vf,
+            target_w,
+            target_h,
+            probe_result.fps.filter(|f| *f > 0.0).unwrap_or(30.0),
+            pixel_format(hardware_encoder),
+            probe_result.audio,
+            output_duration_seconds,
+            bumpers,
+            proof_scale.as_deref(),
+        ))
+    };
+    // Audio of the joined video comes from the graph, of a plain one from the source.
+    let (full_audio, proof_audio) = if bumpers.is_empty() {
+        ("0:a?", "0:a?")
+    } else {
+        ("[afull]", "[aproof]")
+    };
 
-    let duration_us = Some((output_duration_seconds * 1_000_000.0) as u64);
+    let total_duration_seconds = output_duration_seconds + bumpers.duration();
+    let duration_us = Some((total_duration_seconds * 1_000_000.0) as u64);
     let trim_start_arg = format!("{trim_start_seconds:.3}");
     let output_duration_arg = format!("{output_duration_seconds:.3}");
 
@@ -1443,14 +1488,12 @@ async fn try_encode_with_encoder(
         if trim_start_seconds > 0.0 {
             args.extend_from_slice(&["-ss", &trim_start_arg]);
         }
-        args.extend_from_slice(&[
-            "-i",
-            input_video,
-            "-t",
-            &output_duration_arg,
-            "-progress",
-            "pipe:1", // Enable progress reporting
-        ]);
+        // -t before -i limits this input only, so the clips joined to it keep theirs.
+        args.extend_from_slice(&["-t", &output_duration_arg, "-i", input_video]);
+        for clip in bumpers.clips() {
+            args.extend_from_slice(&["-i", &clip.path]);
+        }
+        args.extend_from_slice(&["-progress", "pipe:1"]); // Enable progress reporting
         match &filter_complex {
             Some(graph) => args.extend_from_slice(&["-filter_complex", graph, "-map", "[full]"]),
             // Map first video stream
@@ -1462,7 +1505,7 @@ async fn try_encode_with_encoder(
             "-threads",
             "0", // Use all available CPU cores
             "-map",
-            "0:a?", // Map audio if present (optional)
+            full_audio, // Audio if present (optional)
         ]);
 
         // Add hardware-optimized encoding parameters
@@ -1515,15 +1558,20 @@ async fn try_encode_with_encoder(
             }
         }
 
-        args.push("-c:a");
-        args.push(audio_codec);
+        if bumpers.is_empty() {
+            args.push("-c:a");
+            args.push(audio_codec);
 
-        // Add audio-specific args
-        args.extend(audio_args.iter().copied());
+            // Add audio-specific args
+            args.extend(audio_args.iter().copied());
 
-        // Add explicit bitrate for re-encoded audio if not using copy
-        if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
-            args.extend_from_slice(&["-b:a", "160k"]);
+            // Add explicit bitrate for re-encoded audio if not using copy
+            if audio_codec != "copy" && audio_codec == "aac" && audio_args.is_empty() {
+                args.extend_from_slice(&["-b:a", "160k"]);
+            }
+        } else {
+            // Joined audio is new audio: nothing to copy.
+            args.extend_from_slice(&["-c:a", "aac", "-b:a", "160k"]);
         }
 
         args.extend_from_slice(&[
@@ -1534,7 +1582,7 @@ async fn try_encode_with_encoder(
 
         // Second output: the proof copy, same encoder family at a proofing bitrate.
         if let Some((_, proof_path)) = proof {
-            args.extend_from_slice(&["-map", "[proof]", "-map", "0:a?"]);
+            args.extend_from_slice(&["-map", "[proof]", "-map", proof_audio]);
             args.extend(proof_video_args(hardware_encoder).iter().copied());
             args.extend_from_slice(&["-g", &gop_size_str, "-c:a", "aac", "-b:a", "128k"]);
             args.extend_from_slice(&["-movflags", "+faststart", proof_path]);
@@ -1603,6 +1651,131 @@ async fn try_encode_with_encoder(
     Ok(())
 }
 
+/// A ready-made clip joined before or after the captioned video.
+#[derive(Clone, Debug)]
+struct Bumper {
+    path: String,
+    duration: f64,
+    has_audio: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Bumpers {
+    intro: Option<Bumper>,
+    outro: Option<Bumper>,
+}
+
+impl Bumpers {
+    fn is_empty(&self) -> bool {
+        self.intro.is_none() && self.outro.is_none()
+    }
+
+    /// In input order: the intro is input 1 when there is one, the outro after it.
+    fn clips(&self) -> impl Iterator<Item = &Bumper> {
+        self.intro.iter().chain(self.outro.iter())
+    }
+
+    fn duration(&self) -> f64 {
+        self.clips().map(|c| c.duration).sum()
+    }
+}
+
+async fn probe_bumper(
+    id: &str,
+    path: Option<&str>,
+    what: &str,
+    emit: &mut impl FnMut(RpcEvent),
+) -> Result<Option<Bumper>> {
+    let Some(path) = path.filter(|p| !p.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if !std::path::Path::new(path).is_file() {
+        return Err(anyhow!("{what} clip not found: {path}"));
+    }
+    let probed = probe(id, path, &mut *emit).await?;
+    let duration = probed.duration.filter(|d| *d > 0.0);
+    match (probed.video, duration) {
+        (true, Some(duration)) => Ok(Some(Bumper {
+            path: path.to_string(),
+            duration,
+            has_audio: probed.audio,
+        })),
+        _ => Err(anyhow!("{what} clip has no video to show: {path}")),
+    }
+}
+
+fn pixel_format(encoder: crate::video::HardwareEncoder) -> &'static str {
+    match encoder {
+        crate::video::HardwareEncoder::Software => "yuv420p",
+        _ => "nv12",
+    }
+}
+
+/// The filter graph for a captioned video with an intro and/or outro: every part
+/// brought to the output's frame, rate and pixel format, audio to 48 kHz stereo
+/// (silence for a part without any), then concatenated. Outputs `[full]` and
+/// `[afull]`, plus `[proof]` and `[aproof]` when `proof_scale` is given.
+#[allow(clippy::too_many_arguments)]
+fn bumper_graph(
+    vf: &str,
+    target_w: u32,
+    target_h: u32,
+    fps: f64,
+    pix_fmt: &str,
+    main_has_audio: bool,
+    main_duration: f64,
+    bumpers: &Bumpers,
+    proof_scale: Option<&str>,
+) -> String {
+    const AUDIO: &str = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo";
+    let silence =
+        |secs: f64| format!("anullsrc=r=48000:cl=stereo,atrim=duration={secs:.3},{AUDIO}");
+    let mut chains = vec![
+        format!("[0:v:0]{vf},setsar=1,fps={fps:.3}[v0]"),
+        if main_has_audio {
+            format!("[0:a:0]{AUDIO}[a0]")
+        } else {
+            format!("{}[a0]", silence(main_duration))
+        },
+    ];
+    // Intro, main, outro, by input number.
+    let mut order = Vec::new();
+    let mut input = 1;
+    for (clip, is_intro) in [(&bumpers.intro, true), (&bumpers.outro, false)] {
+        let Some(clip) = clip else { continue };
+        chains.push(format!(
+            "[{input}:v:0]scale={target_w}:{target_h}:flags=lanczos:force_original_aspect_ratio=decrease,\
+             pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps={fps:.3},format={pix_fmt}[v{input}]"
+        ));
+        chains.push(if clip.has_audio {
+            format!("[{input}:a:0]{AUDIO}[a{input}]")
+        } else {
+            format!("{}[a{input}]", silence(clip.duration))
+        });
+        if is_intro {
+            order.push(input);
+        }
+        input += 1;
+    }
+    order.push(0);
+    if bumpers.outro.is_some() {
+        order.push(input - 1);
+    }
+    let parts: String = order.iter().map(|i| format!("[v{i}][a{i}]")).collect();
+    let n = order.len();
+    match proof_scale {
+        None => chains.push(format!("{parts}concat=n={n}:v=1:a=1[full][afull]")),
+        Some(scale) => {
+            chains.push(format!("{parts}concat=n={n}:v=1:a=1[joined][ajoined]"));
+            chains.push(format!(
+                "[joined]split=2[full][small];[small]{scale}[proof]"
+            ));
+            chains.push("[ajoined]asplit=2[afull][aproof]".to_string());
+        }
+    }
+    chains.join(";")
+}
+
 /// Scales a proof copy so its short side is `short_side`, keeping the aspect ratio
 /// (the other side rounded to even, as H.264 needs).
 fn proof_scale_filter(target_w: u32, target_h: u32, short_side: u32) -> String {
@@ -1624,12 +1797,24 @@ fn proof_output_path(captioned_path: &str, short_side: u32) -> String {
 /// Encoder settings for a proof copy: small files meant for watching, not publishing.
 fn proof_video_args(encoder: crate::video::HardwareEncoder) -> &'static [&'static str] {
     match encoder {
-        crate::video::HardwareEncoder::VideoToolbox => {
-            &["-c:v", "h264_videotoolbox", "-b:v", "2500k", "-allow_sw", "1"]
-        }
-        crate::video::HardwareEncoder::Nvenc => {
-            &["-c:v", "h264_nvenc", "-cq", "26", "-preset", "p5", "-rc", "vbr"]
-        }
+        crate::video::HardwareEncoder::VideoToolbox => &[
+            "-c:v",
+            "h264_videotoolbox",
+            "-b:v",
+            "2500k",
+            "-allow_sw",
+            "1",
+        ],
+        crate::video::HardwareEncoder::Nvenc => &[
+            "-c:v",
+            "h264_nvenc",
+            "-cq",
+            "26",
+            "-preset",
+            "p5",
+            "-rc",
+            "vbr",
+        ],
         crate::video::HardwareEncoder::Software => {
             &["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
         }
@@ -1735,7 +1920,11 @@ fn segment_phrases(segments: &[CaptionSegment]) -> Vec<Phrase> {
                     tail.text.push_str(&syllable.text);
                     tail.end_ms = tail.end_ms.max(syllable.end_ms);
                 }
-                previous.end_ms = previous.spans.last().map(|w| w.end_ms).unwrap_or(previous.end_ms);
+                previous.end_ms = previous
+                    .spans
+                    .last()
+                    .map(|w| w.end_ms)
+                    .unwrap_or(previous.end_ms);
                 previous.tokens = previous.spans.iter().map(|x| x.text.clone()).collect();
                 if spans.is_empty() {
                     continue;
@@ -1890,8 +2079,6 @@ fn normalize_tokens(words: &[WordSpan]) -> Vec<String> {
         .map(|t| t.to_uppercase())
         .collect()
 }
-
-
 
 // Color tags use BBGGRR (no alpha) for \1c
 fn bgr_from_aa_bgrr(aa_bgrr: &str) -> String {
@@ -2854,8 +3041,6 @@ fn default_ass_style(
     }
 }
 
-
-
 /// Convert hex color string (e.g., "#ffffff") to ASS color format (e.g., "&H00FFFFFF")
 fn hex_to_ass_color(hex: &str) -> String {
     let hex = hex.trim_start_matches('#');
@@ -2870,12 +3055,9 @@ fn hex_to_ass_color(hex: &str) -> String {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_assemble_colored_two_lines_hyphenation() {
@@ -2900,7 +3082,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn justified_cues_carry_one_font_size_per_line() {
         let segments = vec![CaptionSegment {
@@ -2908,23 +3089,57 @@ mod tests {
             end_ms: 2000,
             text: "vähän niinku huonosta miesvalinnasta".to_string(),
             words: vec![
-                WordSpan { start_ms: 0, end_ms: 500, text: "vähän".into(), glue_to_previous: false },
-                WordSpan { start_ms: 500, end_ms: 1000, text: "niinku".into(), glue_to_previous: false },
-                WordSpan { start_ms: 1000, end_ms: 1500, text: "huonosta".into(), glue_to_previous: false },
-                WordSpan { start_ms: 1500, end_ms: 2000, text: "miesvalinnasta".into(), glue_to_previous: false },
+                WordSpan {
+                    start_ms: 0,
+                    end_ms: 500,
+                    text: "vähän".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 500,
+                    end_ms: 1000,
+                    text: "niinku".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 1000,
+                    end_ms: 1500,
+                    text: "huonosta".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 1500,
+                    end_ms: 2000,
+                    text: "miesvalinnasta".into(),
+                    glue_to_previous: false,
+                },
             ],
         }];
 
         let style = default_ass_style(
-            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
         );
         let doc = build_ass_document(
-            1080, 1920, &style, &segments,
+            1080,
+            1920,
+            &style,
+            &segments,
             false, // karaoke
             false, // multiline
             true,  // justify_lines
             false, // glow
-            &[], &[],
+            &[],
+            &[],
         )
         .expect("document builds");
 
@@ -2934,7 +3149,10 @@ mod tests {
             .expect("a dialogue line");
 
         // Two lines, and the shorter one is set larger so both fill the box.
-        assert!(dialogue.contains(r"\N"), "expected a line break in {dialogue}");
+        assert!(
+            dialogue.contains(r"\N"),
+            "expected a line break in {dialogue}"
+        );
         let sizes: Vec<u32> = dialogue
             .match_indices(r"\fs")
             .filter_map(|(i, _)| {
@@ -2962,16 +3180,45 @@ mod tests {
             end_ms: 1000,
             text: "yksi kaksi".to_string(),
             words: vec![
-                WordSpan { start_ms: 0, end_ms: 500, text: "yksi".into(), glue_to_previous: false },
-                WordSpan { start_ms: 500, end_ms: 1000, text: "kaksi".into(), glue_to_previous: false },
+                WordSpan {
+                    start_ms: 0,
+                    end_ms: 500,
+                    text: "yksi".into(),
+                    glue_to_previous: false,
+                },
+                WordSpan {
+                    start_ms: 500,
+                    end_ms: 1000,
+                    text: "kaksi".into(),
+                    glue_to_previous: false,
+                },
             ],
         }];
 
         let style = default_ass_style(
-            1080, 1920, Some("Montserrat Black"), None, None, None, None, false, false, None, Some(80),
+            1080,
+            1920,
+            Some("Montserrat Black"),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            None,
+            Some(80),
         );
         let doc = build_ass_document(
-            1080, 1920, &style, &segments, false, false, false, false, &[], &[],
+            1080,
+            1920,
+            &style,
+            &segments,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &[],
         )
         .expect("document builds");
 
@@ -2980,7 +3227,10 @@ mod tests {
             .find(|l| l.starts_with("Dialogue:"))
             .expect("a dialogue line");
         assert!(dialogue.contains(r"\q0"), "expected \\q0 in {dialogue}");
-        assert!(!dialogue.contains(r"\N"), "no forced break expected in {dialogue}");
+        assert!(
+            !dialogue.contains(r"\N"),
+            "no forced break expected in {dialogue}"
+        );
     }
 }
 
@@ -3002,6 +3252,84 @@ mod tests_proof_copy {
             "/v/talk.mp4_9x16_proof720p.mp4"
         );
         assert_eq!(proof_output_path("/v/raw", 540), "/v/raw_proof540p.mp4");
+    }
+
+    fn clip(path: &str, duration: f64, has_audio: bool) -> Bumper {
+        Bumper {
+            path: path.into(),
+            duration,
+            has_audio,
+        }
+    }
+
+    #[test]
+    fn intro_and_outro_play_around_the_video() {
+        let bumpers = Bumpers {
+            intro: Some(clip("intro.mp4", 3.0, true)),
+            outro: Some(clip("outro.mov", 5.5, false)),
+        };
+        assert_eq!(bumpers.duration(), 8.5);
+        let paths: Vec<_> = bumpers.clips().map(|c| c.path.as_str()).collect();
+        assert_eq!(paths, ["intro.mp4", "outro.mov"]);
+        let graph = bumper_graph("VF", 1080, 1920, 25.0, "nv12", true, 60.0, &bumpers, None);
+        assert!(graph.contains("[0:v:0]VF,setsar=1,fps=25.000[v0]"));
+        assert!(graph.contains("[1:v:0]scale=1080:1920:"));
+        assert!(graph.contains(
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=25.000,format=nv12[v1]"
+        ));
+        assert!(graph.contains("[1:a:0]aresample=48000"));
+        // The outro has no sound of its own: silence as long as it is.
+        assert!(graph.contains("anullsrc=r=48000:cl=stereo,atrim=duration=5.500,"));
+        assert!(graph.ends_with("[v1][a1][v0][a0][v2][a2]concat=n=3:v=1:a=1[full][afull]"));
+    }
+
+    #[test]
+    fn an_outro_alone_is_input_one_and_comes_last() {
+        let bumpers = Bumpers {
+            intro: None,
+            outro: Some(clip("outro.mp4", 4.0, true)),
+        };
+        let graph = bumper_graph(
+            "VF", 1920, 1080, 30.0, "yuv420p", false, 12.0, &bumpers, None,
+        );
+        assert!(graph.contains("atrim=duration=12.000,")); // silent main video
+        assert!(graph.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[full][afull]"));
+    }
+
+    #[test]
+    fn the_proof_copy_is_split_after_the_join() {
+        let bumpers = Bumpers {
+            intro: Some(clip("i.mp4", 2.0, true)),
+            outro: None,
+        };
+        let graph = bumper_graph(
+            "VF",
+            1920,
+            1080,
+            30.0,
+            "nv12",
+            true,
+            10.0,
+            &bumpers,
+            Some("scale=-2:720"),
+        );
+        assert!(graph.contains("concat=n=2:v=1:a=1[joined][ajoined]"));
+        assert!(graph.contains("[joined]split=2[full][small];[small]scale=-2:720[proof]"));
+        assert!(graph.ends_with("[ajoined]asplit=2[afull][aproof]"));
+    }
+
+    #[test]
+    fn intro_and_outro_are_optional_in_burn_params() {
+        let base = serde_json::json!({
+            "inputVideo": "in.mp4", "segments": [], "exportFormats": ["16:9"],
+            "karaoke": false, "fontName": null
+        });
+        let without: BurnCaptionsParams = serde_json::from_value(base.clone()).unwrap();
+        assert_eq!((without.intro_video, without.outro_video), (None, None));
+        let mut with = base;
+        with["outroVideo"] = serde_json::json!("/clips/outro.mp4");
+        let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
+        assert_eq!(with.outro_video.as_deref(), Some("/clips/outro.mp4"));
     }
 
     #[test]

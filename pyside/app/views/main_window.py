@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QDesktopServices,
     QDragEnterEvent,
@@ -73,6 +73,11 @@ PROOF_COPIES = [
     ("+ 720p proof", 720),
     ("+ 540p proof", 540),
 ]
+
+# Ready-made clips joined before and after every render (a channel ident, "listen
+# to the new episode"), kept between sessions: which one, its QSettings key.
+BUMPERS = {"intro": "render/intro_video", "outro": "render/outro_video"}
+BUMPER_FILES = "Video (*.mp4 *.mov *.m4v *.mkv *.webm)"
 
 # Where the review page (review/ in this repo) is published by GitHub Pages.
 REVIEW_PAGE_URL = "https://ollisulopuisto.github.io/pycapslap/"
@@ -214,6 +219,14 @@ class MainWindow(QMainWindow):
             "Also render a smaller proof copy, in the same pass as the full-size video"
         )
         action_bar.addWidget(self.proof_combo)
+
+        # Intro and outro clips, joined to the render in the same encode.
+        self.bumpers_btn = QPushButton()
+        self.bumpers_menu = QMenu(self.bumpers_btn)
+        self.bumpers_menu.aboutToShow.connect(self._fill_bumpers_menu)
+        self.bumpers_btn.setMenu(self.bumpers_menu)
+        action_bar.addWidget(self.bumpers_btn)
+        self._update_bumpers_button()
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
@@ -905,6 +918,54 @@ class MainWindow(QMainWindow):
         self.status.showMessage(result.summary(), 8000)
         QMessageBox.information(self, "Import Review", message)
 
+    def bumper_path(self, which: str) -> str:
+        """The intro or outro clip to join to renders; '' for none."""
+        return str(QSettings().value(BUMPERS[which], "", type=str) or "")
+
+    def set_bumper(self, which: str, path: str) -> None:
+        QSettings().setValue(BUMPERS[which], path)
+        self._update_bumpers_button()
+
+    def _update_bumpers_button(self) -> None:
+        intro, outro = self.bumper_path("intro"), self.bumper_path("outro")
+        parts = [name for name, path in (("intro", intro), ("outro", outro)) if path]
+        self.bumpers_btn.setText(
+            "+ " + " & ".join(parts) if parts else "No intro/outro"
+        )
+        lines = [
+            f"{which.capitalize()}: {Path(path).name if path else 'none'}"
+            for which, path in (("intro", intro), ("outro", outro))
+        ]
+        self.bumpers_btn.setToolTip(
+            "Clips played before and after the captioned video in every render.\n"
+            + "\n".join(lines)
+        )
+
+    def _fill_bumpers_menu(self) -> None:
+        menu = self.bumpers_menu
+        menu.clear()
+        for which in BUMPERS:
+            path = self.bumper_path(which)
+            title = which.capitalize()
+            current = menu.addAction(
+                f"{title}: {Path(path).name}" if path else f"{title}: none"
+            )
+            current.setEnabled(False)
+            menu.addAction(f"Choose {title}…", lambda w=which: self._choose_bumper(w))
+            if path:
+                menu.addAction(f"No {title}", lambda w=which: self.set_bumper(w, ""))
+            menu.addSeparator()
+
+    def _choose_bumper(self, which: str) -> None:
+        start = self.bumper_path(which) or os.path.dirname(
+            self.project.video_path or ""
+        )
+        path, _ = QFileDialog.getOpenFileName(
+            self, f"Choose {which.capitalize()} Clip", start, BUMPER_FILES
+        )
+        if path:
+            self.set_bumper(which, path)
+
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
@@ -944,6 +1005,8 @@ class MainWindow(QMainWindow):
             "trimEndMs": trim_end_ms,
             "exportFormats": [export_fmt],
             "proofShortSide": self.proof_combo.currentData() or None,
+            "introVideo": self.bumper_path("intro") or None,
+            "outroVideo": self.bumper_path("outro") or None,
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
             "justifyLines": self.project.style.justify_lines,

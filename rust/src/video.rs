@@ -92,8 +92,6 @@ fn get_frame_cache() -> &'static RwLock<FrameCache> {
     FIRST_FRAME_CACHE.get_or_init(|| RwLock::new(BoundedCache::new(FRAME_CACHE_CAPACITY)))
 }
 
-
-
 static FFMPEG_SYNC_PATH: OnceLock<String> = OnceLock::new();
 
 /// Get FFmpeg binary path synchronously (for use in sync functions)
@@ -1723,7 +1721,10 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
 
     // Update cache
     if let Ok(mut cache) = get_frame_cache().write() {
-        cache.insert(canonical, (mtime, size, std::sync::Arc::from(result.as_str())));
+        cache.insert(
+            canonical,
+            (mtime, size, std::sync::Arc::from(result.as_str())),
+        );
     }
 
     Ok(result)
@@ -1746,15 +1747,25 @@ mod tests {
         );
         // The shape is kept.
         let ratio = w as f32 / h as f32;
-        assert!((ratio - 9.0 / 16.0).abs() < 0.01, "aspect drifted to {}", ratio);
+        assert!(
+            (ratio - 9.0 / 16.0).abs() < 0.01,
+            "aspect drifted to {}",
+            ratio
+        );
         assert_eq!((w % 2, h % 2), (0, 0), "dimensions must stay even");
     }
 
     #[test]
     fn ordinary_sizes_pass_through_untouched() {
         use super::*;
-        assert_eq!(target_dimensions(Some("1080p"), 1920, 1080, TargetAR::AR9x16), (1080, 1920));
-        assert_eq!(target_dimensions(Some("4k"), 3840, 2160, TargetAR::AR9x16), (2160, 3840));
+        assert_eq!(
+            target_dimensions(Some("1080p"), 1920, 1080, TargetAR::AR9x16),
+            (1080, 1920)
+        );
+        assert_eq!(
+            target_dimensions(Some("4k"), 3840, 2160, TargetAR::AR9x16),
+            (2160, 3840)
+        );
         // A 16:9 source into 16:9 at its own size needs no clamping.
         assert_eq!(
             target_dimensions(Some("original"), 1920, 1080, TargetAR::AR16x9),
@@ -2183,14 +2194,20 @@ mod tests {
         // Verify base64 decode
         use base64::{engine::general_purpose, Engine as _};
         let b64_part = first.strip_prefix("data:image/jpeg;base64,").unwrap();
-        let decoded = general_purpose::STANDARD.decode(b64_part).expect("valid base64");
+        let decoded = general_purpose::STANDARD
+            .decode(b64_part)
+            .expect("valid base64");
         assert!(!decoded.is_empty());
         // JPEG magic header bytes: 0xFF, 0xD8
         assert_eq!(decoded[0], 0xFF);
         assert_eq!(decoded[1], 0xD8);
 
         // Verify it is compact (< 250 KB)
-        assert!(first.len() < 250_000, "thumbnail data URI should be compact, was {}", first.len());
+        assert!(
+            first.len() < 250_000,
+            "thumbnail data URI should be compact, was {}",
+            first.len()
+        );
 
         // Cache hit test
         let second = extract_first_frame(sample).expect("cached extract failed");
