@@ -223,6 +223,7 @@ def test_deleting_an_episode_removes_its_files(client, tmp_path):
 
 def test_pages_keep_the_link_out_of_referrers_and_search(client):
     r = client.get("/")
+    assert r.text.startswith("Videoiden hyväksyntä")
     assert r.headers["referrer-policy"] == "no-referrer"
     assert "noindex" in r.headers["x-robots-tag"]
     assert client.get("/admin").status_code == 200

@@ -101,7 +101,7 @@ def create_app(settings: Settings) -> FastAPI:
     db_path = settings.data_dir / "portal.sqlite3"
     db.connect(db_path).close()  # creates the schema
 
-    app = FastAPI(title="PyCapSlap review portal", docs_url=None, redoc_url=None)
+    app = FastAPI(title="Videoiden hyväksyntä", docs_url=None, redoc_url=None)
 
     @app.middleware("http")
     async def private_headers(request: Request, call_next):
@@ -588,7 +588,9 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def home():
-        return PlainTextResponse("PyCapSlap review portal. Use the link you were sent.")
+        return PlainTextResponse(
+            "Videoiden hyväksyntä. Käytä linkkiä, jonka sait. / Use the link you were sent."
+        )
 
     @app.get("/s/{token}", include_in_schema=False)
     @app.get("/s/{token}/e/{episode_id}", include_in_schema=False)
