@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Added
+- A **Stop** button next to Play: it pauses and goes back to the start of the trim, so checking where the cut begins is one click. Playback stops by itself at the trim's end and shows its last frame; Play from there starts the trim over. Before, the player knew nothing of the trim and played the whole video.
+
 ### Fixed
 - The editor previewed the source frame while the render burned captions onto an export canvas chosen afterwards, in a dialog. For a 16:9 clip exported 9:16 that put the captions somewhere the preview never showed them — down in the padding. The export format is now a dropdown in the toolbar, it drives the layout, the rendered layer and the burn alike, and the editor draws the canvas that format produces: the video fitted inside it, the padding around it, the safe zones and the caption block measured against the whole frame. "Source" keeps the video's own frame and is the default. `previewLayout` takes the format and answers with the canvas it used, so the geometry is worked out in one place instead of being re-derived on the Python side.
 - Until a frame had been decoded, the frame size was a guess and so was every layout computed from it, with nothing to correct it later. The canvas now says when the video's real size arrives and the layout is redone.

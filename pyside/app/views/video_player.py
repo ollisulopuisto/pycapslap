@@ -31,6 +31,10 @@ class VideoPlayerWidget(QWidget):
         self._pending_seek_time: float | None = None
         self._pending_target_ms: int | None = None
         self._is_scrubbing = False
+        # The trimmed part of the video. Stop returns to its start and playback stops at
+        # its end; None means the video's own end.
+        self._range_start_ms = 0
+        self._range_end_ms: int | None = None
 
         self._setup_player()
         self._setup_ui()
@@ -65,6 +69,13 @@ class VideoPlayerWidget(QWidget):
         self.play_btn.setFixedWidth(65)
         self.play_btn.clicked.connect(self.toggle_play_pause)
         controls_layout.addWidget(self.play_btn)
+
+        # Stop: back to the start of the trim, to check where playback begins
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setFixedWidth(55)
+        self.stop_btn.setToolTip("Stop and go back to the start of the trim")
+        self.stop_btn.clicked.connect(self.stop)
+        controls_layout.addWidget(self.stop_btn)
 
         # Time label (current)
         self.time_lbl = QLabel("00:00")
@@ -176,13 +187,34 @@ class VideoPlayerWidget(QWidget):
         self.media_player.setSource(url)
         self.play_btn.setText("Play")
 
+    def set_play_range(self, start_ms: int, end_ms: int | None) -> None:
+        """The trimmed part of the video: Stop goes to its start, playback stops at its end."""
+        self._range_start_ms = max(0, int(start_ms))
+        self._range_end_ms = (
+            None if end_ms is None else max(self._range_start_ms, int(end_ms))
+        )
+
+    def _at_or_past_range_end(self, pos_ms: int) -> bool:
+        # Within one position update (~50 ms) of the end counts as there, or Play would
+        # stop again at once after an auto-stop.
+        return self._range_end_ms is not None and pos_ms >= self._range_end_ms - 50
+
     def toggle_play_pause(self) -> None:
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             self.play_btn.setText("Play")
         else:
+            # Past the trim's end there is nothing left to play: start the trim over.
+            if self._at_or_past_range_end(self.media_player.position()):
+                self.seek_to_ms(self._range_start_ms)
             self.media_player.play()
             self.play_btn.setText("Pause")
+
+    def stop(self) -> None:
+        """Pause and go back to the start of the trim."""
+        self.media_player.pause()
+        self.play_btn.setText("Play")
+        self.seek_to_ms(self._range_start_ms)
 
     def seek_to_ms(self, pos_ms: int) -> None:
         self._pending_seek_time = time.perf_counter()
@@ -206,6 +238,19 @@ class VideoPlayerWidget(QWidget):
         self.seek_to_ms(self.slider.value())
 
     def _on_position_changed(self, pos_ms: int) -> None:
+        # Playback stops at the trim's end and shows its last frame.
+        if (
+            not self._is_scrubbing
+            and self._range_end_ms is not None
+            and pos_ms >= self._range_end_ms
+            and self.media_player.playbackState()
+            == QMediaPlayer.PlaybackState.PlayingState
+        ):
+            self.media_player.pause()
+            self.play_btn.setText("Play")
+            if pos_ms > self._range_end_ms:
+                self.seek_to_ms(self._range_end_ms)
+                return
         self.canvas.current_pos_ms = pos_ms
         self.canvas.update()
         if not self._is_scrubbing:

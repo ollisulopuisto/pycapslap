@@ -247,6 +247,7 @@ class MainWindow(QMainWindow):
 
         # Timeline signals
         self.timeline.seek_requested.connect(self.player.seek_to_ms)
+        self.timeline.trim_range_changed.connect(self.player.set_play_range)
         self.timeline.segment_selected.connect(self._on_segment_selected)
 
         # Overlay signals
@@ -796,8 +797,15 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
+    def _sync_play_range(self) -> None:
+        """Give the player the timeline's trim, so Stop and playback respect it."""
+        self.player.set_play_range(
+            self.timeline.trim_start_ms, self.timeline.trim_end_ms
+        )
+
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.timeline.set_duration(duration_ms)
+        self._sync_play_range()
         if self.project.video:
             self.project.video.duration_sec = max(0, duration_ms) / 1000.0
 
@@ -1028,6 +1036,7 @@ class MainWindow(QMainWindow):
     def load_video(self, file_path: str) -> None:
         self.status.showMessage(f"Loading video: {os.path.basename(file_path)}...")
         self.timeline.reset_trim_range()
+        self._sync_play_range()
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
