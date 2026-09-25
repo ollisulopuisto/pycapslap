@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Fixed
+- The preview showed each caption twice: first the editor's own approximation in Qt fonts, a moment later libass's real rendering in a slightly different size and wrap. Now it shows only libass's rendering, and nothing while that is on its way. A dragged caption moves as its rendered image until the new position is rendered.
 - Core replies now reach the window through a queued signal instead of `QTimer.singleShot` called from the core client's reader thread, which makes a timer object on that thread and hands it to the GUI's timer list; the macOS test run crashed inside that list (`QTimerInfoList::activateTimers`) with such timers pending.
 
 ### Added
