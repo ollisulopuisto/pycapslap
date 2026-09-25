@@ -98,50 +98,6 @@ def test_video_canvas_portrait_video_caption_fit(qtbot):
     pix = canvas.grab()
     assert not pix.isNull()
 
-    # Lines are wrapped against the same caption box the renderer uses.
-    from PySide6.QtGui import QFont, QFontMetrics
-
-    from app.views.video_canvas import CAPTION_SIDE_MARGIN_PCT, _join_words, _wrap_words
-
-    font = QFont("Montserrat")
-    font.setPixelSize(20)
-    metrics = QFontMetrics(font)
-    max_w = v_rect.width() * (1.0 - 2.0 * CAPTION_SIDE_MARGIN_PCT / 100.0)
-
-    layout_words = [
-        {"text": w.upper(), "isHighlighted": False} for w in long_text.split()
-    ]
-    lines = _wrap_words(layout_words, metrics, max_w)
-    assert len(lines) > 1, "long text should wrap on a 9:16 frame"
-    for line in lines:
-        # A single word wider than the box is the only allowed overflow.
-        assert len(line) == 1 or metrics.horizontalAdvance(_join_words(line)) <= max_w
-
-
-def test_video_canvas_wraps_like_the_renderer(qtbot):
-    from PySide6.QtGui import QFont, QFontMetrics
-
-    from app.views.video_canvas import _join_words, _wrap_words
-
-    canvas = VideoCanvasWidget()
-    qtbot.addWidget(canvas)
-
-    font = QFont("Montserrat")
-    font.setPixelSize(18)
-    metrics = QFontMetrics(font)
-
-    words = [
-        {"text": t, "isHighlighted": False}
-        for t in "WELCOME TO PYCAPSLAP HIGH PERFORMANCE NATIVE VIDEO CAPTIONS".split()
-    ]
-    lines = _wrap_words(words, metrics, 200.0)
-
-    assert len(lines) >= 2
-    for line in lines:
-        assert len(line) == 1 or metrics.horizontalAdvance(_join_words(line)) <= 200.0
-    # Wrapping only ever moves whole words between lines.
-    assert sum(len(line) for line in lines) == len(words)
-
 
 def test_video_canvas_draws_the_renderers_layout(qtbot):
     canvas = VideoCanvasWidget()
@@ -189,31 +145,6 @@ def test_video_canvas_draws_the_renderers_layout(qtbot):
     assert not canvas.grab().isNull()
     assert canvas.layout_cue is not None
     assert canvas.layout_frame_size == (1080, 1920)
-
-
-def test_video_canvas_fallback_cue_matches_the_renderer(qtbot):
-    canvas = VideoCanvasWidget()
-    qtbot.addWidget(canvas)
-
-    seg = CaptionSegment(
-        start_ms=0,
-        end_ms=1000,
-        text="pieni testi",
-        words=[WordSpan(0, 500, "pieni"), WordSpan(500, 1000, "testi")],
-    )
-    canvas.set_segment(seg, anchor_y_pct=80.0, current_pos_ms=100)
-    canvas.layout_frame_size = (1080, 1920)
-
-    cue = canvas._fallback_cue()
-    assert cue is not None
-    # The burn uppercases every caption, so the stand-in has to as well.
-    assert [w["text"] for w in cue["lines"][0]["words"]] == ["PIENI", "TESTI"]
-    # ...and use the renderer's proportional size, not the raw style size.
-    from app.views.video_canvas import proportional_font_size
-
-    assert cue["lines"][0]["fontSizePx"] == proportional_font_size(
-        1080, 1920, canvas.style.font_size
-    )
 
 
 def test_video_canvas_safe_platforms(qtbot):
@@ -276,12 +207,86 @@ def test_canvas_draws_the_renderers_layer_instead_of_its_own_text(qtbot):
     center = image.pixelColor(image.width() // 2, image.height() // 2)
     assert (center.red(), center.green(), center.blue()) == (0, 255, 0)
 
-    # Dragging goes back to the painted version, which follows the pointer.
-    canvas.is_dragging = True
-    painted2 = QPixmap(canvas.size())
-    canvas.render(painted2)
-    center2 = painted2.toImage().pixelColor(image.width() // 2, image.height() // 2)
-    assert (center2.red(), center2.green(), center2.blue()) != (0, 255, 0)
+    # A new cue's layer isn't there yet: no caption at all, not a lookalike.
+    canvas.set_caption_layer(None)
+    blank = QPixmap(canvas.size())
+    canvas.render(blank)
+    center = blank.toImage().pixelColor(image.width() // 2, image.height() // 2)
+    assert (center.red(), center.green(), center.blue()) == (0, 0, 0)
+
+
+def test_without_a_layer_the_canvas_draws_no_caption(qtbot):
+    """What the preview shows is only ever what the render will have."""
+    from PySide6.QtGui import QColor, QPixmap
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(360, 640)
+    canvas.set_active_safe_platforms(set())
+    canvas.set_segment(
+        CaptionSegment(start_ms=0, end_ms=1000, text="Ja sitten tuli iso teksti"),
+        anchor_y_pct=50.0,
+    )
+    painted = QPixmap(canvas.size())
+    canvas.render(painted)
+    image = painted.toImage()
+    colors = {
+        image.pixelColor(x, y).name()
+        for x in range(0, image.width(), 4)
+        for y in range(0, image.height(), 4)
+    }
+    assert colors <= {QColor(0, 0, 0).name(), QColor(10, 10, 12).name()}
+
+
+def test_a_dragged_caption_is_its_layer_following_the_pointer(qtbot):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QColor, QMouseEvent, QPixmap
+    from PySide6.QtCore import QEvent
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(360, 640)
+    canvas.set_active_safe_platforms(set())
+    canvas.set_segment(CaptionSegment(0, 1000, "Ja"), anchor_y_pct=50.0)
+    # A layer with one green band where the caption is, at 50 %.
+    layer = QPixmap(1080, 1920)
+    layer.fill(QColor(0, 0, 0, 0))
+    from PySide6.QtGui import QPainter
+
+    p = QPainter(layer)
+    p.fillRect(0, 900, 1080, 120, QColor(0, 255, 0))
+    p.end()
+    canvas.set_caption_layer(layer)
+    rect = canvas._get_canvas_rect()
+
+    def press(kind, y_pct):
+        y = rect.top() + rect.height() * y_pct / 100.0
+        event = QMouseEvent(
+            kind,
+            QPointF(rect.center().x(), y),
+            QPointF(rect.center().x(), y),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        {
+            QEvent.Type.MouseButtonPress: canvas.mousePressEvent,
+            QEvent.Type.MouseMove: canvas.mouseMoveEvent,
+        }[kind](event)
+
+    def green_at(y_pct):
+        painted = QPixmap(canvas.size())
+        canvas.render(painted)
+        y = int(rect.top() + rect.height() * y_pct / 100.0)
+        c = painted.toImage().pixelColor(int(rect.center().x()), y)
+        return (c.red(), c.green(), c.blue()) == (0, 255, 0)
+
+    assert green_at(49.5) and not green_at(69.5)
+    press(QEvent.Type.MouseButtonPress, 50.0)
+    # The window drops the stale layer on every move; the ghost stays.
+    canvas.set_caption_layer(None)
+    press(QEvent.Type.MouseMove, 70.0)
+    assert green_at(69.5) and not green_at(49.5)
 
 
 def test_layer_height_is_quantized(qtbot):
