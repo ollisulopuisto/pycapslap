@@ -56,3 +56,41 @@ def test_timeline_select_segment(qtbot):
     assert len(selected) > 0
     assert selected[-1] == seg1
     assert timeline.selected_segment == seg1
+
+
+def _trimmed_timeline(qtbot, start_ms=2000, end_ms=8000):
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+    timeline.set_duration(10000)
+    timeline.set_trim_range(start_ms, end_ms)
+    emitted = []
+    timeline.trim_range_changed.connect(lambda s, e: emitted.append((s, e)))
+    return timeline, emitted
+
+
+def test_set_trim_start_at_playhead(qtbot):
+    timeline, emitted = _trimmed_timeline(qtbot)
+    timeline.set_trim_start_at(3500)
+    assert (timeline.trim_start_ms, timeline.trim_end_ms) == (3500, 8000)
+    assert emitted == [(3500, 8000)]
+
+
+def test_set_trim_end_at_playhead(qtbot):
+    timeline, emitted = _trimmed_timeline(qtbot)
+    timeline.set_trim_end_at(6200)
+    assert (timeline.trim_start_ms, timeline.trim_end_ms) == (2000, 6200)
+    assert emitted == [(2000, 6200)]
+
+
+def test_trim_start_past_the_end_releases_the_end(qtbot):
+    timeline, emitted = _trimmed_timeline(qtbot)
+    timeline.set_trim_start_at(9000)
+    assert (timeline.trim_start_ms, timeline.trim_end_ms) == (9000, 10000)
+    assert emitted == [(9000, 10000)]
+
+
+def test_trim_end_before_the_start_releases_the_start(qtbot):
+    timeline, emitted = _trimmed_timeline(qtbot)
+    timeline.set_trim_end_at(1000)
+    assert (timeline.trim_start_ms, timeline.trim_end_ms) == (0, 1000)
+    assert emitted == [(0, 1000)]

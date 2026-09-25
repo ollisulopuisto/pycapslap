@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 
 from app.models.captions import CaptionSegment
 from app.views.main_window import MainWindow
@@ -9,21 +8,6 @@ from app.views.main_window import MainWindow
 def _make_video_file(path: Path) -> str:
     path.write_bytes(b"dummy")
     return str(path)
-
-
-# The two tests below (load a "video" — real or garbage, tried both — into a
-# real MainWindow, then QPushButton.click() the save button) hang
-# indefinitely under pytest specifically: the exact same sequence in a bare
-# script (no pytest, no qtbot) completes in well under a second, every time.
-# Even running just one of these two tests alone under pytest (not the full
-# suite, no other MainWindow created first) reproduces the hang, so it isn't
-# cross-test state or CI-only either — something about pytest-qt's fixture
-# machinery plus this specific load-then-click sequence. See
-# CONTRIBUTING.md for what's been ruled out. Skipped unconditionally until
-# someone gets to the bottom of it.
-_skip_hangs = pytest.mark.skip(
-    reason="hangs under pytest — see CONTRIBUTING.md",
-)
 
 
 def test_main_window_init(qtbot):
@@ -94,7 +78,6 @@ def test_main_window_caption_sync(qtbot):
     window.close()
 
 
-@_skip_hangs
 def test_main_window_save_action(qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
@@ -114,7 +97,6 @@ def test_main_window_save_action(qtbot, tmp_path):
     window.close()
 
 
-@_skip_hangs
 def test_main_window_style_selection_and_sidecar(qtbot, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
@@ -434,9 +416,7 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
             "endMs": (i + 1) * 300,
             "lines": [
                 {
-                    "words": [
-                        {"text": w, "isHighlighted": w == word} for w in words
-                    ],
+                    "words": [{"text": w, "isHighlighted": w == word} for w in words],
                     "fontSizePx": 44,
                 }
             ],
@@ -465,9 +445,7 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
     assert len(window._layer_pending) <= 3
 
     def rendered():
-        return {
-            c[1]["timestampMs"] for c in calls if c[0] == "generatePreviewFrame"
-        }
+        return {c[1]["timestampMs"] for c in calls if c[0] == "generatePreviewFrame"}
 
     qtbot.waitUntil(lambda: len(window._layer_cache) == len(cues), timeout=5000)
     # Every window rendered, each exactly once.
@@ -527,4 +505,41 @@ def test_export_format_drives_layout_layer_and_render(qtbot):
     window._request_caption_layer({"startMs": 0, "endMs": 2000})
     frame_calls = [c for c in calls if c[0] == "generatePreviewFrame"]
     assert frame_calls[-1][1]["exportFormat"] == "9:16"
+    window.close()
+
+
+def test_i_and_o_set_the_trim_at_the_playhead(qtbot):
+    from PySide6.QtGui import QShortcut
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._on_duration_changed(10000)
+
+    keys = {s.key().toString() for s in window.findChildren(QShortcut)}
+    assert {"I", "O"} <= keys
+
+    window.player.media_player.position = lambda: 2500
+    window._set_trim_start_here()
+    window.player.media_player.position = lambda: 7400
+    window._set_trim_end_here()
+
+    assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (2500, 7400)
+    # The player follows, so Stop and playback use the new trim.
+    assert (window.player._range_start_ms, window.player._range_end_ms) == (2500, 7400)
+    assert "00:07.4" in window.status.currentMessage()
+    window.close()
+
+
+def test_i_and_o_buttons_set_the_trim_at_the_playhead(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._on_duration_changed(10000)
+
+    window.player.media_player.position = lambda: 1500
+    window.player.mark_in_btn.click()
+    window.player.media_player.position = lambda: 6000
+    window.player.mark_out_btn.click()
+
+    assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (1500, 6000)
+    assert (window.player._range_start_ms, window.player._range_end_ms) == (1500, 6000)
     window.close()

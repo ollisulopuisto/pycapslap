@@ -169,6 +169,11 @@ class MainWindow(QMainWindow):
         left_col.addLayout(action_bar)
 
         # Cmd+S / Ctrl+S shortcut for Save
+        # I / O set the trim's start / end at the playhead, as in video editors: stop
+        # playback on the right frame and mark it. Text fields keep their letters,
+        # since a line edit claims plain keys before shortcuts see them.
+        QShortcut(QKeySequence(Qt.Key.Key_I), self, activated=self._set_trim_start_here)
+        QShortcut(QKeySequence(Qt.Key.Key_O), self, activated=self._set_trim_end_here)
         QShortcut(
             QKeySequence.StandardKey.Save, self, activated=self._on_save_requested
         )
@@ -247,15 +252,16 @@ class MainWindow(QMainWindow):
 
         # Timeline signals
         self.timeline.seek_requested.connect(self.player.seek_to_ms)
+        self.timeline.trim_range_changed.connect(self.player.set_play_range)
+        self.player.mark_in_requested.connect(self._set_trim_start_here)
+        self.player.mark_out_requested.connect(self._set_trim_end_here)
         self.timeline.segment_selected.connect(self._on_segment_selected)
 
         # Overlay signals
         self.overlay.anchor_changed.connect(self._on_overlay_anchor_changed)
         # Until a frame has been decoded the frame size is a guess, and every
         # layout computed from it is a guess too. Redo them once it is known.
-        self.player.canvas.video_size_changed.connect(
-            self._on_video_size_changed
-        )
+        self.player.canvas.video_size_changed.connect(self._on_video_size_changed)
 
         # Caption Panel signals
         self.caption_panel.segment_selected.connect(self._on_segment_selected)
@@ -796,8 +802,37 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
+    def _set_trim_start_here(self) -> None:
+        if not self.timeline.duration_ms:
+            return
+        self.timeline.set_trim_start_at(self.player.media_player.position())
+        self.status.showMessage(
+            f"Trim start set to {self._format_trim_time(self.timeline.trim_start_ms)}",
+            2000,
+        )
+
+    def _set_trim_end_here(self) -> None:
+        if not self.timeline.duration_ms:
+            return
+        self.timeline.set_trim_end_at(self.player.media_player.position())
+        self.status.showMessage(
+            f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
+            2000,
+        )
+
+    @staticmethod
+    def _format_trim_time(ms: int) -> str:
+        return f"{ms // 60000:02d}:{(ms // 1000) % 60:02d}.{(ms % 1000) // 100}"
+
+    def _sync_play_range(self) -> None:
+        """Give the player the timeline's trim, so Stop and playback respect it."""
+        self.player.set_play_range(
+            self.timeline.trim_start_ms, self.timeline.trim_end_ms
+        )
+
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.timeline.set_duration(duration_ms)
+        self._sync_play_range()
         if self.project.video:
             self.project.video.duration_sec = max(0, duration_ms) / 1000.0
 
@@ -1028,6 +1063,7 @@ class MainWindow(QMainWindow):
     def load_video(self, file_path: str) -> None:
         self.status.showMessage(f"Loading video: {os.path.basename(file_path)}...")
         self.timeline.reset_trim_range()
+        self._sync_play_range()
         self.player.load_video(file_path)
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)

@@ -8,6 +8,13 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Fixed
+- The pyside tests no longer hang. The window opens a modal message box when the core reports an error, and in a test run nobody clicks it; which test froze depended on when the error arrived, so the hang looked random and two tests had been skipped for it. Message boxes are now recorded instead of shown in tests, and the two tests run again. The sample video the core and window tests need (git-ignored, so missing in CI) is generated with ffmpeg when absent. CI was also red on three clippy lints in `captions.rs` and four unformatted Python files.
+
+### Added
+- **I** and **O** set the trim's start and end at the playhead, as in video editors: stop playback on the right frame and mark it, no handle dragging. Marking a start past the current end (or an end before the start) lets the other side go back to the video's own end (start). Text fields keep their letters. The same two marks are buttons next to Stop.
+- A **Stop** button next to Play: it pauses and goes back to the start of the trim, so checking where the cut begins is one click. Playback stops by itself at the trim's end and shows its last frame; Play from there starts the trim over. Before, the player knew nothing of the trim and played the whole video.
+
+### Fixed
 - The editor previewed the source frame while the render burned captions onto an export canvas chosen afterwards, in a dialog. For a 16:9 clip exported 9:16 that put the captions somewhere the preview never showed them — down in the padding. The export format is now a dropdown in the toolbar, it drives the layout, the rendered layer and the burn alike, and the editor draws the canvas that format produces: the video fitted inside it, the padding around it, the safe zones and the caption block measured against the whole frame. "Source" keeps the video's own frame and is the default. `previewLayout` takes the format and answers with the canvas it used, so the geometry is worked out in one place instead of being re-derived on the Python side.
 - Until a frame had been decoded, the frame size was a guess and so was every layout computed from it, with nothing to correct it later. The canvas now says when the video's real size arrives and the layout is redone.
 
