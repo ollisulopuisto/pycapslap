@@ -38,7 +38,7 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 * ⏱️ **Cue Timing You Can Edit**:
   * Type timecodes straight into the Start/End columns (`mm:ss.t`), clamped to the neighbouring cues, with word timings scaled to match.
   * `Alt`+`←`/`→` nudges the start, `Alt`+`Shift`+`←`/`→` the end, `Alt`+`Ctrl`+`←`/`→` the whole cue.
-* ✂️ **Trimming**: drag the blue handles on the timeline, or stop playback on the frame you want and press `I` (start) or `O` (end). **Stop** returns to the trim's start and playback stops at its end, so checking the cut is one click.
+* ✂️ **Trimming**: drag the blue handles on the timeline, or stop playback on the frame you want and press `I` (start) or `O` (end), or click the I and O buttons next to Stop. **Stop** returns to the trim's start and playback stops at its end, so checking the cut is one click.
   * Delete a cue emptied by shifting its words away; its time goes to the cue that took them.
 * 🔤 **Hierarchical Typography System**:
   * Organized font menus categorized into **Modern / Sans**, **Display / Impact**, **Fun / Comic**, **Serif / Elegant**, and **Handwritten / Script**.

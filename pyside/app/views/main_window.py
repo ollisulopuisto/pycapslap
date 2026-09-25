@@ -253,6 +253,8 @@ class MainWindow(QMainWindow):
         # Timeline signals
         self.timeline.seek_requested.connect(self.player.seek_to_ms)
         self.timeline.trim_range_changed.connect(self.player.set_play_range)
+        self.player.mark_in_requested.connect(self._set_trim_start_here)
+        self.player.mark_out_requested.connect(self._set_trim_end_here)
         self.timeline.segment_selected.connect(self._on_segment_selected)
 
         # Overlay signals

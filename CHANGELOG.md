@@ -11,7 +11,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 - The pyside tests no longer hang. The window opens a modal message box when the core reports an error, and in a test run nobody clicks it; which test froze depended on when the error arrived, so the hang looked random and two tests had been skipped for it. Message boxes are now recorded instead of shown in tests, and the two tests run again. The sample video the core and window tests need (git-ignored, so missing in CI) is generated with ffmpeg when absent. CI was also red on three clippy lints in `captions.rs` and four unformatted Python files.
 
 ### Added
-- **I** and **O** set the trim's start and end at the playhead, as in video editors: stop playback on the right frame and mark it, no handle dragging. Marking a start past the current end (or an end before the start) lets the other side go back to the video's own end (start). Text fields keep their letters.
+- **I** and **O** set the trim's start and end at the playhead, as in video editors: stop playback on the right frame and mark it, no handle dragging. Marking a start past the current end (or an end before the start) lets the other side go back to the video's own end (start). Text fields keep their letters. The same two marks are buttons next to Stop.
 - A **Stop** button next to Play: it pauses and goes back to the start of the trim, so checking where the cut begins is one click. Playback stops by itself at the trim's end and shows its last frame; Play from there starts the trim over. Before, the player knew nothing of the trim and played the whole video.
 
 ### Fixed

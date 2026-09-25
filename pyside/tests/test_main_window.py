@@ -528,3 +528,18 @@ def test_i_and_o_set_the_trim_at_the_playhead(qtbot):
     assert (window.player._range_start_ms, window.player._range_end_ms) == (2500, 7400)
     assert "00:07.4" in window.status.currentMessage()
     window.close()
+
+
+def test_i_and_o_buttons_set_the_trim_at_the_playhead(qtbot):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window._on_duration_changed(10000)
+
+    window.player.media_player.position = lambda: 1500
+    window.player.mark_in_btn.click()
+    window.player.media_player.position = lambda: 6000
+    window.player.mark_out_btn.click()
+
+    assert (window.timeline.trim_start_ms, window.timeline.trim_end_ms) == (1500, 6000)
+    assert (window.player._range_start_ms, window.player._range_end_ms) == (1500, 6000)
+    window.close()

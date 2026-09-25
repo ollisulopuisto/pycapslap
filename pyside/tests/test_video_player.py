@@ -134,3 +134,21 @@ def test_no_trim_end_never_auto_stops(qtbot):
 
     player._on_position_changed(60_000)
     assert fake.state == fake._states.PlayingState
+
+
+def test_mark_buttons_ask_for_the_trim_and_leave_focus_alone(qtbot):
+    from PySide6.QtCore import Qt
+
+    player = VideoPlayerWidget()
+    qtbot.addWidget(player)
+    asked = []
+    player.mark_in_requested.connect(lambda: asked.append("in"))
+    player.mark_out_requested.connect(lambda: asked.append("out"))
+
+    player.mark_in_btn.click()
+    player.mark_out_btn.click()
+
+    assert asked == ["in", "out"]
+    for btn in (player.mark_in_btn, player.mark_out_btn):
+        assert btn.focusPolicy() == Qt.FocusPolicy.NoFocus
+        assert "(I)" in btn.toolTip() or "(O)" in btn.toolTip()

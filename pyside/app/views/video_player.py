@@ -24,6 +24,9 @@ class VideoPlayerWidget(QWidget):
     seek_latency_measured = Signal(float)  # Latency in ms
     position_changed = Signal(int)  # Position in ms
     duration_changed = Signal(int)  # Duration in ms
+    # "Set the trim's start / end here" — the window owns the trim, the player the buttons
+    mark_in_requested = Signal()
+    mark_out_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -76,6 +79,20 @@ class VideoPlayerWidget(QWidget):
         self.stop_btn.setToolTip("Stop and go back to the start of the trim")
         self.stop_btn.clicked.connect(self.stop)
         controls_layout.addWidget(self.stop_btn)
+
+        # Mark the trim's start / end at the playhead (also the I and O keys)
+        self.mark_in_btn = QPushButton("I")
+        self.mark_in_btn.setToolTip("Set the trim's start here (I)")
+        self.mark_in_btn.clicked.connect(self.mark_in_requested)
+        self.mark_out_btn = QPushButton("O")
+        self.mark_out_btn.setToolTip("Set the trim's end here (O)")
+        self.mark_out_btn.clicked.connect(self.mark_out_requested)
+        for btn in (self.mark_in_btn, self.mark_out_btn):
+            btn.setFixedWidth(32)
+            # Clicking must not take focus, or Space would press the button
+            # instead of playing and pausing.
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            controls_layout.addWidget(btn)
 
         # Time label (current)
         self.time_lbl = QLabel("00:00")
