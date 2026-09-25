@@ -1535,6 +1535,9 @@ class MainWindow(QMainWindow):
         fut.add_done_callback(on_done)
 
     def closeEvent(self, event) -> None:
+        # Nothing of this window should fire after it is gone.
         self.perf_timer.stop()
+        self._layout_timer.stop()
+        self._layer_timer.stop()
         self.core.close()
         super().closeEvent(event)

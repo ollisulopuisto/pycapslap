@@ -1,3 +1,4 @@
+import gc
 import shutil
 import subprocess
 from pathlib import Path
@@ -8,6 +9,31 @@ from PySide6.QtWidgets import QMessageBox
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_VIDEO = REPO_ROOT / "rust" / "bin" / "test_input.mp4"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def collect_garbage_between_tests_only():
+    """Keep Python's cycle collector out of Qt's event loop.
+
+    A test's window lives on in reference cycles (slots, lambdas) after the
+    test. When the automatic collector happened to run inside a Qt timer
+    callback of the next test, it deleted that window's C++ side while Qt was
+    walking its timer list: the macOS segfault in QTimerInfoList::activateTimers.
+    Collecting between tests, outside any event processing, frees the same
+    objects at a safe moment.
+    """
+    gc.disable()
+    yield
+    gc.enable()
+
+
+@pytest.fixture(autouse=True)
+def _collect_after_each_test(qapp):
+    yield
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    gc.collect()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 @pytest.fixture(autouse=True)
