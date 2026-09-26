@@ -218,6 +218,10 @@ pub struct BurnCaptionsParams {
     /// A ready-made clip played after it ("listen to the new episode").
     #[serde(default)]
     pub outro_video: Option<String>,
+    /// A logo ("bug") kept in a corner of the captioned video, for sources that
+    /// don't carry one. Not put on the intro or outro.
+    #[serde(default)]
+    pub watermark: Option<WatermarkParams>,
     pub karaoke: bool, // Whether to use karaoke-style highlighting
     #[serde(default)]
     pub multiline: bool, // Whether to allow multiple lines (karaoke)
@@ -252,6 +256,38 @@ pub struct BurnCaptionsParams {
     /// the user placed them by hand.
     #[serde(default)]
     pub blocked_bands: Vec<(f32, f32)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WatermarkParams {
+    /// An image, best a PNG with transparency.
+    pub path: String,
+    /// "top-left", "top-right", "bottom-left" or "bottom-right".
+    #[serde(default = "default_watermark_corner")]
+    pub corner: String,
+    /// Width of the logo, in percent of the frame's shorter side.
+    #[serde(default = "default_watermark_size")]
+    pub size_pct: f32,
+    /// Distance from the two edges, in percent of the frame's shorter side.
+    #[serde(default = "default_watermark_margin")]
+    pub margin_pct: f32,
+    /// 0..1
+    #[serde(default = "default_watermark_opacity")]
+    pub opacity: f32,
+}
+
+fn default_watermark_corner() -> String {
+    "top-right".into()
+}
+fn default_watermark_size() -> f32 {
+    12.0
+}
+fn default_watermark_margin() -> f32 {
+    4.0
+}
+fn default_watermark_opacity() -> f32 {
+    0.85
 }
 
 #[derive(Serialize, Deserialize, Debug)]

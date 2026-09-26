@@ -113,6 +113,9 @@ class VideoCanvasWidget(QWidget):
         # moved with the pointer; the renderer's answer for the new position
         # replaces it. (layer, anchor % when the drag began)
         self._drag_ghost: tuple[QPixmap, float] | None = None
+        # The logo the render lays over the video, and how (see watermark_rect).
+        self.watermark: QPixmap | None = None
+        self.watermark_style: dict = {}
         # Layout handed down by the renderer for the current playback position,
         # and the frame size it was computed for.
         self.layout_cue: dict | None = None
@@ -142,6 +145,36 @@ class VideoCanvasWidget(QWidget):
         else:
             self.export_canvas_size = None
         self.update()
+
+    def set_watermark(self, pixmap: QPixmap | None, style: dict | None = None) -> None:
+        """The logo the render will put in a corner, or None. `style` holds the
+        render's own parameters: corner, sizePct, marginPct, opacity."""
+        self.watermark = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self.watermark_style = dict(style or {})
+        self.update()
+
+    def watermark_rect(self, canvas: QRectF) -> QRectF:
+        """Where the logo sits in `canvas`, the same way the renderer places it:
+        its width and edge distance are percentages of the frame's short side."""
+        style = self.watermark_style
+        short = min(canvas.width(), canvas.height())
+        width = short * float(style.get("sizePct", 12.0)) / 100.0
+        margin = short * float(style.get("marginPct", 4.0)) / 100.0
+        pixmap = self.watermark
+        aspect = pixmap.height() / pixmap.width() if pixmap and pixmap.width() else 1.0
+        height = width * aspect
+        corner = str(style.get("corner", "top-right"))
+        x = (
+            canvas.left() + margin
+            if corner.endswith("left")
+            else canvas.right() - width - margin
+        )
+        y = (
+            canvas.bottom() - height - margin
+            if corner.startswith("bottom")
+            else canvas.top() + margin
+        )
+        return QRectF(x, y, width, height)
 
     def set_caption_layer(self, pixmap: QPixmap | None) -> None:
         """Hand the canvas libass's own rendering of the current cue."""
@@ -373,6 +406,18 @@ class VideoCanvasWidget(QWidget):
             painter.setClipRect(canvas_rect)
             painter.drawPixmap(
                 canvas_rect.translated(0, dy), ghost, QRectF(ghost.rect())
+            )
+            painter.restore()
+
+        # 6. The logo, over the captions as in the render.
+        if self.watermark is not None:
+            painter.save()
+            painter.setOpacity(float(self.watermark_style.get("opacity", 0.85)))
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(
+                self.watermark_rect(canvas_rect),
+                self.watermark,
+                QRectF(self.watermark.rect()),
             )
             painter.restore()
 

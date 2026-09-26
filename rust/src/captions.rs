@@ -204,6 +204,7 @@ pub async fn burn_captions_with_segments(
         let bumpers = Bumpers {
             intro: probe_bumper(id, params.intro_video.as_deref(), "Intro", &mut emit).await?,
             outro: probe_bumper(id, params.outro_video.as_deref(), "Outro", &mut emit).await?,
+            bug: check_watermark(params.watermark.clone())?,
         };
 
         optimized_multi_format_encode(
@@ -1454,13 +1455,22 @@ async fn try_encode_with_encoder(
     // and the source decoded only once. With an intro or outro, the clips are joined
     // to the burned video in the same graph, and the audio comes out of it too.
     let proof_scale = proof.map(|(side, _)| proof_scale_filter(target_w, target_h, side));
+    let main = main_video_chain(
+        &vf,
+        bumpers,
+        target_w,
+        target_h,
+        pixel_format(hardware_encoder),
+    );
     let filter_complex = if bumpers.is_empty() {
-        proof_scale
-            .as_ref()
-            .map(|scale| format!("[0:v:0]{vf},split=2[full][small];[small]{scale}[proof]"))
+        match (&proof_scale, &bumpers.bug) {
+            (Some(scale), _) => Some(format!("{main},split=2[full][small];[small]{scale}[proof]")),
+            (None, Some(_)) => Some(format!("{main}[full]")),
+            (None, None) => None,
+        }
     } else {
         Some(bumper_graph(
-            &vf,
+            &main,
             target_w,
             target_h,
             probe_result.fps.filter(|f| *f > 0.0).unwrap_or(30.0),
@@ -1492,6 +1502,9 @@ async fn try_encode_with_encoder(
         args.extend_from_slice(&["-t", &output_duration_arg, "-i", input_video]);
         for clip in bumpers.clips() {
             args.extend_from_slice(&["-i", &clip.path]);
+        }
+        if let Some(bug) = &bumpers.bug {
+            args.extend_from_slice(&["-i", &bug.path]);
         }
         args.extend_from_slice(&["-progress", "pipe:1"]); // Enable progress reporting
         match &filter_complex {
@@ -1659,15 +1672,24 @@ struct Bumper {
     has_audio: bool,
 }
 
+/// Ready-made media added to a render: clips around the captioned video, and a
+/// logo over it.
 #[derive(Clone, Debug, Default)]
 struct Bumpers {
     intro: Option<Bumper>,
     outro: Option<Bumper>,
+    bug: Option<crate::types::WatermarkParams>,
 }
 
 impl Bumpers {
+    /// No intro and no outro (a bug alone joins nothing).
     fn is_empty(&self) -> bool {
         self.intro.is_none() && self.outro.is_none()
+    }
+
+    /// The bug's input number: after the source and the clips.
+    fn bug_input(&self) -> usize {
+        1 + self.clips().count()
     }
 
     /// In input order: the intro is input 1 when there is one, the outro after it.
@@ -1711,13 +1733,63 @@ fn pixel_format(encoder: crate::video::HardwareEncoder) -> &'static str {
     }
 }
 
+fn check_watermark(
+    watermark: Option<crate::types::WatermarkParams>,
+) -> Result<Option<crate::types::WatermarkParams>> {
+    let Some(mut wm) = watermark.filter(|w| !w.path.trim().is_empty()) else {
+        return Ok(None);
+    };
+    if !std::path::Path::new(&wm.path).is_file() {
+        return Err(anyhow!("Logo not found: {}", wm.path));
+    }
+    wm.size_pct = wm.size_pct.clamp(1.0, 60.0);
+    wm.margin_pct = wm.margin_pct.clamp(0.0, 30.0);
+    wm.opacity = wm.opacity.clamp(0.0, 1.0);
+    Ok(Some(wm))
+}
+
+/// The logo's width and edge distance in pixels on a `w`×`h` frame. The editor
+/// preview (video_canvas.watermark_rect) sizes it the same way.
+fn watermark_geometry(wm: &crate::types::WatermarkParams, w: u32, h: u32) -> (u32, u32) {
+    let short = w.min(h) as f32;
+    let width = crate::video::round_even(((short * wm.size_pct / 100.0).round() as u32).max(2));
+    let margin = (short * wm.margin_pct / 100.0).round() as u32;
+    (width, margin)
+}
+
+/// The captioned source as the start of a filter chain, left open for the caller
+/// to finish (`[v0]`, `split`, ...): the caption filter `vf`, and the logo laid
+/// over it when there is one.
+fn main_video_chain(vf: &str, bumpers: &Bumpers, w: u32, h: u32, pix_fmt: &str) -> String {
+    let Some(wm) = &bumpers.bug else {
+        return format!("[0:v:0]{vf}");
+    };
+    let (width, m) = watermark_geometry(wm, w, h);
+    let x = if wm.corner.ends_with("left") {
+        format!("{m}")
+    } else {
+        format!("W-w-{m}")
+    };
+    let y = if wm.corner.starts_with("bottom") {
+        format!("H-h-{m}")
+    } else {
+        format!("{m}")
+    };
+    let input = bumpers.bug_input();
+    format!(
+        "[{input}:v:0]scale={width}:-2,format=rgba,colorchannelmixer=aa={op:.3}[bug];\
+         [0:v:0]{vf}[captioned];[captioned][bug]overlay={x}:{y},format={pix_fmt}",
+        op = wm.opacity
+    )
+}
+
 /// The filter graph for a captioned video with an intro and/or outro: every part
 /// brought to the output's frame, rate and pixel format, audio to 48 kHz stereo
 /// (silence for a part without any), then concatenated. Outputs `[full]` and
 /// `[afull]`, plus `[proof]` and `[aproof]` when `proof_scale` is given.
 #[allow(clippy::too_many_arguments)]
 fn bumper_graph(
-    vf: &str,
+    main: &str,
     target_w: u32,
     target_h: u32,
     fps: f64,
@@ -1731,7 +1803,7 @@ fn bumper_graph(
     let silence =
         |secs: f64| format!("anullsrc=r=48000:cl=stereo,atrim=duration={secs:.3},{AUDIO}");
     let mut chains = vec![
-        format!("[0:v:0]{vf},setsar=1,fps={fps:.3}[v0]"),
+        format!("{main},setsar=1,fps={fps:.3}[v0]"),
         if main_has_audio {
             format!("[0:a:0]{AUDIO}[a0]")
         } else {
@@ -3373,11 +3445,22 @@ mod tests_proof_copy {
         let bumpers = Bumpers {
             intro: Some(clip("intro.mp4", 3.0, true)),
             outro: Some(clip("outro.mov", 5.5, false)),
+            ..Default::default()
         };
         assert_eq!(bumpers.duration(), 8.5);
         let paths: Vec<_> = bumpers.clips().map(|c| c.path.as_str()).collect();
         assert_eq!(paths, ["intro.mp4", "outro.mov"]);
-        let graph = bumper_graph("VF", 1080, 1920, 25.0, "nv12", true, 60.0, &bumpers, None);
+        let graph = bumper_graph(
+            "[0:v:0]VF",
+            1080,
+            1920,
+            25.0,
+            "nv12",
+            true,
+            60.0,
+            &bumpers,
+            None,
+        );
         assert!(graph.contains("[0:v:0]VF,setsar=1,fps=25.000[v0]"));
         assert!(graph.contains("[1:v:0]scale=1080:1920:"));
         assert!(graph.contains(
@@ -3394,9 +3477,18 @@ mod tests_proof_copy {
         let bumpers = Bumpers {
             intro: None,
             outro: Some(clip("outro.mp4", 4.0, true)),
+            ..Default::default()
         };
         let graph = bumper_graph(
-            "VF", 1920, 1080, 30.0, "yuv420p", false, 12.0, &bumpers, None,
+            "[0:v:0]VF",
+            1920,
+            1080,
+            30.0,
+            "yuv420p",
+            false,
+            12.0,
+            &bumpers,
+            None,
         );
         assert!(graph.contains("atrim=duration=12.000,")); // silent main video
         assert!(graph.ends_with("[v0][a0][v1][a1]concat=n=2:v=1:a=1[full][afull]"));
@@ -3407,6 +3499,7 @@ mod tests_proof_copy {
         let bumpers = Bumpers {
             intro: Some(clip("i.mp4", 2.0, true)),
             outro: None,
+            ..Default::default()
         };
         let graph = bumper_graph(
             "VF",
@@ -3422,6 +3515,73 @@ mod tests_proof_copy {
         assert!(graph.contains("concat=n=2:v=1:a=1[joined][ajoined]"));
         assert!(graph.contains("[joined]split=2[full][small];[small]scale=-2:720[proof]"));
         assert!(graph.ends_with("[ajoined]asplit=2[afull][aproof]"));
+    }
+
+    fn bug(corner: &str) -> crate::types::WatermarkParams {
+        crate::types::WatermarkParams {
+            path: "logo.png".into(),
+            corner: corner.into(),
+            size_pct: 12.0,
+            margin_pct: 4.0,
+            opacity: 0.8,
+        }
+    }
+
+    #[test]
+    fn the_bug_sits_in_its_corner_sized_by_the_short_side() {
+        // 1080 is the short side of both frames: 12 % is 130 px, 4 % is 43 px.
+        assert_eq!(watermark_geometry(&bug("top-right"), 1080, 1920), (130, 43));
+        assert_eq!(watermark_geometry(&bug("top-right"), 1920, 1080), (130, 43));
+        let only_bug = Bumpers {
+            bug: Some(bug("top-right")),
+            ..Default::default()
+        };
+        let chain = main_video_chain("VF", &only_bug, 1080, 1920, "nv12");
+        assert_eq!(
+            chain,
+            "[1:v:0]scale=130:-2,format=rgba,colorchannelmixer=aa=0.800[bug];\
+             [0:v:0]VF[captioned];[captioned][bug]overlay=W-w-43:43,format=nv12"
+        );
+        let left = Bumpers {
+            bug: Some(bug("bottom-left")),
+            ..Default::default()
+        };
+        assert!(main_video_chain("VF", &left, 1080, 1920, "nv12").contains("overlay=43:H-h-43"));
+        let plain = Bumpers::default();
+        assert_eq!(
+            main_video_chain("VF", &plain, 1080, 1920, "nv12"),
+            "[0:v:0]VF"
+        );
+    }
+
+    #[test]
+    fn the_bug_comes_after_the_clips_and_stays_off_them() {
+        let all = Bumpers {
+            intro: Some(clip("i.mp4", 2.0, true)),
+            outro: Some(clip("o.mp4", 2.0, true)),
+            bug: Some(bug("top-left")),
+        };
+        assert_eq!(all.bug_input(), 3);
+        let main = main_video_chain("VF", &all, 1920, 1080, "nv12");
+        let graph = bumper_graph(&main, 1920, 1080, 30.0, "nv12", true, 10.0, &all, None);
+        assert!(graph.starts_with("[3:v:0]scale="));
+        // Only the source goes under the logo; the clips are scaled on their own.
+        assert!(graph.contains("[captioned][bug]overlay=43:43,format=nv12,setsar=1,fps=30.000[v0]"));
+        assert!(graph.contains("[1:v:0]scale=1920:1080:"));
+    }
+
+    #[test]
+    fn a_missing_logo_is_an_error_and_an_empty_one_is_none() {
+        assert!(check_watermark(Some(bug("top-right"))).is_err());
+        let mut empty = bug("top-right");
+        empty.path = " ".into();
+        assert_eq!(check_watermark(Some(empty)).unwrap(), None);
+        let parsed: crate::types::WatermarkParams =
+            serde_json::from_value(serde_json::json!({"path": "x.png"})).unwrap();
+        assert_eq!(
+            (parsed.corner.as_str(), parsed.size_pct),
+            ("top-right", 12.0)
+        );
     }
 
     #[test]

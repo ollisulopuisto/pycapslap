@@ -781,3 +781,46 @@ def test_core_replies_reach_the_gui_thread(qtbot):
     qtbot.waitUntil(lambda: bool(ran_on), timeout=2000)
     assert ran_on[0] == window.thread()
     window.close()
+
+
+def test_the_logo_goes_into_the_render_unless_turned_off_for_the_video(qtbot, tmp_path):
+    from PySide6.QtGui import QColor, QImage
+
+    from app.models.project import VideoMetadata
+
+    logo = tmp_path / "logo.png"
+    image = QImage(40, 20, QImage.Format.Format_ARGB32)
+    image.fill(QColor(255, 0, 0))
+    image.save(str(logo))
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert window.watermark_params() is None
+    assert window.bug_btn.text() == "No logo"
+
+    window.set_bug_path(str(logo))
+    window.set_bug_style("corner", "bottom-left")
+    window.set_bug_style("sizePct", 8.0)
+    assert window.watermark_params() == {
+        "path": str(logo),
+        "corner": "bottom-left",
+        "sizePct": 8.0,
+        "opacity": 0.85,
+    }
+    assert window.player.canvas.watermark is not None
+    assert window.bug_btn.text() == "+ logo"
+
+    # This video has its own bug: off for it, still on for others.
+    window.project.video = VideoMetadata(path=str(tmp_path / "has-bug.mp4"))
+    window.set_bug_on_this_video(False)
+    assert window.watermark_params() is None
+    assert window.player.canvas.watermark is None
+    assert window.bug_btn.text() == "Logo off"
+    window.project.video = VideoMetadata(path=str(tmp_path / "plain.mp4"))
+    window._apply_bug()
+    assert window.watermark_params() is not None
+
+    window._fill_bug_menu()
+    labels = [a.text() for a in window.bug_menu.actions()]
+    assert "Logo: logo.png" in labels and "Put it on this video" in labels
+    window.close()
