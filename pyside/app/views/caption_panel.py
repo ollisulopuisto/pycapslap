@@ -978,12 +978,21 @@ class CaptionPanelWidget(QWidget):
             for column in range(self.cue_table.columnCount()):
                 item = self.cue_table.item(row, column)
                 if item:
-                    item.setBackground(QColor("#37302a") if row == current else QColor())
+                    item.setBackground(QColor())
         if current >= 0:
+            # Follow playback with the table's normal blue selection. Suppress
+            # the selection callback: it seeks to the selected cue's start.
+            self._block_signals = True
+            self.cue_table.selectRow(current)
+            self._block_signals = False
             self.cue_table.scrollToItem(
                 self.cue_table.item(current, 0),
                 QAbstractItemView.ScrollHint.EnsureVisible,
             )
+        else:
+            self._block_signals = True
+            self.cue_table.clearSelection()
+            self._block_signals = False
 
     def set_anchor_pct(self, pct: float, user_action: bool = False) -> None:
         self.active_anchor_pct = float(pct)

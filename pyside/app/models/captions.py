@@ -669,13 +669,20 @@ class CaptionsFile:
     segments: list[CaptionSegment] = field(default_factory=list)
     position_overrides: list[PositionOverride] = field(default_factory=list)
     style: CaptionStyle = field(default_factory=CaptionStyle)
+    trim_start_ms: int | None = None
+    trim_end_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "segments": [s.to_dict() for s in self.segments],
             "positionOverrides": [o.to_dict() for o in self.position_overrides],
             "style": self.style.to_dict(),
         }
+        if self.trim_start_ms is not None:
+            data["trimStartMs"] = self.trim_start_ms
+        if self.trim_end_ms is not None:
+            data["trimEndMs"] = self.trim_end_ms
+        return data
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "CaptionsFile":
@@ -685,7 +692,21 @@ class CaptionsFile:
         overrides = [PositionOverride.from_dict(o) for o in overrides_raw]
         style_raw = d.get("style", {})
         style = CaptionStyle.from_dict(style_raw) if style_raw else CaptionStyle()
-        return cls(segments=segments, position_overrides=overrides, style=style)
+        return cls(
+            segments=segments,
+            position_overrides=overrides,
+            style=style,
+            trim_start_ms=(
+                int(d["trimStartMs"])
+                if d.get("trimStartMs") is not None
+                else None
+            ),
+            trim_end_ms=(
+                int(d["trimEndMs"])
+                if d.get("trimEndMs") is not None
+                else None
+            ),
+        )
 
     @classmethod
     def from_json_str(cls, json_str: str) -> "CaptionsFile":
@@ -710,6 +731,8 @@ class ProjectState:
     position_overrides: list[PositionOverride] = field(default_factory=list)
     style: CaptionStyle = field(default_factory=CaptionStyle)
     is_dirty: bool = False
+    trim_start_ms: int | None = None
+    trim_end_ms: int | None = None
 
     @property
     def video_path(self) -> str | None:
@@ -729,6 +752,8 @@ class ProjectState:
             is_hdr=probe_dict.get("isHdr") or False,
         )
         self.sidecar_path = f"{path}.capslap.json"
+        self.trim_start_ms = None
+        self.trim_end_ms = None
         self.is_dirty = False
 
     def get_active_segment(self, timestamp_ms: int) -> CaptionSegment | None:
@@ -794,6 +819,8 @@ class ProjectState:
             self.segments = cf.segments
             self.position_overrides = cf.position_overrides
             self.style = cf.style
+            self.trim_start_ms = cf.trim_start_ms
+            self.trim_end_ms = cf.trim_end_ms
             self.is_dirty = False
             return True
         except (OSError, json.JSONDecodeError):
@@ -812,6 +839,8 @@ class ProjectState:
                 segments=self.segments,
                 position_overrides=self.position_overrides,
                 style=self.style,
+                trim_start_ms=self.trim_start_ms,
+                trim_end_ms=self.trim_end_ms,
             )
             target.write_text(cf.to_json_str(), encoding="utf-8")
             self.is_dirty = False

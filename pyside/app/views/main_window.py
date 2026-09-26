@@ -793,6 +793,7 @@ class MainWindow(QMainWindow):
     def _on_save_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
+        self._save_trim_points_to_project()
         if not self.project.video_path:
             return
         sidecar_path = self.project.get_default_sidecar_path()
@@ -1087,6 +1088,7 @@ class MainWindow(QMainWindow):
     def _on_render_video_requested(self) -> None:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
+        self._save_trim_points_to_project()
         # Keep sidecar file on disk synchronized so output and sidecar never diverge
         if self.project.get_default_sidecar_path():
             self.project.save_sidecar()
@@ -1203,9 +1205,17 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.timeline.set_duration(duration_ms)
+        if self.project.trim_start_ms is not None and self.project.trim_end_ms is not None:
+            self.timeline.set_trim_range(
+                self.project.trim_start_ms, self.project.trim_end_ms
+            )
         self._sync_play_range()
         if self.project.video:
             self.project.video.duration_sec = max(0, duration_ms) / 1000.0
+
+    def _save_trim_points_to_project(self) -> None:
+        self.project.trim_start_ms = self.timeline.trim_start_ms
+        self.project.trim_end_ms = self.timeline.trim_end_ms
 
     def _on_auto_place_requested(self) -> None:
         if not self.project.segments:
@@ -1465,6 +1475,12 @@ class MainWindow(QMainWindow):
                 "Video loaded. Click 'Transcribe Audio' or '+ Add' to create captions.",
                 5000,
             )
+
+        if self.project.trim_start_ms is not None and self.project.trim_end_ms is not None:
+            self.timeline.set_trim_range(
+                self.project.trim_start_ms, self.project.trim_end_ms
+            )
+            self._sync_play_range()
 
         # Trigger initial position sync
         self._on_position_changed(0)
