@@ -38,6 +38,7 @@ class VideoPlayerWidget(QWidget):
         # its end; None means the video's own end.
         self._range_start_ms = 0
         self._range_end_ms: int | None = None
+        self._frame_duration_ms = 1000 / 30
 
         self._setup_player()
         self._setup_ui()
@@ -142,7 +143,7 @@ class VideoPlayerWidget(QWidget):
 
         layout.addLayout(controls_layout)
 
-        # Keyboard shortcuts: Space = Play/Pause, Left/Right = Seek 1 sec, ]/[ = Speed
+        # Keyboard shortcuts: + / - step one source frame.
         QShortcut(
             QKeySequence(Qt.Key.Key_Space), self, activated=self.toggle_play_pause
         )
@@ -165,6 +166,23 @@ class VideoPlayerWidget(QWidget):
             QKeySequence(Qt.Key.Key_BracketLeft),
             self,
             activated=self._decrease_playback_speed,
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Plus), self, activated=lambda: self.step_frame(1)
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Minus), self, activated=lambda: self.step_frame(-1)
+        )
+
+    def set_frame_rate(self, fps: float) -> None:
+        if fps > 0:
+            self._frame_duration_ms = 1000.0 / fps
+
+    def step_frame(self, direction: int) -> None:
+        """Seek by exactly one frame at the loaded video's frame rate."""
+        self.media_player.pause()
+        self.seek_to_ms(
+            round(self.media_player.position() + direction * self._frame_duration_ms)
         )
 
     def set_playback_rate(self, rate: float) -> None:

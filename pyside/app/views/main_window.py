@@ -2,6 +2,8 @@ import base64
 import hashlib
 import json
 import os
+import shutil
+import subprocess
 import threading
 from pathlib import Path
 
@@ -716,6 +718,7 @@ class MainWindow(QMainWindow):
         self.overlay.set_layout_cue(cue, self._canvas_frame_size())
         self._sync_caption_layer(cue)
         active = self.project.get_active_segment(pos_ms)
+        self.caption_panel.set_playhead_segment(active)
         if active:
             anchor_y = self.project.get_anchor_y_for_segment(active)
             self.overlay.set_segment(active, anchor_y, current_pos_ms=pos_ms)
@@ -1425,6 +1428,17 @@ class MainWindow(QMainWindow):
         self.timeline.reset_trim_range()
         self._sync_play_range()
         self.player.load_video(file_path)
+        ffprobe = shutil.which("ffprobe")
+        if ffprobe:
+            try:
+                rate = subprocess.run(
+                    [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
+                    capture_output=True, text=True, timeout=5, check=True,
+                ).stdout.strip()
+                numerator, denominator = rate.split("/")
+                self.player.set_frame_rate(float(numerator) / float(denominator))
+            except (OSError, subprocess.SubprocessError, ValueError, ZeroDivisionError):
+                pass
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.review_btn.setEnabled(True)

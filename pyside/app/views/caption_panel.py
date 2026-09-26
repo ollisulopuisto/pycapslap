@@ -154,6 +154,7 @@ class CaptionPanelWidget(QWidget):
         self.preset_manager = preset_manager or PresetManager()
         self.segments: list[CaptionSegment] = []
         self.selected_segment: CaptionSegment | None = None
+        self.playhead_segment: CaptionSegment | None = None
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
         self.active_anchor_pct: float = 80.0
         self.current_style: CaptionStyle = (
@@ -961,6 +962,28 @@ class CaptionPanelWidget(QWidget):
                 self._block_signals = False
                 self.btn_delete_empty.setEnabled(not seg.text.strip())
                 break
+
+    def set_playhead_segment(self, segment: CaptionSegment | None) -> None:
+        """Highlight and reveal the cue currently under the video playhead."""
+        if self.playhead_segment is segment:
+            return
+        previous = (
+            self.segments.index(self.playhead_segment)
+            if self.playhead_segment in self.segments
+            else -1
+        )
+        self.playhead_segment = segment
+        current = self.segments.index(segment) if segment in self.segments else -1
+        for row in {previous, current} - {-1}:
+            for column in range(self.cue_table.columnCount()):
+                item = self.cue_table.item(row, column)
+                if item:
+                    item.setBackground(QColor("#37302a") if row == current else QColor())
+        if current >= 0:
+            self.cue_table.scrollToItem(
+                self.cue_table.item(current, 0),
+                QAbstractItemView.ScrollHint.EnsureVisible,
+            )
 
     def set_anchor_pct(self, pct: float, user_action: bool = False) -> None:
         self.active_anchor_pct = float(pct)
