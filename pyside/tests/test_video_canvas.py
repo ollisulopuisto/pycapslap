@@ -346,3 +346,24 @@ def test_anchor_is_read_against_the_export_canvas(qtbot):
     midpoint = QPoint(int(rect.center().x()), int(rect.top() + rect.height() * 0.5))
     canvas._update_anchor_from_pos(midpoint)
     assert abs(canvas.anchor_y_pct - 50.0) < 1.0
+
+
+def test_the_logo_is_placed_like_the_renderer_places_it(qtbot):
+    from PySide6.QtCore import QRectF
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    logo = QPixmap(400, 160)
+    canvas.set_watermark(
+        logo, {"corner": "top-right", "sizePct": 12.0, "marginPct": 4.0}
+    )
+    # A 1080x1920 frame: 12 % and 4 % of the short side (captions.rs
+    # watermark_geometry gives 130 and 43 px, rounded).
+    rect = canvas.watermark_rect(QRectF(0, 0, 1080, 1920))
+    assert abs(rect.width() - 129.6) < 0.01 and abs(rect.height() - 51.84) < 0.01
+    assert abs(rect.right() - (1080 - 43.2)) < 0.01 and abs(rect.top() - 43.2) < 0.01
+    canvas.set_watermark(logo, {"corner": "bottom-left"})
+    rect = canvas.watermark_rect(QRectF(0, 0, 1920, 1080))
+    assert abs(rect.left() - 43.2) < 0.01 and abs(rect.bottom() - (1080 - 43.2)) < 0.01
+    canvas.set_watermark(None)
+    assert canvas.watermark is None

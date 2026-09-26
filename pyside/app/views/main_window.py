@@ -87,6 +87,24 @@ PROOF_COPIES = [
 BUMPERS = {"intro": "render/intro_video", "outro": "render/outro_video"}
 BUMPER_FILES = "Video (*.mp4 *.mov *.m4v *.mkv *.webm)"
 
+# A logo ("bug") laid over the video in a corner, for sources without one.
+# Chosen once, kept in QSettings; each video can opt out (it has its own bug).
+BUG_PATH_KEY = "render/bug_path"
+BUG_STYLE_KEYS = {
+    "corner": ("render/bug_corner", "top-right"),
+    "sizePct": ("render/bug_size", 12.0),
+    "opacity": ("render/bug_opacity", 0.85),
+}
+BUG_CORNERS = [
+    ("Top left", "top-left"),
+    ("Top right", "top-right"),
+    ("Bottom left", "bottom-left"),
+    ("Bottom right", "bottom-right"),
+]
+BUG_SIZES = [("Small", 8.0), ("Medium", 12.0), ("Large", 16.0)]
+BUG_OPACITIES = [("Solid", 1.0), ("85 %", 0.85), ("60 %", 0.6)]
+BUG_FILES = "Images (*.png *.webp *.jpg *.jpeg)"
+
 # Where the review page (review/ in this repo) is published by GitHub Pages.
 REVIEW_PAGE_URL = "https://ollisulopuisto.github.io/pycapslap/"
 
@@ -158,6 +176,7 @@ class MainWindow(QMainWindow):
         self._setup_connections()
         self._setup_dark_theme()
         self._setup_perf_timer()
+        self._apply_bug()
 
     def _setup_ui(self) -> None:
         central = QWidget(self)
@@ -240,6 +259,14 @@ class MainWindow(QMainWindow):
         self.bumpers_btn.setMenu(self.bumpers_menu)
         action_bar.addWidget(self.bumpers_btn)
         self._update_bumpers_button()
+
+        # A logo in a corner, for videos that don't carry one of their own.
+        self.bug_btn = QPushButton()
+        self.bug_menu = QMenu(self.bug_btn)
+        self.bug_menu.aboutToShow.connect(self._fill_bug_menu)
+        self.bug_btn.setMenu(self.bug_menu)
+        action_bar.addWidget(self.bug_btn)
+        self._apply_bug()
 
         self.render_btn = QPushButton("Render Video")
         self.render_btn.setToolTip("Render and export video with burned-in captions")
@@ -988,12 +1015,116 @@ class MainWindow(QMainWindow):
         if path:
             self.set_bumper(which, path)
 
+    # ── Logo ("bug") ──────────────────────────────────────────────────────
+
+    def bug_style(self) -> dict:
+        settings = QSettings()
+        return {
+            name: type(default)(settings.value(key, default))
+            for name, (key, default) in BUG_STYLE_KEYS.items()
+        }
+
+    def bug_on_this_video(self) -> bool:
+        """Whether the logo goes on the current video: yes, unless turned off for it."""
+        if not self.project.video_path:
+            return True
+        return not QSettings().value(
+            self._video_key("render/bug_off"), False, type=bool
+        )
+
+    def watermark_params(self) -> dict | None:
+        """The `watermark` the render gets, or None."""
+        path = str(QSettings().value(BUG_PATH_KEY, "", type=str) or "")
+        if not path or not self.bug_on_this_video():
+            return None
+        return {"path": path, **self.bug_style()}
+
+    def set_bug_path(self, path: str) -> None:
+        QSettings().setValue(BUG_PATH_KEY, path)
+        self._apply_bug()
+
+    def set_bug_style(self, name: str, value) -> None:
+        QSettings().setValue(BUG_STYLE_KEYS[name][0], value)
+        self._apply_bug()
+
+    def set_bug_on_this_video(self, on: bool) -> None:
+        if self.project.video_path:
+            key = self._video_key("render/bug_off")
+            if on:
+                QSettings().remove(key)
+            else:
+                QSettings().setValue(key, True)
+        self._apply_bug()
+
+    def _apply_bug(self) -> None:
+        """Button text and the preview, after any change to the logo or the video."""
+        params = self.watermark_params()
+        path = str(QSettings().value(BUG_PATH_KEY, "", type=str) or "")
+        if not path:
+            self.bug_btn.setText("No logo")
+        elif params:
+            self.bug_btn.setText("+ logo")
+        else:
+            self.bug_btn.setText("Logo off")
+        self.bug_btn.setToolTip(
+            "A logo in a corner of the render, for videos without one of their own."
+            + (f"\nLogo: {Path(path).name}" if path else "")
+        )
+        if not hasattr(self, "player"):
+            return  # still building the window; __init__ applies it again
+        canvas = self.player.canvas
+        if params:
+            canvas.set_watermark(QPixmap(params["path"]), params)
+        else:
+            canvas.set_watermark(None)
+
+    def _fill_bug_menu(self) -> None:
+        menu = self.bug_menu
+        menu.clear()
+        path = str(QSettings().value(BUG_PATH_KEY, "", type=str) or "")
+        current = menu.addAction(f"Logo: {Path(path).name}" if path else "Logo: none")
+        current.setEnabled(False)
+        on = menu.addAction("Put it on this video")
+        on.setCheckable(True)
+        on.setChecked(bool(path) and self.bug_on_this_video())
+        on.setEnabled(bool(path) and bool(self.project.video_path))
+        on.toggled.connect(self.set_bug_on_this_video)
+        menu.addSeparator()
+        menu.addAction("Choose Logo…", self._choose_bug)
+        if path:
+            menu.addAction("No Logo", lambda: self.set_bug_path(""))
+        style = self.bug_style()
+        for title, name, choices in (
+            ("Corner", "corner", BUG_CORNERS),
+            ("Size", "sizePct", BUG_SIZES),
+            ("Opacity", "opacity", BUG_OPACITIES),
+        ):
+            sub = menu.addMenu(title)
+            sub.setEnabled(bool(path))
+            for label, value in choices:
+                action = sub.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(style[name] == value)
+                action.triggered.connect(
+                    lambda _=False, n=name, v=value: self.set_bug_style(n, v)
+                )
+
+    def _choose_bug(self) -> None:
+        start = str(QSettings().value(BUG_PATH_KEY, "", type=str) or "")
+        path, _ = QFileDialog.getOpenFileName(self, "Choose Logo", start, BUG_FILES)
+        if path:
+            self.set_bug_path(path)
+
     # ── Review portal ─────────────────────────────────────────────────────
+
+    def _video_key(self, prefix: str) -> str:
+        """A QSettings key of this video's own, under `prefix`."""
+        path = str(Path(self.project.video_path).resolve())
+        return f"{prefix}/" + hashlib.sha1(path.encode()).hexdigest()
 
     def _portal_key(self) -> str:
         """Where the portal id of this video's last publish is kept."""
-        path = str(Path(self.project.video_path).resolve())
-        return "portal/videos/" + hashlib.sha1(path.encode()).hexdigest()
+        return self._video_key("portal/videos")
 
     def _on_publish_to_portal(self) -> None:
         self.caption_panel.commit_active_editor()
@@ -1127,6 +1258,7 @@ class MainWindow(QMainWindow):
             "proofShortSide": self.proof_combo.currentData() or None,
             "introVideo": self.bumper_path("intro") or None,
             "outroVideo": self.bumper_path("outro") or None,
+            "watermark": self.watermark_params(),
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
             "justifyLines": self.project.style.justify_lines,
@@ -1472,6 +1604,7 @@ class MainWindow(QMainWindow):
         self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})
+        self._apply_bug()  # this video may have the logo turned off
         # Check if sidecar exists
         if self.project.load_sidecar() and self.project.segments:
             self.set_caption_segments(self.project.segments)

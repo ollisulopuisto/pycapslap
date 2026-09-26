@@ -63,6 +63,7 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 * 🎬 **Multi-Format Video Rendering**:
   * Burn captions with one click into **9:16 (TikTok / Reels / Shorts)**, **1:1 (Square)**, **4:5 (Instagram)**, or **16:9 (YouTube)** with Apple VideoToolbox hardware encoding.
   * A smaller **proof copy** (720p or 540p) is encoded in the same pass as the full-size video: send the small one to be checked, publish the big one.
+  * **Logo (bug)**: a logo in a corner of the render, for videos that don't carry one. Pick the image (a PNG with transparency is best), the corner, size and opacity once; turn it off for a video that has its own, and that video remembers it. It sits over the captions, stays off the intro and outro, and the preview shows it where the render puts it.
   * **Intro and outro clips**: pick a ready-made clip to play before the video, after it, or both (a channel ident, a "listen to the new episode" end card). They are scaled and padded to the output frame, keep their own sound (or get silence), and are joined in the same encode, proof copy included. The choice is remembered for later renders.
 
 ---
