@@ -697,14 +697,10 @@ class CaptionsFile:
             position_overrides=overrides,
             style=style,
             trim_start_ms=(
-                int(d["trimStartMs"])
-                if d.get("trimStartMs") is not None
-                else None
+                int(d["trimStartMs"]) if d.get("trimStartMs") is not None else None
             ),
             trim_end_ms=(
-                int(d["trimEndMs"])
-                if d.get("trimEndMs") is not None
-                else None
+                int(d["trimEndMs"]) if d.get("trimEndMs") is not None else None
             ),
         )
 

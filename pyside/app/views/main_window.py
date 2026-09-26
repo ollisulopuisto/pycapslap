@@ -1205,7 +1205,10 @@ class MainWindow(QMainWindow):
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         self.timeline.set_duration(duration_ms)
-        if self.project.trim_start_ms is not None and self.project.trim_end_ms is not None:
+        if (
+            self.project.trim_start_ms is not None
+            and self.project.trim_end_ms is not None
+        ):
             self.timeline.set_trim_range(
                 self.project.trim_start_ms, self.project.trim_end_ms
             )
@@ -1442,8 +1445,22 @@ class MainWindow(QMainWindow):
         if ffprobe:
             try:
                 rate = subprocess.run(
-                    [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=avg_frame_rate", "-of", "default=noprint_wrappers=1:nokey=1", file_path],
-                    capture_output=True, text=True, timeout=5, check=True,
+                    [
+                        ffprobe,
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=avg_frame_rate",
+                        "-of",
+                        "default=noprint_wrappers=1:nokey=1",
+                        file_path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=True,
                 ).stdout.strip()
                 numerator, denominator = rate.split("/")
                 self.player.set_frame_rate(float(numerator) / float(denominator))
@@ -1476,7 +1493,10 @@ class MainWindow(QMainWindow):
                 5000,
             )
 
-        if self.project.trim_start_ms is not None and self.project.trim_end_ms is not None:
+        if (
+            self.project.trim_start_ms is not None
+            and self.project.trim_end_ms is not None
+        ):
             self.timeline.set_trim_range(
                 self.project.trim_start_ms, self.project.trim_end_ms
             )
