@@ -85,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Review page tests
-        run: node --test review/*.test.js
+        run: node --test review/*.test.js portal/capslap_portal/static/*.test.js
 
   portal:
     runs-on: ubuntu-latest

@@ -67,6 +67,26 @@ class Publish(NewVideo):
     episode: str = Field(min_length=1, max_length=200)
 
 
+# The services a video can be posted to. Their limits live with the editor that
+# checks them (static/platforms.js); the server only knows the names.
+PLATFORMS = ("youtube", "tiktok", "instagram", "facebook", "linkedin", "x")
+
+
+class PostText(BaseModel):
+    title: str = Field(default="", max_length=1000)
+    body: str = Field(default="", max_length=70_000)
+    author: str = Field(default="", max_length=100)
+
+
+class Approval(BaseModel):
+    approved: bool
+    author: str = Field(default="", max_length=100)
+
+
+class Platforms(BaseModel):
+    platforms: list[str]
+
+
 class Feedback(BaseModel):
     text: str = Field(min_length=1, max_length=10_000)
     author: str = Field(default="", max_length=100)
@@ -99,7 +119,9 @@ def create_app(settings: Settings) -> FastAPI:
     videos_dir = settings.data_dir / "videos"
     videos_dir.mkdir(exist_ok=True)
     db_path = settings.data_dir / "portal.sqlite3"
-    db.connect(db_path).close()  # creates the schema
+    first = db.connect(db_path)  # creates the schema
+    db.migrate(first)
+    first.close()
 
     app = FastAPI(title="Videoiden hyväksyntä", docs_url=None, redoc_url=None)
 
@@ -162,8 +184,82 @@ def create_app(settings: Settings) -> FastAPI:
             "downloadUrl": f"{base}/videos/{v['id']}/file?download=1",
             "captionsUrl": f"{base}/videos/{v['id']}/captions" if versions else None,
             "reviews": [x for x in versions if x["source"] == "review"],
+            "platforms": platforms_of(v),
+            "posts": posts_of(c, v["id"]),
         }
         return out
+
+    def platforms_of(v: sqlite3.Row) -> list[str]:
+        chosen = json.loads(v["platforms"]) if v["platforms"] else list(PLATFORMS)
+        return [p for p in PLATFORMS if p in chosen]
+
+    def posts_of(c, video_id: int) -> dict[str, dict]:
+        rows = c.execute("SELECT * FROM posts WHERE video_id=?", (video_id,))
+        return {
+            r["platform"]: {
+                "title": r["title"],
+                "body": r["body"],
+                "updatedBy": r["updated_by"],
+                "updatedAt": r["updated_at"],
+                "approvedBy": r["approved_by"],
+                "approvedAt": r["approved_at"],
+            }
+            for r in rows
+        }
+
+    def check_platform(platform: str) -> None:
+        if platform not in PLATFORMS:
+            raise HTTPException(404, f"No such service: {platform}.")
+
+    def save_post(c, video_id: int, platform: str, text: PostText) -> dict:
+        """Store a post text; a changed text needs approving again."""
+        check_platform(platform)
+        old = c.execute(
+            "SELECT title, body FROM posts WHERE video_id=? AND platform=?",
+            (video_id, platform),
+        ).fetchone()
+        changed = old is None or (old["title"], old["body"]) != (text.title, text.body)
+        if old is None:
+            c.execute(
+                "INSERT INTO posts (video_id, platform) VALUES (?, ?)",
+                (video_id, platform),
+            )
+        if changed:
+            c.execute(
+                """UPDATE posts SET title=?, body=?, updated_by=?, updated_at=?,
+                   approved_by=NULL, approved_at=NULL
+                   WHERE video_id=? AND platform=?""",
+                (
+                    text.title,
+                    text.body,
+                    text.author.strip(),
+                    db.now(),
+                    video_id,
+                    platform,
+                ),
+            )
+        return posts_of(c, video_id)[platform]
+
+    def approve_post(c, video_id: int, platform: str, approval: Approval) -> dict:
+        check_platform(platform)
+        if (
+            c.execute(
+                "SELECT 1 FROM posts WHERE video_id=? AND platform=?",
+                (video_id, platform),
+            ).fetchone()
+            is None
+        ):
+            raise HTTPException(409, "There is no text to approve yet.")
+        c.execute(
+            "UPDATE posts SET approved_by=?, approved_at=? WHERE video_id=? AND platform=?",
+            (
+                approval.author.strip() if approval.approved else None,
+                db.now() if approval.approved else None,
+                video_id,
+                platform,
+            ),
+        )
+        return posts_of(c, video_id)[platform]
 
     def feedback_of(c, episode_id: int) -> list[dict]:
         rows = c.execute(
@@ -301,6 +397,22 @@ def create_app(settings: Settings) -> FastAPI:
             (video_id, "review", author, body, db.now()),
         )
         return {"ok": True}
+
+    @app.put("/api/s/{token}/videos/{video_id}/posts/{platform}")
+    def client_post(
+        token: str, video_id: int, platform: str, text: PostText, c=Depends(conn)
+    ):
+        _, v = client_video(token, video_id, c)
+        if platform not in platforms_of(v):
+            raise HTTPException(404, "This video doesn't go to that service.")
+        return save_post(c, video_id, platform, text)
+
+    @app.post("/api/s/{token}/videos/{video_id}/posts/{platform}/approval")
+    def client_approve(
+        token: str, video_id: int, platform: str, approval: Approval, c=Depends(conn)
+    ):
+        client_video(token, video_id, c)
+        return approve_post(c, video_id, platform, approval)
 
     @app.post("/api/s/{token}/episodes/{episode_id}/feedback")
     def client_feedback(token: str, episode_id: int, fb: Feedback, c=Depends(conn)):
@@ -492,6 +604,41 @@ def create_app(settings: Settings) -> FastAPI:
             "seriesLink": f"/s/{s['token']}",
             "episodeLink": f"/s/{s['token']}/e/{e['id']}",
         }
+
+    @app.put("/api/admin/videos/{video_id}/posts/{platform}", dependencies=A)
+    def admin_post(video_id: int, platform: str, text: PostText, c=Depends(conn)):
+        _row(
+            c.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone(),
+            "video",
+        )
+        return save_post(c, video_id, platform, text)
+
+    @app.post("/api/admin/videos/{video_id}/posts/{platform}/approval", dependencies=A)
+    def admin_approve(
+        video_id: int, platform: str, approval: Approval, c=Depends(conn)
+    ):
+        _row(
+            c.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone(),
+            "video",
+        )
+        return approve_post(c, video_id, platform, approval)
+
+    @app.put("/api/admin/videos/{video_id}/platforms", dependencies=A)
+    def admin_platforms(video_id: int, body: Platforms, c=Depends(conn)):
+        """Which services the video goes to; the others' texts are kept, just hidden."""
+        _row(
+            c.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone(),
+            "video",
+        )
+        unknown = [p for p in body.platforms if p not in PLATFORMS]
+        if unknown:
+            raise HTTPException(422, f"No such service: {', '.join(unknown)}.")
+        c.execute(
+            "UPDATE videos SET platforms=? WHERE id=?",
+            (json.dumps([p for p in PLATFORMS if p in body.platforms]), video_id),
+        )
+        v = c.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
+        return {"platforms": platforms_of(v)}
 
     @app.put("/api/admin/videos/{video_id}/file", dependencies=A)
     async def admin_upload(video_id: int, request: Request, c=Depends(conn)):

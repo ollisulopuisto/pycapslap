@@ -28,10 +28,6 @@
   box-sizing: border-box;
 }
 
-[hidden] {
-  display: none !important;
-}
-
 body {
   margin: 0;
   background: var(--bg);
@@ -112,7 +108,7 @@ a.card:hover {
 
 .videos {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
@@ -278,4 +274,131 @@ form.feedback .row > * {
 .linkbox input {
   flex: 1;
   min-width: 0;
+}
+
+/* Post texts */
+
+.posts {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.posts h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.post-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.post-tab {
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 13px;
+}
+
+.post-tab::before {
+  content: '○ ';
+  color: var(--muted);
+}
+
+.post-tab.draft::before {
+  content: '● ';
+  color: #d97706;
+}
+
+.post-tab.approved::before {
+  content: '✓ ';
+  color: var(--ok);
+}
+
+.post-tab.error::before {
+  content: '! ';
+  color: var(--error);
+}
+
+.post-tab.current {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.post-field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.post-field .row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.post-field .row button {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.post-field textarea {
+  resize: vertical;
+}
+
+.counter {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.counter.over {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.visible-part {
+  font-size: 13px;
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+}
+
+.problems {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.problems .error {
+  color: var(--error);
+}
+
+.problems .warn {
+  color: #d97706;
+}
+
+.who {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  max-width: 360px;
+  margin-bottom: 4px;
+}
+
+.video-posts {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.video-posts summary {
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
 }
