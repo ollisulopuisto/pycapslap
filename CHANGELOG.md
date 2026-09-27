@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Added
+- **Post texts in the review portal.** Every video gets the title and text it is posted with on each service it goes to (YouTube, TikTok, Instagram, Facebook, LinkedIn, X; chosen per video on the admin page). Editor and client write and edit them beside the video; the client approves each one, and any change clears the approval. Every text is checked live against its service: length (X's own weighted count, links as 23), YouTube's title length, 15-hashtag cap and forbidden `<` `>`, Instagram's five hashtags, TikTok's 2200 for scheduling tools, and what shows before "more" on Instagram, Facebook and LinkedIn. Tabs show each service's state (empty, draft, approved, over a limit); a copy button per field for posting, and a new service's text can start from one already written.
+
 ### Fixed
 - The macOS test run could still segfault in `QTimerInfoList::activateTimers`, right after the test that loads a real video and closes the window. The window now releases its media player (stop, detach the video sink, clear the source) and stops its own timers when it closes, so the macOS backend has nothing left to fire into.
 - **Caption lines no longer jump from word to word.** A karaoke caption is one cue per word, and libass wrapped each on its own; the highlighted word is set bigger and every window opens slightly stretched, so the same block broke into different lines from one word to the next. The line breaks are now decided once per caption block, with room for the biggest word highlighted and the stretch, balanced like libass's own wrap, and written into every window as forced breaks (`\N`, `\q2`). Plain captions get the same treatment against their bounce-in.

@@ -228,3 +228,99 @@ def test_pages_keep_the_link_out_of_referrers_and_search(client):
     assert "noindex" in r.headers["x-robots-tag"]
     assert client.get("/admin").status_code == 200
     assert client.get("/review/").status_code == 200
+
+
+def test_post_texts_are_edited_approved_and_reapproved_after_a_change(client):
+    out = publish(client)
+    token = out["seriesLink"].split("/")[-1]
+    eid = out["episodeLink"].split("/")[-1]
+    vid = out["video"]["id"]
+    base = f"/api/s/{token}/videos/{vid}/posts"
+
+    # Every service by default, no texts yet.
+    (video,) = client.get(f"/api/s/{token}/episodes/{eid}").json()["videos"]
+    assert video["platforms"] == [
+        "youtube",
+        "tiktok",
+        "instagram",
+        "facebook",
+        "linkedin",
+        "x",
+    ]
+    assert video["posts"] == {}
+    assert client.post(f"{base}/x/approval", json={"approved": True}).status_code == 409
+
+    # The editor writes, the client approves.
+    admin_url = f"/api/admin/videos/{vid}/posts/youtube"
+    r = client.put(
+        admin_url,
+        headers=AUTH,
+        json={"title": "Agentit", "body": "Jakso 4 #tekoäly", "author": "Olli"},
+    )
+    assert r.json()["updatedBy"] == "Olli" and r.json()["approvedBy"] is None
+    r = client.post(
+        f"{base}/youtube/approval", json={"approved": True, "author": "Maija"}
+    )
+    assert r.json()["approvedBy"] == "Maija"
+
+    # Saving the same text keeps the approval; changing it clears it.
+    client.put(
+        admin_url, headers=AUTH, json={"title": "Agentit", "body": "Jakso 4 #tekoäly"}
+    )
+    post = client.get(f"/api/s/{token}/episodes/{eid}").json()["videos"][0]["posts"][
+        "youtube"
+    ]
+    assert post["approvedBy"] == "Maija"
+    client.put(
+        f"{base}/youtube",
+        json={"title": "Agentit!", "body": "Jakso 4", "author": "Maija"},
+    )
+    post = client.get(f"/api/s/{token}/episodes/{eid}").json()["videos"][0]["posts"][
+        "youtube"
+    ]
+    assert (post["title"], post["updatedBy"], post["approvedBy"]) == (
+        "Agentit!",
+        "Maija",
+        None,
+    )
+
+    assert client.put(f"{base}/myspace", json={"body": "x"}).status_code == 404
+
+
+def test_the_editor_picks_the_services_a_video_goes_to(client):
+    out = publish(client)
+    token = out["seriesLink"].split("/")[-1]
+    eid = out["episodeLink"].split("/")[-1]
+    vid = out["video"]["id"]
+    url = f"/api/admin/videos/{vid}/platforms"
+    r = client.put(url, headers=AUTH, json={"platforms": ["x", "instagram"]})
+    assert r.json()["platforms"] == ["instagram", "x"]  # in the fixed order
+    assert (
+        client.put(url, headers=AUTH, json={"platforms": ["myspace"]}).status_code
+        == 422
+    )
+    (video,) = client.get(f"/api/s/{token}/episodes/{eid}").json()["videos"]
+    assert video["platforms"] == ["instagram", "x"]
+    # Clients edit only the services the video goes to.
+    base = f"/api/s/{token}/videos/{vid}/posts"
+    assert client.put(f"{base}/linkedin", json={"body": "x"}).status_code == 404
+    assert client.put(f"{base}/x", json={"body": "x"}).status_code == 200
+
+
+def test_an_old_database_gets_the_new_column(tmp_path):
+    import sqlite3
+
+    old = sqlite3.connect(tmp_path / "portal.sqlite3")
+    old.executescript(
+        "CREATE TABLE videos (id INTEGER PRIMARY KEY, episode_id INTEGER, label TEXT,"
+        " filename TEXT, size INTEGER, uploaded INTEGER, created_at REAL);"
+    )
+    old.close()
+    create_app(Settings(data_dir=tmp_path, admin_token=ADMIN))
+    cols = {
+        r[1]
+        for r in sqlite3.connect(tmp_path / "portal.sqlite3").execute(
+            "PRAGMA table_info(videos)"
+        )
+    }
+    assert "platforms" in cols

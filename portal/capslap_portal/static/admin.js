@@ -1,19 +1,12 @@
 // The editor's side: series and their secret links, episodes, videos, every
 // captions version (to import into PyCapSlap) and all feedback.
 
+import { h } from './dom.js'
+import { PLATFORMS } from './platforms.js'
+import { postsEditor } from './posts.js'
+
 const $ = (id) => document.getElementById(id)
 
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag)
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === undefined || v === null || v === false) continue
-    if (k.startsWith('on')) el.addEventListener(k.slice(2), v)
-    else if (k in el && typeof v !== 'string') el[k] = v
-    else el.setAttribute(k, v)
-  }
-  el.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false))
-  return el
-}
 
 let token = ''
 try {
@@ -267,6 +260,7 @@ function episodeBlock(seriesId, e) {
           )
         )
       : h('p', { class: 'muted' }, 'No videos. Publish one from PyCapSlap, or upload below.'),
+    e.videos.map((v) => postsBlock(v)),
     uploadForm(e.id, refresh),
     h('h3', { style: 'margin-top:12px' }, `Feedback (${e.feedback.length})`),
     e.feedback.length
@@ -314,6 +308,57 @@ function episodeBlock(seriesId, e) {
       'Delete episode'
     )
   )
+}
+
+// Where a video goes out and with what text, one details box per video.
+function postsBlock(v) {
+  const box = h('details', { class: 'video-posts' })
+  const draw = () => {
+    const chooser = h(
+      'div',
+      { class: 'actions' },
+      h('span', { class: 'muted' }, 'Goes to:'),
+      PLATFORMS.map((p) =>
+        h(
+          'label',
+          {},
+          h('input', {
+            type: 'checkbox',
+            checked: v.platforms.includes(p.id),
+            onchange: async (e) => {
+              const chosen = e.target.checked ? [...v.platforms, p.id] : v.platforms.filter((x) => x !== p.id)
+              try {
+                v.platforms = (await send('PUT', `/api/admin/videos/${v.id}/platforms`, { platforms: chosen })).platforms
+              } catch (err) {
+                fail(err)
+              }
+              draw()
+            },
+          }),
+          ` ${p.name}`
+        )
+      )
+    )
+    const approvedCount = v.platforms.filter((id) => v.posts[id]?.approvedAt).length
+    box.replaceChildren(
+      h('summary', {}, `Post texts: ${v.label} `, h('span', { class: 'muted' }, `(${approvedCount}/${v.platforms.length} approved)`)),
+      chooser,
+      postsEditor(v, {
+        save: async (platform, text) => {
+          const post = await send('PUT', `/api/admin/videos/${v.id}/posts/${platform}`, { ...text, author: 'Editor' })
+          v.posts[platform] = post
+          return post
+        },
+        approve: async (platform, approved) => {
+          const post = await send('POST', `/api/admin/videos/${v.id}/posts/${platform}/approval`, { approved, author: 'Editor' })
+          v.posts[platform] = post
+          return post
+        },
+      })
+    )
+  }
+  draw()
+  return box
 }
 
 function uploadForm(episodeId, refresh) {

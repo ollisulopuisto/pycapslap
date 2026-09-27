@@ -16,6 +16,15 @@ comes back.
   The client fixes wording and timing and presses *Send*; the corrected file is
   stored as a new version. The editor downloads it from the admin page (or
   the app fetches it) and imports it into PyCapSlap as is.
+- **Post texts.** Each video carries the text it goes out with on every
+  service it is meant for (the editor ticks YouTube, TikTok, Instagram,
+  Facebook, LinkedIn and X per video). The editor writes them on the admin
+  page, the client edits and approves them next to the video; a changed text
+  needs approving again. Each is checked against the service's rules: length
+  (X counted the way X counts, links as 23), YouTube's 100-character title and
+  15-hashtag cap, Instagram's five hashtags, TikTok's 2200 for scheduling
+  tools, and the part shown before "more". The limits are in
+  `static/platforms.js`; the services change them now and then.
 - **Feedback.** Free-form notes on the episode, optionally tied to a video and
   a moment in it.
 - **Admin** (`/admin`, with the admin token): series, their links, episodes,

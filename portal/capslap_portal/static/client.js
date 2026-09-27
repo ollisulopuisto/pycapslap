@@ -1,6 +1,9 @@
 // The client side of the portal: a series' episodes, an episode's videos,
 // caption checks and feedback. Everything is reached through the series link.
 
+import { h } from './dom.js'
+import { postsEditor } from './posts.js'
+
 const STRINGS = {
   fi: {
     episodes: 'Jaksot',
@@ -16,6 +19,7 @@ const STRINGS = {
     feedback: 'Palaute',
     noFeedback: 'Ei palautetta vielä.',
     yourName: 'Nimesi',
+    checkTexts: 'Tarkista myös julkaisutekstit: ne lähtevät videon mukana jokaiseen palveluun.',
     feedbackPlaceholder: 'Mitä haluat muuttaa tai sanoa?',
     about: 'Koskee',
     wholeEpisode: 'koko jaksoa',
@@ -40,6 +44,7 @@ const EN = {
   feedback: 'Feedback',
   noFeedback: 'No feedback yet.',
   yourName: 'Your name',
+  checkTexts: 'Check the post texts too: they go out with the video on each service.',
   feedbackPlaceholder: 'What would you change, or like to say?',
   about: 'About',
   wholeEpisode: 'the whole episode',
@@ -56,18 +61,6 @@ const t = (key, ...args) => {
   return typeof value === 'function' ? value(...args) : value
 }
 
-/** Tiny element builder: h('a', {href}, 'text', child…). Text is never HTML. */
-function h(tag, attrs = {}, ...children) {
-  const el = document.createElement(tag)
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === undefined || v === null || v === false) continue
-    if (k.startsWith('on')) el.addEventListener(k.slice(2), v)
-    else if (k in el && typeof v !== 'string') el[k] = v
-    else el.setAttribute(k, v)
-  }
-  el.append(...children.flat().filter((c) => c !== null && c !== undefined && c !== false))
-  return el
-}
 
 const $ = (id) => document.getElementById(id)
 const [, , token, , episodeId] = location.pathname.split('/')
@@ -138,6 +131,16 @@ async function showSeries() {
 
 const players = new Map() // video id → <video>
 
+// Who is checking: shown with their text edits, approvals and feedback.
+const nameField = h('input', {
+  class: 'field name',
+  placeholder: t('yourName'),
+  value: remembered('portal:name'),
+  autocomplete: 'name',
+  oninput: () => remembered('portal:name', nameField.value.trim()),
+})
+const who = () => nameField.value.trim()
+
 async function showEpisode() {
   const episode = await getJSON(`${api}/episodes/${episodeId}`)
   document.title = `${episode.title} · ${episode.series}`
@@ -178,13 +181,29 @@ async function showEpisode() {
           t('commentHere')
         ),
         lastReview && h('span', { class: 'badge ok' }, t('reviewedBy', lastReview.author))
-      )
+      ),
+      postsEditor(v, {
+        save: (platform, text) =>
+          getJSON(`${api}/videos/${v.id}/posts/${platform}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...text, author: who() }),
+          }),
+        approve: (platform, approved) =>
+          getJSON(`${api}/videos/${v.id}/posts/${platform}/approval`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approved, author: who() }),
+          }),
+      })
     )
   })
 
   $('main').replaceChildren(
     h('p', {}, h('a', { href: `/s/${token}` }, t('back'))),
     h('h2', {}, episode.title),
+    h('label', { class: 'who' }, t('yourName'), ' ', nameField),
+    h('p', { class: 'muted' }, t('checkTexts')),
     videos.length ? h('div', { class: 'videos' }, videos) : h('p', { class: 'muted' }, t('noVideos')),
     h('h2', {}, t('feedback')),
     notesList(episode),
@@ -227,7 +246,6 @@ function notesList(episode) {
 }
 
 function feedbackForm(episode) {
-  const name = h('input', { placeholder: t('yourName'), value: remembered('portal:name'), autocomplete: 'name' })
   const text = h('textarea', { rows: 4, placeholder: t('feedbackPlaceholder'), required: true })
   const about = h('select', {}, h('option', { value: '' }, t('wholeEpisode')))
   const status = h('span', { class: 'muted' })
@@ -239,13 +257,12 @@ function feedbackForm(episode) {
       class: 'feedback',
       onsubmit: async (e) => {
         e.preventDefault()
-        remembered('portal:name', name.value.trim())
         const videoId = about.value ? Number(about.value) : null
         try {
           await getJSON(`${api}/episodes/${episodeId}/feedback`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: text.value, author: name.value.trim(), videoId, atMs: videoId ? atMs : null }),
+            body: JSON.stringify({ text: text.value, author: who(), videoId, atMs: videoId ? atMs : null }),
           })
           await showEpisode()
           $('error').textContent = ''
@@ -255,7 +272,7 @@ function feedbackForm(episode) {
         }
       },
     },
-    h('div', { class: 'row' }, name, h('label', { class: 'muted' }, t('about'), ' ', about)),
+    h('div', { class: 'row' }, h('label', { class: 'muted' }, t('about'), ' ', about)),
     text,
     h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit' }, t('send')), status)
   )
