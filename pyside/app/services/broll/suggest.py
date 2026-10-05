@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.models.captions import CaptionSegment, CaptionsFile
-from app.services.broll import commons, topics
+from app.services.broll import sources, topics
 from app.services.broll.assets import Asset
 
 Search = Callable[..., list[Asset]]
@@ -22,7 +22,7 @@ Search = Callable[..., list[Asset]]
 
 def proposals(
     segments: list[CaptionSegment],
-    search: Search = commons.search,
+    search: Search = sources.search,
     target_ms: int = 8000,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
