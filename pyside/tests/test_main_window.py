@@ -889,3 +889,26 @@ def test_the_open_dialog_offers_audio_files():
     from app.views.main_window import OPEN_FILES
 
     assert "*.m4a" in OPEN_FILES and "*.mp3" in OPEN_FILES and "*.mp4" in OPEN_FILES
+
+
+def test_rendering_an_audio_file_says_what_to_do_instead(
+    qtbot, tmp_path, monkeypatch, no_modal_message_boxes
+):
+    from app.views import main_window as mw
+
+    audio = tmp_path / "ep.wav"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr(mw.media, "has_video", lambda p: False)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.set_caption_segments([CaptionSegment(0, 2000, "tram")])
+    monkeypatch.setattr(
+        window.player.media_player.__class__,
+        "source",
+        lambda self: mw.QUrl.fromLocalFile(str(audio)),
+    )
+    window._on_render_video_requested()
+    kind, text = no_modal_message_boxes[-1]
+    assert kind == "information"
+    assert "audio" in text.lower() and "B-roll Reel" in text
+    window.close()
