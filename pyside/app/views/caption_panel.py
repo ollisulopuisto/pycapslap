@@ -36,6 +36,7 @@ from app.models.captions import (
 )
 from app.services.preset_manager import PresetManager
 from app.services.spellcheck import get_shared_checker
+from app.views.flow_layout import FlowLayout
 
 SPELL_ERROR_COLOR = "#f87171"
 
@@ -172,13 +173,13 @@ class CaptionPanelWidget(QWidget):
         layout.setSpacing(8)
 
         # Header with actions
-        header_layout = QHBoxLayout()
+        header_layout = FlowLayout(spacing=8)
+        self.header_layout = header_layout
         self.lbl_title = QLabel("Captions")
         self.lbl_title.setStyleSheet(
             "font-weight: bold; font-size: 14px; color: #f4f4f5;"
         )
         header_layout.addWidget(self.lbl_title)
-        header_layout.addStretch()
 
         self.btn_add_cue = QPushButton("+ Add")
         self.btn_add_cue.setToolTip(

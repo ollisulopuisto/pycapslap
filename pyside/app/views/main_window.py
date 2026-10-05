@@ -52,6 +52,7 @@ from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
 from app.services.broll.picks import Picks as BrollPicks
 from app.views.broll_dialog import BrollDialog
+from app.views.flow_layout import FlowLayout
 from app.views.portal_dialog import PublishDialog, portal_from_settings
 from app.models.review import (
     ReviewMismatch,
@@ -205,7 +206,8 @@ class MainWindow(QMainWindow):
         left_col.setSpacing(8)
 
         # Top Action Bar
-        action_bar = QHBoxLayout()
+        action_bar = FlowLayout(spacing=8)
+        self.action_bar = action_bar
         self.open_btn = QPushButton("Open Video...")
         self.open_btn.clicked.connect(self.open_file_dialog)
         action_bar.addWidget(self.open_btn)
@@ -302,7 +304,6 @@ class MainWindow(QMainWindow):
         self.thumb_btn.setEnabled(False)
         action_bar.addWidget(self.thumb_btn)
 
-        action_bar.addStretch()
         left_col.addLayout(action_bar)
 
         # Cmd+S / Ctrl+S shortcut for Save
