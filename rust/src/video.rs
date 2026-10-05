@@ -1824,6 +1824,58 @@ fn parse_fps(s: &str) -> Option<f64> {
     }
 }
 
+/// Does ffmpeg find a video stream in `path`? Cover art counts: it extracts
+/// like any picture. A file ffmpeg cannot open at all has none, and that is
+/// not an audio file either, so it is asked about with the file in hand.
+fn has_video_stream(ffmpeg: &str, path: &str) -> bool {
+    let out = Command::new(ffmpeg)
+        .args(["-hide_banner", "-i", path])
+        .output();
+    match out {
+        Ok(o) => {
+            let info = String::from_utf8_lossy(&o.stderr);
+            // With no output file ffmpeg lists the streams and then complains
+            // about the missing output; an unreadable file never lists any.
+            let opened = info.contains("Stream #");
+            !opened || info.contains(": Video:")
+        }
+        Err(_) => true,
+    }
+}
+
+/// A dark 16:9 frame as JPEG, for a file with no picture of its own.
+fn placeholder_frame(ffmpeg: &str) -> anyhow::Result<Vec<u8>> {
+    let out = Command::new(ffmpeg)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x18181b:s=1280x720",
+        ])
+        .args([
+            "-frames:v",
+            "1",
+            "-f",
+            "image2",
+            "-c:v",
+            "mjpeg",
+            "-q:v",
+            "3",
+            "-",
+        ])
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}", e))?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return Err(anyhow::anyhow!(
+            "FFmpeg could not make a placeholder frame: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    Ok(out.stdout)
+}
+
 /// Extract the first frame of a video as a base64 encoded data URI (JPEG format, bounded to UI preview dimensions)
 pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     // Check in-memory cache first
@@ -1868,16 +1920,22 @@ pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
         .output()
         .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}", e))?;
 
-    if !output.status.success() {
+    let jpeg = if output.status.success() {
+        output.stdout
+    } else if !has_video_stream(&ffmpeg_path, video_path) {
+        // An audio-only file has no picture to take. The editor still wants a
+        // frame to draw the captions on, so it gets a plain dark one.
+        placeholder_frame(&ffmpeg_path)?
+    } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(anyhow::anyhow!(
             "FFmpeg failed to extract frame: {}",
             stderr
         ));
-    }
+    };
 
     use base64::{engine::general_purpose, Engine as _};
-    let encoded = general_purpose::STANDARD.encode(&output.stdout);
+    let encoded = general_purpose::STANDARD.encode(&jpeg);
 
     // Return with data URI scheme
     let result = format!("data:image/jpeg;base64,{}", encoded);
@@ -2467,5 +2525,33 @@ mod tests {
     fn vt_decode_args_keep_frames_on_the_gpu_only_when_asked() {
         assert_eq!(vt_decode_args(false), vec!["-hwaccel", "videotoolbox"]);
         assert!(vt_decode_args(true).contains(&"videotoolbox_vld"));
+    }
+
+    #[test]
+    fn first_frame_of_an_audio_only_file_is_a_placeholder_not_an_error() {
+        // An audio episode has no picture to take; the editor still wants one to
+        // draw captions on. Before, ffmpeg's "Output file does not contain any
+        // stream" came back as an error dialog on every load.
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("episode.wav");
+        let made = std::process::Command::new(get_ffmpeg_path_sync())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1"])
+            .arg(&wav)
+            .status()
+            .expect("ffmpeg runs");
+        assert!(made.success());
+
+        let frame = extract_first_frame(wav.to_str().unwrap())
+            .expect("an audio file gets a placeholder frame");
+        assert!(frame.starts_with("data:image/jpeg;base64,"));
+        assert!(frame.len() > 200, "an actual image, not an empty payload");
+    }
+
+    #[test]
+    fn first_frame_of_a_missing_file_is_still_an_error() {
+        // The placeholder is for audio only; a file ffmpeg cannot read at all
+        // must not be dressed up as one.
+        let err = extract_first_frame("/nonexistent/nothing.mp4").unwrap_err();
+        assert!(err.to_string().contains("FFmpeg failed to extract frame"));
     }
 }

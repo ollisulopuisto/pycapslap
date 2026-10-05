@@ -47,6 +47,7 @@ from app.models.captions import (
     combine_separated_syllables,
 )
 from app.portal_client import Portal, PortalError
+from app.services import media
 from app.services.broll import pipeline as broll_pipeline
 from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
@@ -1304,6 +1305,14 @@ class MainWindow(QMainWindow):
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
             QMessageBox.information(self, "Render Video", "Please load a video first.")
+            return
+        if media.has_video(source_file) is False:
+            QMessageBox.information(
+                self,
+                "Render Video",
+                "This is an audio file, so there is no picture to put captions on. "
+                "B-roll Reel… makes a video from it.",
+            )
             return
 
         if not self.project.segments:
