@@ -125,6 +125,30 @@ pub struct ExtractAudioParams {
     pub input: String,         // Path to input video file
     pub codec: Option<String>, // Audio codec to use (default: "aac")
     pub out: Option<String>,   // Output path (default: input filename with .m4a extension)
+    /// Only this part of the input; the whole of it when absent.
+    #[serde(default)]
+    pub range: Option<AudioRange>,
+}
+
+/// A stretch of a recording, in seconds from its start.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioRange {
+    pub start_sec: f64,
+    pub duration_sec: f64,
+}
+
+impl AudioRange {
+    /// From the editor's millisecond marks. None unless there is a start or
+    /// an end to honour, and the end comes after the start.
+    pub fn from_ms(start_ms: Option<u64>, end_ms: Option<u64>) -> Option<AudioRange> {
+        let start = start_ms.unwrap_or(0);
+        let end = end_ms?;
+        (end > start).then(|| AudioRange {
+            start_sec: start as f64 / 1000.0,
+            duration_sec: (end - start) as f64 / 1000.0,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -141,6 +165,12 @@ fn default_true() -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct GenerateCaptionsParams {
     pub input_video: String, // Path to input video file
+    /// Transcribe only from here (ms); with `transcribe_end_ms`. A long episode
+    /// is transcribed a part at a time rather than all of it at once.
+    #[serde(default)]
+    pub transcribe_start_ms: Option<u64>,
+    #[serde(default)]
+    pub transcribe_end_ms: Option<u64>,
     #[serde(default)]
     pub export_formats: Vec<String>, // List of aspect ratios to export (e.g., ["9:16", "16:9"])
     #[serde(default)]
@@ -567,5 +597,40 @@ mod tests {
         assert!(params.export_formats.is_empty());
         assert!(!params.karaoke);
         assert!(params.split_by_words);
+    }
+}
+
+#[cfg(test)]
+mod audio_range_tests {
+    use super::AudioRange;
+
+    #[test]
+    fn marks_in_milliseconds_become_a_start_and_a_length_in_seconds() {
+        assert_eq!(
+            AudioRange::from_ms(Some(60_000), Some(90_500)),
+            Some(AudioRange {
+                start_sec: 60.0,
+                duration_sec: 30.5
+            })
+        );
+    }
+
+    #[test]
+    fn a_missing_start_means_the_beginning() {
+        assert_eq!(
+            AudioRange::from_ms(None, Some(5_000)),
+            Some(AudioRange {
+                start_sec: 0.0,
+                duration_sec: 5.0
+            })
+        );
+    }
+
+    #[test]
+    fn no_end_or_an_end_before_the_start_means_the_whole_file() {
+        assert_eq!(AudioRange::from_ms(Some(1_000), None), None);
+        assert_eq!(AudioRange::from_ms(None, None), None);
+        assert_eq!(AudioRange::from_ms(Some(5_000), Some(5_000)), None);
+        assert_eq!(AudioRange::from_ms(Some(9_000), Some(2_000)), None);
     }
 }

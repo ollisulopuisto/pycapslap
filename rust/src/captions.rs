@@ -74,6 +74,7 @@ pub async fn extract_and_transcribe(
         api_key,
         prompt,
         None,
+        None,
         &mut emit,
     )
     .await
@@ -89,6 +90,7 @@ pub async fn extract_and_transcribe_with_server(
     api_key: Option<String>,
     prompt: Option<String>,
     whisper_base_url: Option<String>,
+    audio_range: Option<crate::types::AudioRange>,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
@@ -105,6 +107,7 @@ pub async fn extract_and_transcribe_with_server(
             input: input_video.to_string(),
             codec: Some("pcm_s16le".to_string()),
             out: Some(temp_audio_path.to_string_lossy().to_string()),
+            range: audio_range,
         };
         let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
 
@@ -269,6 +272,9 @@ pub async fn generate_captions_single_pass(
             params.api_key,
             params.prompt,
             params.whisper_base_url,
+            // The one-pass burn captions the whole file; the segments' times
+            // would be off by the start of any part.
+            None,
             &mut emit,
         )
         .await?;

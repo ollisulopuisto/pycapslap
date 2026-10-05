@@ -47,7 +47,7 @@ from app.models.captions import (
     combine_separated_syllables,
 )
 from app.portal_client import Portal, PortalError
-from app.services import media
+from app.services import media, transcribe_range
 from app.services.broll import pipeline as broll_pipeline
 from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
@@ -1521,12 +1521,30 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Transcribe", "Please load a video first.")
             return
 
+        # A long episode is transcribed a part at a time, between the I and O marks.
+        plan = transcribe_range.plan(
+            self.timeline.duration_ms,
+            self.timeline.trim_start_ms,
+            self.timeline.trim_end_ms,
+        )
+        if plan.kind == "ask":
+            QMessageBox.information(
+                self, "Transcribe", transcribe_range.ask_text(plan.duration_ms)
+            )
+            return
+
         provider_params = get_transcription_params()
         provider_label = (
             "OpenAI API" if provider_params["model"] == "whisper-1" else "local Whisper"
         )
+        part = (
+            f", {transcribe_range.clock(plan.start_ms)}"
+            f"–{transcribe_range.clock(plan.end_ms)}"
+            if plan.kind == "range"
+            else ""
+        )
         self.status.showMessage(
-            f"Transcribing audio via Rust core ({provider_label})..."
+            f"Transcribing audio via Rust core ({provider_label}{part})..."
         )
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
@@ -1543,6 +1561,9 @@ class MainWindow(QMainWindow):
             "splitByWords": False,
             **provider_params,
         }
+        if plan.kind == "range":
+            params["transcribeStartMs"] = plan.start_ms
+            params["transcribeEndMs"] = plan.end_ms
 
         fut = self.core.call("transcribe", params)
 
@@ -1554,13 +1575,32 @@ class MainWindow(QMainWindow):
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
-                self._in_gui(lambda: self.progress_bar.setVisible(False))
-                self._in_gui(lambda: self.set_caption_segments(new_segs))
-                self._in_gui(
-                    lambda: self.status.showMessage(
-                        f"Transcription finished: {len(new_segs)} segments.", 4000
-                    ),
+                count = len(new_segs)
+                # Whisper counted from the start of the part it was given.
+                part = (
+                    transcribe_range.shifted(new_segs, plan.start_ms)
+                    if plan.kind == "range"
+                    else new_segs
                 )
+
+                def apply() -> None:
+                    # The cues already there are read on the GUI thread, where
+                    # they are edited.
+                    result = part
+                    if plan.kind == "range":
+                        result = transcribe_range.merged(
+                            list(self.caption_panel.segments),
+                            part,
+                            plan.start_ms,
+                            plan.end_ms,
+                        )
+                    self.progress_bar.setVisible(False)
+                    self.set_caption_segments(result)
+                    self.status.showMessage(
+                        f"Transcription finished: {count} segments.", 4000
+                    )
+
+                self._in_gui(apply)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
                 self._in_gui(lambda: self.progress_bar.setVisible(False))
