@@ -66,8 +66,8 @@ def test_accept_and_reject_set_status_and_choice():
     p.accept(0, 1)
     p.reject(1)
     assert p.status == ["accepted", "rejected"]
-    (win, a) = p.accepted()[0]
-    assert (win["startMs"], a.title) == (0, "B.webm")
+    choice = p.accepted()[0]
+    assert (choice.window["startMs"], choice.assets[0].title) == (0, "B.webm")
     assert p.pending() == []
 
 
@@ -91,7 +91,7 @@ def test_picks_round_trip_through_the_proposals_json():
     p.reject(1)
     q = picks.Picks(p.data())
     assert q.status == ["accepted", "rejected"]
-    assert q.accepted()[0][1].title == "B.webm"
+    assert q.accepted()[0].assets[0].title == "B.webm"
 
 
 # --- the reel's plan and ffmpeg command ---------------------------------------

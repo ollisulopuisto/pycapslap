@@ -890,8 +890,10 @@ class MainWindow(QMainWindow):
     def _broll_choose(self, found: list) -> None:
         self.status.clearMessage()
         picks = BrollPicks(found)
-        if BrollDialog(picks, parent=self).exec() != QDialog.DialogCode.Accepted:
+        dialog = BrollDialog(picks, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        transition = dialog.transition
         audio = Path(self.project.video_path)
         out = audio.with_name(f"{audio.stem}.reel.mp4")
         self.project.save_sidecar()
@@ -903,7 +905,11 @@ class MainWindow(QMainWindow):
         def work() -> None:
             try:
                 broll_pipeline.build(
-                    audio, picks, out, sidecar=Path(sidecar) if sidecar else None
+                    audio,
+                    picks,
+                    out,
+                    sidecar=Path(sidecar) if sidecar else None,
+                    transition=transition,
                 )
             except (OSError, ValueError, broll_reel.ReelError) as err:
                 message = str(err)
