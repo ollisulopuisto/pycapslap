@@ -218,3 +218,118 @@ def test_render_reports_ffmpeg_failure(tmp_path):
         reel.render(
             tmp_path / "nope.m4a", shots, tmp_path / "o.mp4", work=tmp_path / "w"
         )
+
+
+# --- VideoToolbox ---------------------------------------------------------------
+
+
+def _shots_with_clip(tmp_path, size=(1920, 1080)):
+    return [
+        reel.Shot(0, 4000, tmp_path / "a.jpg", "image", "credit A"),
+        reel.Shot(4000, 9000, tmp_path / "c.webm", "video", "credit C", size=size),
+    ]
+
+
+def test_hardware_command_encodes_with_videotoolbox(tmp_path):
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        _shots_with_clip(tmp_path),
+        tmp_path / "o.mp4",
+        9.0,
+        work=tmp_path,
+        hw=True,
+    )
+    assert cmd[cmd.index("-c:v") + 1] == "h264_videotoolbox"
+    assert "libx264" not in cmd
+
+
+def test_hardware_command_decodes_the_clip_on_the_gpu_and_scales_it_there(tmp_path):
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        _shots_with_clip(tmp_path),
+        tmp_path / "o.mp4",
+        9.0,
+        work=tmp_path,
+        size=(1080, 1920),
+        hw=True,
+    )
+    clip_input = cmd.index(str(tmp_path / "c.webm"))
+    assert cmd[clip_input - 5 : clip_input - 1] == [
+        "-hwaccel",
+        "videotoolbox",
+        "-hwaccel_output_format",
+        "videotoolbox_vld",
+    ]
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "scale_vt=w=3414:h=1920,hwdownload,format=nv12,crop=1080:1920" in graph
+    # the still is not a video stream to decode: no GPU options before it
+    still_input = cmd.index(str(tmp_path / "a.jpg"))
+    assert "-hwaccel" not in cmd[:still_input]
+
+
+def test_a_clip_of_unknown_size_is_decoded_on_the_gpu_but_scaled_as_before(tmp_path):
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        _shots_with_clip(tmp_path, size=None),
+        tmp_path / "o.mp4",
+        9.0,
+        work=tmp_path,
+        hw=True,
+    )
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "scale_vt" not in graph and "scale=1080:1920" in graph
+    assert "-hwaccel_output_format" not in cmd
+
+
+def test_software_command_uses_no_gpu_option(tmp_path):
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        _shots_with_clip(tmp_path),
+        tmp_path / "o.mp4",
+        9.0,
+        work=tmp_path,
+        hw=False,
+    )
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert (
+        "-hwaccel" not in cmd
+        and "scale_vt" not in cmd[cmd.index("-filter_complex") + 1]
+    )
+
+
+def test_hardware_is_chosen_only_on_a_mac_whose_ffmpeg_has_the_encoder(monkeypatch):
+    reel.vt_available.cache_clear()
+    monkeypatch.setattr(reel.sys, "platform", "linux")
+    assert reel.vt_available() is False
+    reel.vt_available.cache_clear()
+    monkeypatch.setattr(reel.sys, "platform", "darwin")
+
+    class R:
+        stdout = " V....D h264_videotoolbox    VideoToolbox H.264 Encoder"
+
+    monkeypatch.setattr(reel.subprocess, "run", lambda *a, **k: R())
+    assert reel.vt_available() is True
+    reel.vt_available.cache_clear()
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="needs ffmpeg")
+def test_a_failing_hardware_run_falls_back_to_software(tmp_path):
+    # This ffmpeg has no h264_videotoolbox, so the hardware attempt fails at
+    # start-up, as it would for a clip the GPU decoder refuses.
+    def run(*a):
+        subprocess.run([FFMPEG, "-v", "error", "-y", *a], check=True)
+
+    audio = tmp_path / "ep.m4a"
+    run("-f", "lavfi", "-i", "sine=frequency=440:duration=2", str(audio))
+    img = tmp_path / "a.jpg"
+    run("-f", "lavfi", "-i", "color=c=blue:s=320x240", "-frames:v", "1", str(img))
+    out = reel.render(
+        audio,
+        [reel.Shot(0, 1000, img, "image", "Blue by Ann, CC0")],
+        tmp_path / "o.mp4",
+        work=tmp_path / "w",
+        size=(180, 320),
+        end_card_s=0,
+        hw=True,
+    )
+    assert out.stat().st_size > 0

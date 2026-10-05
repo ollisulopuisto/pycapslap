@@ -5,10 +5,13 @@ Text goes through `textfile=` and the files are named relative to the working
 directory ffmpeg runs in, so no credit or path ever needs filtergraph escaping.
 """
 
+import functools
 import json
+import math
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +39,7 @@ class Shot:
     path: Path
     kind: str  # "image" | "video"
     credit: str
+    size: tuple[int, int] | None = None  # of a video; lets the GPU scale it
 
     @property
     def seconds(self) -> float:
@@ -49,12 +53,38 @@ def shots(accepted: list[tuple[dict, Asset]], files: dict[str, Path]) -> list[Sh
         end = win["endMs"]
         if i + 1 < len(accepted):
             end = min(end, accepted[i + 1][0]["startMs"])
-        out.append(Shot(win["startMs"], end, files[a.title], a.kind, credits.line(a)))
+        size = (a.width, a.height) if a.width > 0 and a.height > 0 else None
+        out.append(
+            Shot(win["startMs"], end, files[a.title], a.kind, credits.line(a), size)
+        )
     return out
 
 
 def ffmpeg_path() -> str:
     return os.environ.get("FFMPEG_PATH") or shutil.which("ffmpeg") or "ffmpeg"
+
+
+@functools.lru_cache(maxsize=1)
+def vt_available() -> bool:
+    """A Mac whose ffmpeg has the VideoToolbox H.264 encoder."""
+    if sys.platform != "darwin":
+        return False
+    r = subprocess.run(
+        [ffmpeg_path(), "-hide_banner", "-encoders"], capture_output=True, text=True
+    )
+    return "h264_videotoolbox" in r.stdout
+
+
+def cover_dims(src: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:
+    """The size to scale `src` to so it covers `target`, both sides even; the
+    crop that follows then only cuts. Mirrors `gpu_scale_dims` in rust/src/video.rs."""
+    (sw, sh), (tw, th) = src, target
+    s = max(tw / sw, th / sh)
+
+    def up(v: float) -> int:
+        return (math.ceil(v - 1e-9) + 1) // 2 * 2
+
+    return max(up(sw * s), tw), max(up(sh * s), th)
 
 
 def ffprobe_path() -> str:
@@ -121,7 +151,10 @@ def command(
     size: tuple[int, int] = (1080, 1920),
     end_card_s: float = 5.0,
     font: Path | None = None,
+    hw: bool | None = None,
 ) -> list[str]:
+    if hw is None:
+        hw = vt_available()
     w, h = size
     work.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(font or default_font(), work / "font.ttf")
@@ -142,7 +175,14 @@ def command(
                 src,
             ]
         else:
-            cmd += ["-stream_loop", "-1", "-t", f"{s.seconds:.3f}", "-i", src]
+            # VideoToolbox decodes the clip; with its size known the frames stay
+            # on the GPU for scale_vt, otherwise they come back to system memory.
+            gpu = []
+            if hw:
+                gpu = ["-hwaccel", "videotoolbox"]
+                if s.size:
+                    gpu += ["-hwaccel_output_format", "videotoolbox_vld"]
+            cmd += ["-stream_loop", "-1", "-t", f"{s.seconds:.3f}", *gpu, "-i", src]
 
     g = [
         f"[0:a]apad=whole_dur={total:.3f},asplit[a1][a2]",
@@ -159,6 +199,11 @@ def command(
                 f"zoompan=z='min(1+{ZOOM_STEP}*on,{ZOOM_MAX})':"
                 "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
                 f"d=1:s={w}x{h}:fps={FPS}"
+            )
+        elif hw and s.size:
+            cw, ch = cover_dims(s.size, (w, h))
+            motion = (
+                f"scale_vt=w={cw}:h={ch},hwdownload,format=nv12,crop={w}:{h},fps={FPS}"
             )
         else:
             motion = (
@@ -209,12 +254,12 @@ def command(
         "[vout]",
         "-map",
         "[a2]",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "medium",
-        "-crf",
-        "20",
+        *(
+            # 12M is the bitrate the app's own VideoToolbox renders use.
+            ["-c:v", "h264_videotoolbox", "-b:v", "12M", "-allow_sw", "1"]
+            if hw
+            else ["-c:v", "libx264", "-preset", "medium", "-crf", "20"]
+        ),
         "-pix_fmt",
         "yuv420p",
         "-r",
@@ -240,10 +285,17 @@ def render(
     size: tuple[int, int] = (1080, 1920),
     end_card_s: float = 5.0,
     duration_s: float | None = None,
+    hw: bool | None = None,
 ) -> Path:
     duration = duration_s if duration_s is not None else probe_duration(audio)
-    cmd = command(audio, shots_, out, duration, work, size, end_card_s)
-    r = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise ReelError(r.stderr.strip()[-800:] or f"ffmpeg exited {r.returncode}")
-    return Path(out)
+    if hw is None:
+        hw = vt_available()
+    # The GPU run may refuse a clip (10-bit, an odd codec) or lack a filter; it
+    # fails at start-up, and the software run takes over.
+    for use_hw in (True, False) if hw else (False,):
+        cmd = command(audio, shots_, out, duration, work, size, end_card_s, hw=use_hw)
+        r = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
+        if r.returncode == 0:
+            return Path(out)
+        error = r.stderr.strip()[-800:] or f"ffmpeg exited {r.returncode}"
+    raise ReelError(error)

@@ -771,12 +771,175 @@ fn is_nvenc_sync() -> bool {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HardwareEncoder {
     VideoToolbox,
     Nvenc,
     Software,
 }
+
+/// How much of the job a VideoToolbox encode also hands to the GPU.
+///
+/// `Pipeline` decodes into VideoToolbox frames, scales them with `scale_vt` and
+/// only then brings them to the CPU, because the filters after that (`ass` for
+/// the captions, `crop`, `pad`, `overlay`) exist only for system memory.
+/// `Decode` leaves the filters as they were and just decodes on the GPU, and
+/// `Off` is the plain path every machine can run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accel {
+    Pipeline,
+    Decode,
+    Off,
+}
+
+/// The attempts to make, best first. A VideoToolbox build can lack `scale_vt`,
+/// and 10-bit or odd sources can refuse the GPU path, so every attempt but the
+/// last is allowed to fail at start-up and hand over to the next one.
+/// HDR keeps its CPU tone-mapping chain, so it goes straight to the encoder-only path.
+pub fn encode_attempts(
+    encoder: HardwareEncoder,
+    pipeline_available: bool,
+    is_hdr: bool,
+) -> Vec<(HardwareEncoder, Accel)> {
+    let mut out = Vec::new();
+    match encoder {
+        HardwareEncoder::VideoToolbox => {
+            if !is_hdr {
+                if pipeline_available {
+                    out.push((encoder, Accel::Pipeline));
+                }
+                out.push((encoder, Accel::Decode));
+            }
+            out.push((encoder, Accel::Off));
+        }
+        HardwareEncoder::Nvenc => out.push((encoder, Accel::Off)),
+        HardwareEncoder::Software => {}
+    }
+    out.push((HardwareEncoder::Software, Accel::Off));
+    out
+}
+
+/// Input options that put decoding on VideoToolbox. With `keep_on_gpu` the
+/// frames stay there for `scale_vt`; without, ffmpeg copies them back to system
+/// memory itself, so ordinary CPU filters work unchanged.
+pub fn vt_decode_args(keep_on_gpu: bool) -> Vec<&'static str> {
+    if keep_on_gpu {
+        vec![
+            "-hwaccel",
+            "videotoolbox",
+            "-hwaccel_output_format",
+            "videotoolbox_vld",
+        ]
+    } else {
+        vec!["-hwaccel", "videotoolbox"]
+    }
+}
+
+/// Is the GPU pipeline there to try: a macOS ffmpeg that knows both the
+/// VideoToolbox decoder and the `scale_vt` filter. Checked once.
+pub fn vt_pipeline_available() -> bool {
+    static AVAIL: OnceLock<bool> = OnceLock::new();
+    *AVAIL.get_or_init(|| {
+        if !is_macos() {
+            return false;
+        }
+        let ffmpeg = get_ffmpeg_path_sync();
+        let run = |arg: &str, needle: &str| {
+            Command::new(&ffmpeg)
+                .args(["-hide_banner", arg])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(needle))
+                .unwrap_or(false)
+        };
+        run("-hwaccels", "videotoolbox") && run("-filters", "scale_vt")
+    })
+}
+
+/// The size to scale a `src_w`x`src_h` picture to before the crop (`fill`) or
+/// pad (`fit`) that finishes the job, so the GPU does all the resampling and
+/// the CPU only cuts or pads. Both sides even, as H.264 needs: a fill never
+/// comes out smaller than the target, a fit never larger.
+pub fn gpu_scale_dims(
+    src_w: u32,
+    src_h: u32,
+    target_w: u32,
+    target_h: u32,
+    fill: bool,
+) -> (u32, u32) {
+    let (sw, sh) = (src_w.max(2) as f64, src_h.max(2) as f64);
+    let (tw, th) = (target_w as f64, target_h as f64);
+    if fill {
+        let s = (tw / sw).max(th / sh);
+        let up = |v: f64| round_even((v.ceil() as u32).max(2));
+        (up(sw * s).max(target_w), up(sh * s).max(target_h))
+    } else {
+        let s = (tw / sw).min(th / sh);
+        let down = |v: f64| ((v.round() as u32).max(2)) & !1;
+        (down(sw * s).min(target_w), down(sh * s).min(target_h))
+    }
+}
+
+/// `build_fitpad_filter_with_options` for a VideoToolbox frame: `scale_vt` does
+/// the resampling on the GPU, `hwdownload` brings the result to the CPU, and the
+/// crop or pad, the captions and the pixel format follow as before. SDR only.
+pub fn build_gpu_fitpad_filter(
+    src_w: u32,
+    src_h: u32,
+    target_w: u32,
+    target_h: u32,
+    subtitle_path: Option<&str>,
+    crop_strategy: &str,
+) -> String {
+    let fill = crop_strategy == "fill";
+    let (w, h) = gpu_scale_dims(src_w, src_h, target_w, target_h, fill);
+    let mut filters = vec![format!("scale_vt=w={w}:h={h}"), "hwdownload".to_string()];
+    // The decoder's own pixel format is NV12 for 8-bit video; anything else
+    // fails here at start-up and the next attempt takes over.
+    filters.push("format=nv12".to_string());
+    if fill {
+        filters.push(format!("crop={target_w}:{target_h}:(iw-ow)/2:(ih-oh)/2"));
+    } else {
+        filters.push(format!(
+            "pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black"
+        ));
+    }
+    if let Some(path) = subtitle_path {
+        filters.push(ass_filter(path));
+    }
+    filters.push("format=nv12".to_string());
+    filters.join(",")
+}
+
+/// A proof copy's size: the short side as asked, the other rounded to even.
+pub fn proof_dims(target_w: u32, target_h: u32, short_side: u32) -> (u32, u32) {
+    if target_w < target_h {
+        (
+            short_side,
+            round_even((short_side as f64 * target_h as f64 / target_w as f64).round() as u32),
+        )
+    } else {
+        (
+            round_even((short_side as f64 * target_w as f64 / target_h as f64).round() as u32),
+            short_side,
+        )
+    }
+}
+
+/// The proof scale done on the GPU: the captioned frame goes up to VideoToolbox,
+/// is scaled there and comes back. Needs `-init_hw_device videotoolbox=vt
+/// -filter_hw_device vt` on the command line.
+pub fn gpu_proof_scale_filter(target_w: u32, target_h: u32, short_side: u32) -> String {
+    let (w, h) = proof_dims(target_w, target_h, short_side);
+    format!("hwupload,scale_vt=w={w}:h={h},hwdownload,format=nv12")
+}
+
+/// The command-line options `gpu_proof_scale_filter` needs.
+pub const VT_FILTER_DEVICE_ARGS: [&str; 4] = [
+    "-init_hw_device",
+    "videotoolbox=vt",
+    "-filter_hw_device",
+    "vt",
+];
 
 /// Convert CRF value (0-51) to VideoToolbox bitrate string
 /// CRF scale: 0=lossless, 18=visually lossless, 23=default, 51=worst
@@ -2212,5 +2375,97 @@ mod tests {
         // Cache hit test
         let second = extract_first_frame(sample).expect("cached extract failed");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn gpu_scale_dims_fill_covers_the_target_with_even_sides() {
+        // 16:9 into 9:16: the height is matched, the width overshoots to be cropped.
+        assert_eq!(gpu_scale_dims(1920, 1080, 1080, 1920, true), (3414, 1920));
+        // Same shape: nothing to crop, nothing lost.
+        assert_eq!(gpu_scale_dims(3840, 2160, 1920, 1080, true), (1920, 1080));
+        // Odd source: still even, never under the target.
+        let (w, h) = gpu_scale_dims(853, 481, 1080, 1920, true);
+        assert!(w % 2 == 0 && h % 2 == 0 && w >= 1080 && h >= 1920);
+    }
+
+    #[test]
+    fn gpu_scale_dims_fit_stays_inside_the_target_with_even_sides() {
+        assert_eq!(gpu_scale_dims(1920, 1080, 1080, 1920, false), (1080, 608));
+        let (w, h) = gpu_scale_dims(853, 481, 1080, 1920, false);
+        assert!(w % 2 == 0 && h % 2 == 0 && w <= 1080 && h <= 1920);
+    }
+
+    #[test]
+    fn gpu_filter_scales_on_the_gpu_then_crops_or_pads_on_the_cpu() {
+        let fill = build_gpu_fitpad_filter(1920, 1080, 1080, 1920, None, "fill");
+        assert_eq!(
+            fill,
+            "scale_vt=w=3414:h=1920,hwdownload,format=nv12,crop=1080:1920:(iw-ow)/2:(ih-oh)/2,format=nv12"
+        );
+        let fit = build_gpu_fitpad_filter(1920, 1080, 1080, 1920, None, "fit");
+        assert_eq!(
+            fit,
+            "scale_vt=w=1080:h=608,hwdownload,format=nv12,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,format=nv12"
+        );
+        // No CPU scaler is left in the chain.
+        assert!(!fill.contains(",scale=") && !fit.contains(",scale="));
+    }
+
+    #[test]
+    fn gpu_filter_draws_the_captions_after_the_download() {
+        let f = build_gpu_fitpad_filter(1920, 1080, 1080, 1920, Some("/tmp/a.ass"), "fill");
+        let download = f.find("hwdownload").unwrap();
+        let ass = f.find("ass=").unwrap();
+        assert!(download < ass, "libass only reads system memory");
+    }
+
+    #[test]
+    fn proof_dims_keep_the_aspect_and_round_to_even() {
+        assert_eq!(proof_dims(1080, 1920, 720), (720, 1280));
+        assert_eq!(proof_dims(1920, 1080, 540), (960, 540));
+        assert_eq!(proof_dims(1080, 1350, 540), (540, 676));
+        assert_eq!(
+            gpu_proof_scale_filter(1080, 1920, 720),
+            "hwupload,scale_vt=w=720:h=1280,hwdownload,format=nv12"
+        );
+    }
+
+    #[test]
+    fn videotoolbox_tries_the_gpu_pipeline_first_and_ends_on_software() {
+        use Accel::*;
+        use HardwareEncoder::*;
+        assert_eq!(
+            encode_attempts(VideoToolbox, true, false),
+            vec![
+                (VideoToolbox, Pipeline),
+                (VideoToolbox, Decode),
+                (VideoToolbox, Off),
+                (Software, Off)
+            ]
+        );
+        // No scale_vt in this ffmpeg: decode on the GPU, filter as before.
+        assert_eq!(
+            encode_attempts(VideoToolbox, false, false),
+            vec![(VideoToolbox, Decode), (VideoToolbox, Off), (Software, Off)]
+        );
+        // HDR keeps the CPU tone-mapping chain.
+        assert_eq!(
+            encode_attempts(VideoToolbox, true, true),
+            vec![(VideoToolbox, Off), (Software, Off)]
+        );
+        assert_eq!(
+            encode_attempts(Nvenc, true, false),
+            vec![(Nvenc, Off), (Software, Off)]
+        );
+        assert_eq!(
+            encode_attempts(Software, true, false),
+            vec![(Software, Off)]
+        );
+    }
+
+    #[test]
+    fn vt_decode_args_keep_frames_on_the_gpu_only_when_asked() {
+        assert_eq!(vt_decode_args(false), vec!["-hwaccel", "videotoolbox"]);
+        assert!(vt_decode_args(true).contains(&"videotoolbox_vld"));
     }
 }
