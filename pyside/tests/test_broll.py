@@ -25,9 +25,7 @@ COMMONS_REPLY = {
                             "LicenseUrl": {
                                 "value": "https://creativecommons.org/licenses/by-sa/4.0"
                             },
-                            "Artist": {
-                                "value": '<a href="//x">Jane <b>Doe</b></a>'
-                            },
+                            "Artist": {"value": '<a href="//x">Jane <b>Doe</b></a>'},
                         },
                     }
                 ],

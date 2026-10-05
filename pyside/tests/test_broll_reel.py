@@ -35,7 +35,10 @@ def proposals():
             "endMs": 4000,
             "text": "t",
             "query": "q",
-            "candidates": [asset("A.jpg").to_dict(), asset("B.webm", "video").to_dict()],
+            "candidates": [
+                asset("A.jpg").to_dict(),
+                asset("B.webm", "video").to_dict(),
+            ],
             "chosen": None,
         },
         {
@@ -138,7 +141,9 @@ def test_command_has_one_input_per_shot_and_the_audio_first(tmp_path):
 
 def test_credits_go_in_text_files_not_into_the_filtergraph(tmp_path):
     shots = [reel.Shot(0, 4000, tmp_path / "a.jpg", "image", "It's: 100% [odd], \\ ok")]
-    cmd = reel.command(tmp_path / "ep.m4a", shots, tmp_path / "o.mp4", 5.0, work=tmp_path)
+    cmd = reel.command(
+        tmp_path / "ep.m4a", shots, tmp_path / "o.mp4", 5.0, work=tmp_path
+    )
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "odd" not in graph  # nothing from the credit needs escaping
     assert "textfile=" in graph
@@ -185,9 +190,21 @@ def test_the_reel_really_renders(tmp_path):
     out = tmp_path / "reel.mp4"
     reel.render(audio, shots, out, work=tmp_path / "w", size=(270, 480), end_card_s=1)
     probe = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
-         "-show_entries", "format=duration", "-of", "default=nw=1", str(out)],
-        capture_output=True, text=True, check=True,
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type,width,height",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout
     assert "width=270" in probe and "height=480" in probe
     assert "codec_type=audio" in probe
@@ -198,4 +215,6 @@ def test_the_reel_really_renders(tmp_path):
 def test_render_reports_ffmpeg_failure(tmp_path):
     shots = [reel.Shot(0, 1000, tmp_path / "missing.jpg", "image", "c")]
     with pytest.raises(reel.ReelError):
-        reel.render(tmp_path / "nope.m4a", shots, tmp_path / "o.mp4", work=tmp_path / "w")
+        reel.render(
+            tmp_path / "nope.m4a", shots, tmp_path / "o.mp4", work=tmp_path / "w"
+        )

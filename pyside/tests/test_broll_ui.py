@@ -22,17 +22,34 @@ def png() -> bytes:
 
 def asset(title, kind="image"):
     return Asset(
-        title=title, kind=kind, url=f"https://x/{title}", page_url=f"https://p/{title}",
-        license="CC0", thumb_url=f"https://t/{title}", source="Wikimedia Commons",
+        title=title,
+        kind=kind,
+        url=f"https://x/{title}",
+        page_url=f"https://p/{title}",
+        license="CC0",
+        thumb_url=f"https://t/{title}",
+        source="Wikimedia Commons",
     )
 
 
 def proposals():
     return [
-        {"startMs": 0, "endMs": 4000, "text": "tram", "query": "tram",
-         "candidates": [asset("A.jpg").to_dict(), asset("B.jpg").to_dict()], "chosen": None},
-        {"startMs": 4000, "endMs": 9000, "text": "none", "query": "none",
-         "candidates": [], "chosen": None},
+        {
+            "startMs": 0,
+            "endMs": 4000,
+            "text": "tram",
+            "query": "tram",
+            "candidates": [asset("A.jpg").to_dict(), asset("B.jpg").to_dict()],
+            "chosen": None,
+        },
+        {
+            "startMs": 4000,
+            "endMs": 9000,
+            "text": "none",
+            "query": "none",
+            "candidates": [],
+            "chosen": None,
+        },
     ]
 
 
@@ -123,7 +140,9 @@ def test_build_downloads_each_accepted_asset_once_and_renders(tmp_path):
     sidecar = tmp_path / "ep.m4a.capslap.json"
     sidecar.write_text(json.dumps({"segments": []}))
     out = tmp_path / "ep.reel.mp4"
-    pipeline.build(tmp_path / "ep.m4a", p, out, fetch=fetch, render=render, sidecar=sidecar)
+    pipeline.build(
+        tmp_path / "ep.m4a", p, out, fetch=fetch, render=render, sidecar=sidecar
+    )
     assert fetched == ["A.jpg"]
     assert rendered["shots"][0].credit.startswith("A.jpg")
     # the captions follow the reel, so the app can caption it as it is
@@ -136,6 +155,9 @@ def test_build_downloads_each_accepted_asset_once_and_renders(tmp_path):
 def test_build_with_nothing_accepted_is_an_error(tmp_path):
     with pytest.raises(pipeline.NothingAccepted):
         pipeline.build(
-            tmp_path / "a.m4a", picks_mod.Picks(proposals()), tmp_path / "o.mp4",
-            fetch=lambda a, f: f, render=lambda *a, **k: None,
+            tmp_path / "a.m4a",
+            picks_mod.Picks(proposals()),
+            tmp_path / "o.mp4",
+            fetch=lambda a, f: f,
+            render=lambda *a, **k: None,
         )

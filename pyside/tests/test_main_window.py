@@ -841,10 +841,14 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
 
     found = [
         {
-            "startMs": 0, "endMs": 2000, "text": "tram", "query": "tram",
+            "startMs": 0,
+            "endMs": 2000,
+            "text": "tram",
+            "query": "tram",
             "candidates": [
-                Asset(title="A.jpg", kind="image", url="u", page_url="p",
-                      license="CC0").to_dict()
+                Asset(
+                    title="A.jpg", kind="image", url="u", page_url="p", license="CC0"
+                ).to_dict()
             ],
             "chosen": None,
         }
@@ -861,7 +865,8 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(mw.broll_suggest, "proposals", lambda segs: found)
     monkeypatch.setattr(mw, "BrollDialog", Chooser)
     monkeypatch.setattr(
-        mw.broll_pipeline, "build",
+        mw.broll_pipeline,
+        "build",
         lambda audio, picks, out, sidecar=None: built.update(
             audio=audio, out=out, n=len(picks.accepted())
         ),

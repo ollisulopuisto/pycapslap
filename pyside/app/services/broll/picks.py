@@ -35,6 +35,4 @@ class Picks:
         ]
 
     def data(self) -> list[dict[str, Any]]:
-        return [
-            {**w, "status": s} for w, s in zip(self._p, self.status, strict=True)
-        ]
+        return [{**w, "status": s} for w, s in zip(self._p, self.status, strict=True)]

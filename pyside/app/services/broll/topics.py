@@ -29,7 +29,9 @@ class Window:
 
 def _query(text: str, words: int) -> str:
     counts = Counter(w for w in _WORD.findall(text.lower()) if w not in _STOP)
-    first_seen = {w: i for i, w in enumerate(dict.fromkeys(_WORD.findall(text.lower())))}
+    first_seen = {
+        w: i for i, w in enumerate(dict.fromkeys(_WORD.findall(text.lower())))
+    }
     ranked = sorted(counts, key=lambda w: (-counts[w], first_seen[w]))
     return " ".join(ranked[:words])
 
@@ -44,7 +46,9 @@ def windows(
         if not group:
             return
         text = " ".join(s.text for s in group)
-        out.append(Window(group[0].start_ms, group[-1].end_ms, text, _query(text, words)))
+        out.append(
+            Window(group[0].start_ms, group[-1].end_ms, text, _query(text, words))
+        )
         group.clear()
 
     for s in segments:

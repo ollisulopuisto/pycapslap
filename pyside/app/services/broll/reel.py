@@ -42,9 +42,7 @@ class Shot:
         return (self.end_ms - self.start_ms) / 1000
 
 
-def shots(
-    accepted: list[tuple[dict, Asset]], files: dict[str, Path]
-) -> list[Shot]:
+def shots(accepted: list[tuple[dict, Asset]], files: dict[str, Path]) -> list[Shot]:
     """One shot per accepted window, ending where the next one begins."""
     out: list[Shot] = []
     for i, (win, a) in enumerate(accepted):
@@ -75,9 +73,18 @@ def default_font() -> Path:
 
 def probe_duration(path: Path) -> float:
     r = subprocess.run(
-        [ffprobe_path(), "-v", "error", "-show_entries", "format=duration",
-         "-of", "json", str(path)],
-        capture_output=True, text=True,
+        [
+            ffprobe_path(),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
     )
     try:
         return float(json.loads(r.stdout)["format"]["duration"])
@@ -124,7 +131,16 @@ def command(
     for s in shots_:
         src = str(Path(s.path).resolve())
         if s.kind == "image":
-            cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{s.seconds:.3f}", "-i", src]
+            cmd += [
+                "-loop",
+                "1",
+                "-framerate",
+                str(FPS),
+                "-t",
+                f"{s.seconds:.3f}",
+                "-i",
+                src,
+            ]
         else:
             cmd += ["-stream_loop", "-1", "-t", f"{s.seconds:.3f}", "-i", src]
 
@@ -187,12 +203,30 @@ def command(
         g.append(f"[{last}]null[vout]")
 
     cmd += [
-        "-filter_complex", ";".join(g),
-        "-map", "[vout]", "-map", "[a2]",
-        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
-        "-r", str(FPS), "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart",
-        "-t", f"{total:.3f}",
+        "-filter_complex",
+        ";".join(g),
+        "-map",
+        "[vout]",
+        "-map",
+        "[a2]",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "medium",
+        "-crf",
+        "20",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        str(FPS),
+        "-c:a",
+        "aac",
+        "-b:a",
+        "192k",
+        "-movflags",
+        "+faststart",
+        "-t",
+        f"{total:.3f}",
         str(Path(out).resolve()),
     ]
     return cmd
