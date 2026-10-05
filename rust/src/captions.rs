@@ -1354,29 +1354,17 @@ async fn optimized_single_format_encode(
     // Determine the best available hardware encoder for H.264 first (for filter optimization)
     let hardware_encoder = crate::video::get_best_hardware_encoder().await;
 
-    // Try with hardware encoder first, then fallback to software if it fails
-    let result = try_encode_with_encoder(
-        id,
-        input_video,
-        ass_path,
-        output_path,
-        target_w,
-        target_h,
-        crop_strategy,
-        probe_result,
-        trim_start_seconds,
-        output_duration_seconds,
-        proof,
-        bumpers,
+    // Best first: the whole GPU pipeline, then GPU decode only, then just the
+    // hardware encoder, then software. Each one that fails hands over to the next.
+    let attempts = crate::video::encode_attempts(
         hardware_encoder,
-        tx.clone(),
-        index,
-    )
-    .await;
-
-    // If hardware encoder failed, try software fallback
-    if result.is_err() && !matches!(hardware_encoder, crate::video::HardwareEncoder::Software) {
-        return try_encode_with_encoder(
+        crate::video::vt_pipeline_available(),
+        crate::video::is_hdr(probe_result),
+    );
+    let last = attempts.len() - 1;
+    let mut result = Err(anyhow!("no encoder attempt was made"));
+    for (n, (encoder, accel)) in attempts.into_iter().enumerate() {
+        result = try_encode_with_encoder(
             id,
             input_video,
             ass_path,
@@ -1389,13 +1377,22 @@ async fn optimized_single_format_encode(
             output_duration_seconds,
             proof,
             bumpers,
-            crate::video::HardwareEncoder::Software,
-            tx,
+            encoder,
+            accel,
+            tx.clone(),
             index,
         )
         .await;
+        if result.is_ok() {
+            break;
+        }
+        if n < last {
+            let _ = tx.send(InternalUpdate::Event(RpcEvent::Log {
+                id: id.into(),
+                message: format!("{encoder:?} with {accel:?} failed, trying the next way"),
+            }));
+        }
     }
-
     result
 }
 
@@ -1415,21 +1412,45 @@ async fn try_encode_with_encoder(
     proof: Option<(u32, &str)>,
     bumpers: &Bumpers,
     hardware_encoder: crate::video::HardwareEncoder,
+    accel: crate::video::Accel,
     tx: mpsc::UnboundedSender<InternalUpdate>,
     index: usize,
 ) -> Result<()> {
+    // The GPU pipeline needs the source's size to scale it exactly; without it
+    // the decode still runs on the GPU and the filters stay as they were.
+    let source_size = probe_result
+        .width
+        .zip(probe_result.height)
+        .filter(|(w, h)| *w > 0 && *h > 0)
+        .map(|(w, h)| (w as u32, h as u32));
+    let accel = match (accel, source_size) {
+        (crate::video::Accel::Pipeline, None) => crate::video::Accel::Decode,
+        (a, _) => a,
+    };
     // Build optimized filter with format conversion AND subtitles in one pass
     // Use encoder-specific format optimization (NV12 for VideoToolbox/NVENC, yuv420p for software)
     let ass = ass_path.to_string_lossy().to_string();
     let is_hdr = crate::video::is_hdr(probe_result);
-    let vf = crate::video::build_fitpad_filter_with_options(
-        target_w,
-        target_h,
-        Some(&ass),
-        hardware_encoder,
-        crop_strategy,
-        is_hdr,
-    );
+    let vf = match (accel, source_size) {
+        (crate::video::Accel::Pipeline, Some((src_w, src_h))) => {
+            crate::video::build_gpu_fitpad_filter(
+                src_w,
+                src_h,
+                target_w,
+                target_h,
+                Some(&ass),
+                crop_strategy,
+            )
+        }
+        _ => crate::video::build_fitpad_filter_with_options(
+            target_w,
+            target_h,
+            Some(&ass),
+            hardware_encoder,
+            crop_strategy,
+            is_hdr,
+        ),
+    };
 
     // Determine optimal audio codec and settings
     let (audio_codec, audio_args) = crate::video::determine_audio_codec(Some(probe_result));
@@ -1454,7 +1475,13 @@ async fn try_encode_with_encoder(
     // before, and a scaled-down copy encoded alongside it, so the captions are drawn
     // and the source decoded only once. With an intro or outro, the clips are joined
     // to the burned video in the same graph, and the audio comes out of it too.
-    let proof_scale = proof.map(|(side, _)| proof_scale_filter(target_w, target_h, side));
+    let proof_scale = proof.map(|(side, _)| {
+        if accel == crate::video::Accel::Pipeline {
+            crate::video::gpu_proof_scale_filter(target_w, target_h, side)
+        } else {
+            proof_scale_filter(target_w, target_h, side)
+        }
+    });
     let main = main_video_chain(
         &vf,
         bumpers,
@@ -1495,12 +1522,27 @@ async fn try_encode_with_encoder(
 
     cmd.args({
         let mut args = vec!["-y"];
+        // The proof copy goes up to the GPU for its scaling and needs a device to do it.
+        if accel == crate::video::Accel::Pipeline && proof.is_some() {
+            args.extend_from_slice(&crate::video::VT_FILTER_DEVICE_ARGS);
+        }
         if trim_start_seconds > 0.0 {
             args.extend_from_slice(&["-ss", &trim_start_arg]);
         }
         // -t before -i limits this input only, so the clips joined to it keep theirs.
-        args.extend_from_slice(&["-t", &output_duration_arg, "-i", input_video]);
+        args.extend_from_slice(&["-t", &output_duration_arg]);
+        if accel != crate::video::Accel::Off {
+            args.extend(crate::video::vt_decode_args(
+                accel == crate::video::Accel::Pipeline,
+            ));
+        }
+        args.extend_from_slice(&["-i", input_video]);
         for clip in bumpers.clips() {
+            // Intro and outro are decoded on the GPU too; they are scaled on the
+            // CPU with the rest of the joining, so their frames come back as ever.
+            if accel != crate::video::Accel::Off {
+                args.extend(crate::video::vt_decode_args(false));
+            }
             args.extend_from_slice(&["-i", &clip.path]);
         }
         if let Some(bug) = &bumpers.bug {
@@ -1613,7 +1655,10 @@ async fn try_encode_with_encoder(
     // Log intent
     let _ = tx.send(InternalUpdate::Event(RpcEvent::Log {
         id: id.into(),
-        message: format!("Starting encoder: {:?}", hardware_encoder),
+        message: format!(
+            "Starting encoder: {:?}, GPU use: {:?}",
+            hardware_encoder, accel
+        ),
     }));
 
     let mut child = cmd.spawn()?;

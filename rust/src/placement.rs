@@ -411,6 +411,39 @@ async fn sample_profiles(
     crop_strategy: &str,
     is_hdr: bool,
 ) -> Result<Vec<FrameProfile>> {
+    // Decoding is the whole cost of this walk, so it goes to VideoToolbox where
+    // there is one; frames come back to system memory for the greyscale filters.
+    // If that run yields nothing (a source the GPU decoder refuses), walk again
+    // the way every machine can.
+    if crate::video::get_best_hardware_encoder().await
+        == crate::video::HardwareEncoder::VideoToolbox
+        && !is_hdr
+    {
+        if let Ok(profiles) =
+            sample_profiles_with(input_video, target_w, target_h, crop_strategy, is_hdr, true).await
+        {
+            return Ok(profiles);
+        }
+    }
+    sample_profiles_with(
+        input_video,
+        target_w,
+        target_h,
+        crop_strategy,
+        is_hdr,
+        false,
+    )
+    .await
+}
+
+async fn sample_profiles_with(
+    input_video: &str,
+    target_w: u32,
+    target_h: u32,
+    crop_strategy: &str,
+    is_hdr: bool,
+    gpu_decode: bool,
+) -> Result<Vec<FrameProfile>> {
     let sample_h = crate::video::round_even(
         ((SAMPLE_WIDTH as f32) * (target_h as f32) / (target_w as f32)).round() as u32,
     )
@@ -429,7 +462,11 @@ async fn sample_profiles(
         SAMPLE_FPS, SAMPLE_WIDTH, sample_h
     ));
 
-    let mut child = TokioCommand::new(crate::video::get_ffmpeg_path_sync())
+    let mut command = TokioCommand::new(crate::video::get_ffmpeg_path_sync());
+    if gpu_decode {
+        command.args(crate::video::vt_decode_args(false));
+    }
+    let mut child = command
         .arg("-i")
         .arg(input_video)
         .arg("-an")

@@ -824,3 +824,68 @@ def test_the_logo_goes_into_the_render_unless_turned_off_for_the_video(qtbot, tm
     labels = [a.text() for a in window.bug_menu.actions()]
     assert "Logo: logo.png" in labels and "Put it on this video" in labels
     window.close()
+
+
+def test_broll_button_waits_for_a_transcript(qtbot, no_modal_message_boxes):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert not window.broll_btn.isEnabled()
+    window._on_broll()
+    assert no_modal_message_boxes[-1][0] == "information"
+    window.close()
+
+
+def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
+    from app.services.broll.assets import Asset
+    from app.views import main_window as mw
+
+    found = [
+        {
+            "startMs": 0,
+            "endMs": 2000,
+            "text": "tram",
+            "query": "tram",
+            "candidates": [
+                Asset(
+                    title="A.jpg", kind="image", url="u", page_url="p", license="CC0"
+                ).to_dict()
+            ],
+            "chosen": None,
+        }
+    ]
+    built = {}
+
+    class Chooser:
+        def __init__(self, picks, parent=None):
+            picks.accept(0, 0)
+
+        def exec(self):
+            return mw.QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(mw.broll_suggest, "proposals", lambda segs: found)
+    monkeypatch.setattr(mw, "BrollDialog", Chooser)
+    monkeypatch.setattr(
+        mw.broll_pipeline,
+        "build",
+        lambda audio, picks, out, sidecar=None: built.update(
+            audio=audio, out=out, n=len(picks.accepted())
+        ),
+    )
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.project.video = type("V", (), {"path": str(tmp_path / "ep.m4a")})()
+    window.set_caption_segments([CaptionSegment(0, 2000, "tram")])
+    (tmp_path / "ep.m4a").write_bytes(b"x")
+    window.project.sidecar_path = str(tmp_path / "ep.m4a.capslap.json")
+
+    window._on_broll()
+    qtbot.waitUntil(lambda: bool(built), timeout=3000)
+    assert built["n"] == 1
+    assert built["out"].name == "ep.reel.mp4"
+    window.close()
+
+
+def test_the_open_dialog_offers_audio_files():
+    from app.views.main_window import OPEN_FILES
+
+    assert "*.m4a" in OPEN_FILES and "*.mp3" in OPEN_FILES and "*.mp4" in OPEN_FILES
