@@ -24,6 +24,9 @@ def test_everything_fits_on_one_row_when_there_is_room(qtbot):
     host.resize(600, 100)
     host.show()
     assert len({b.y() for b in buttons}) == 1
+    # macOS polishes the buttons taller once shown; the layout caches the hint
+    # it first saw, as it would until the window's own layout request.
+    layout.invalidate()
     assert layout.heightForWidth(600) == buttons[0].sizeHint().height()
 
 
