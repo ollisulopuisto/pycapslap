@@ -44,15 +44,45 @@ PORTAL_ADMIN_TOKEN=$(openssl rand -hex 24) uv run capslap-portal
 | `PORTAL_HOST` / `PORTAL_PORT` | `127.0.0.1` / `8080` | Where to listen |
 | `PORTAL_MAX_UPLOAD_MB` | `8192` | Largest video accepted |
 
-It speaks plain HTTP; put it behind HTTPS. With Docker and Caddy (which gets
-the certificate itself), from the repository root:
+It speaks plain HTTP; put it behind HTTPS. The `podman/` folder runs it with
+Podman as systemd user services, with Caddy in front (it gets the certificate
+itself). Rootless, so nothing needs root except two one-time system settings.
 
 ```sh
-PORTAL_DOMAIN=review.example.com PORTAL_ADMIN_TOKEN=... \
-  docker compose -f portal/compose.yaml up -d
+# 1. Once, as root: let a normal user listen on 80 and 443 …
+echo 'net.ipv4.ip_unprivileged_port_start=80' | sudo tee /etc/sysctl.d/90-unprivileged-ports.conf
+sudo sysctl --system
+#    … and keep that user's services running when nobody is logged in.
+sudo loginctl enable-linger "$USER"
+#    The firewall (and, in a cloud, its ingress rules) must let 80 and 443 in.
+
+# 2. From the repository root: build the image.
+podman build -f portal/Dockerfile -t localhost/capslap-portal:latest .
+
+# 3. Put the units and settings where Podman and systemd look for them.
+mkdir -p ~/.config/containers/systemd ~/.config/capslap-portal
+cp portal/podman/*.container portal/podman/*.volume portal/podman/*.network \
+   ~/.config/containers/systemd/
+cp portal/podman/Caddyfile ~/.config/capslap-portal/
+cp portal/podman/portal.env.example ~/.config/capslap-portal/portal.env
+chmod 600 ~/.config/capslap-portal/portal.env
+$EDITOR ~/.config/capslap-portal/portal.env     # token (openssl rand -hex 24) and domain
+
+# 4. Start.
+systemctl --user daemon-reload
+systemctl --user start capslap-portal capslap-caddy
 ```
 
-Back up `PORTAL_DATA`: `portal.sqlite3` holds everything but the videos.
+The domain's DNS record must already point at the machine when Caddy starts,
+or it cannot get the certificate. Look at what is happening with
+`journalctl --user -u capslap-portal -u capslap-caddy`. After a new build of the
+image: `systemctl --user restart capslap-portal`.
+
+The services start again by themselves after a reboot. `portal/compose.yaml`
+does the same job with `podman compose` if that suits better.
+
+Back up `PORTAL_DATA` (under Podman the volume `capslap-portal-data`; see
+`podman volume inspect`): `portal.sqlite3` holds everything but the videos.
 
 ## Tests
 
