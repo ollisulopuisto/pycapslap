@@ -47,6 +47,11 @@ from app.models.captions import (
     combine_separated_syllables,
 )
 from app.portal_client import Portal, PortalError
+from app.services.broll import pipeline as broll_pipeline
+from app.services.broll import reel as broll_reel
+from app.services.broll import suggest as broll_suggest
+from app.services.broll.picks import Picks as BrollPicks
+from app.views.broll_dialog import BrollDialog
 from app.views.portal_dialog import PublishDialog, portal_from_settings
 from app.models.review import (
     ReviewMismatch,
@@ -85,6 +90,11 @@ PROOF_COPIES = [
 # Ready-made clips joined before and after every render (a channel ident, "listen
 # to the new episode"), kept between sessions: which one, its QSettings key.
 BUMPERS = {"intro": "render/intro_video", "outro": "render/outro_video"}
+# An audio-only episode opens too: it is transcribed and fed to the B-roll reel.
+OPEN_FILES = (
+    "Video and Audio (*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.m4v *.ts "
+    "*.m4a *.mp3 *.wav *.aac *.flac *.ogg);;All Files (*)"
+)
 BUMPER_FILES = "Video (*.mp4 *.mov *.m4v *.mkv *.webm)"
 
 # A logo ("bug") laid over the video in a corner, for sources without one.
@@ -228,6 +238,16 @@ class MainWindow(QMainWindow):
         self.review_btn.setMenu(review_menu)
         self.review_btn.setEnabled(False)
         action_bar.addWidget(self.review_btn)
+
+        # B-roll: Creative Commons pictures and footage over the audio, credited
+        self.broll_btn = QPushButton("B-roll Reel…")
+        self.broll_btn.setToolTip(
+            "Find Creative Commons pictures and footage for the episode, pick "
+            "what fits and build a reel with credits"
+        )
+        self.broll_btn.clicked.connect(self._on_broll)
+        self.broll_btn.setEnabled(False)
+        action_bar.addWidget(self.broll_btn)
 
         # The export format belongs here, not in a dialog at render time: it
         # decides the canvas the captions are laid out on, so the preview
@@ -842,6 +862,63 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _run_gui_call(fn) -> None:
         fn()
+
+    def _on_broll(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self.project.segments = list(self.caption_panel.segments)
+        if not self.project.video_path or not self.project.segments:
+            QMessageBox.information(
+                self, "B-roll", "Load a recording and transcribe it first."
+            )
+            return
+        segments = list(self.project.segments)
+        self.status.showMessage("Searching Wikimedia Commons…")
+
+        def work() -> None:
+            try:
+                found = broll_suggest.proposals(segments)
+            except (OSError, ValueError) as err:
+                message = str(err)
+                self._in_gui(lambda: self._broll_failed(message))
+                return
+            self._in_gui(lambda: self._broll_choose(found))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _broll_choose(self, found: list) -> None:
+        self.status.clearMessage()
+        picks = BrollPicks(found)
+        if BrollDialog(picks, parent=self).exec() != QDialog.DialogCode.Accepted:
+            return
+        audio = Path(self.project.video_path)
+        out = audio.with_name(f"{audio.stem}.reel.mp4")
+        self.project.save_sidecar()
+        sidecar = self.project.sidecar_path
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(True)
+        self.status.showMessage("Building the reel…")
+
+        def work() -> None:
+            try:
+                broll_pipeline.build(
+                    audio, picks, out, sidecar=Path(sidecar) if sidecar else None
+                )
+            except (OSError, ValueError, broll_reel.ReelError) as err:
+                message = str(err)
+                self._in_gui(lambda: self._broll_failed(message))
+                return
+            self._in_gui(lambda: self._broll_done(out))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _broll_done(self, out: Path) -> None:
+        self.progress_bar.setVisible(False)
+        self.status.showMessage(f"Reel ready: {out}", 15000)
+
+    def _broll_failed(self, message: str) -> None:
+        self.progress_bar.setVisible(False)
+        self.status.clearMessage()
+        QMessageBox.warning(self, "B-roll", message)
 
     def _on_export_for_review(self) -> None:
         self.caption_panel.commit_active_editor()
@@ -1563,7 +1640,7 @@ class MainWindow(QMainWindow):
             self,
             "Select Video",
             "",
-            "Video Files (*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.m4v *.ts);;All Files (*)",
+            OPEN_FILES,
         )
         if file_path:
             self.load_video(file_path)
@@ -1601,6 +1678,7 @@ class MainWindow(QMainWindow):
         self.thumb_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
         self.review_btn.setEnabled(True)
+        self.broll_btn.setEnabled(True)
         self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})

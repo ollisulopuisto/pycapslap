@@ -236,8 +236,8 @@ def test_http_retries_on_429_and_honours_retry_after(monkeypatch):
             )
         return io.BytesIO(b'{"ok": 1}')
 
-    monkeypatch.setattr(commons.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(commons.time, "sleep", slept.append)
+    monkeypatch.setattr(commons.net.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(commons.net.time, "sleep", slept.append)
     assert commons._http("https://x", {"a": "b"}) == {"ok": 1}
     assert slept == [2, 2]
 
@@ -249,8 +249,8 @@ def test_http_gives_up_after_the_last_retry(monkeypatch):
     def urlopen(req, timeout):
         raise urllib.error.HTTPError(req.full_url, 429, "x", {}, io.BytesIO())
 
-    monkeypatch.setattr(commons.urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(commons.time, "sleep", lambda s: None)
+    monkeypatch.setattr(commons.net.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(commons.net.time, "sleep", lambda s: None)
     with pytest.raises(urllib.error.HTTPError):
         commons._http("https://x", {})
 

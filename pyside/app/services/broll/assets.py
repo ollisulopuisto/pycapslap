@@ -16,6 +16,7 @@ class Asset:
     source: str = ""
     width: int = 0
     height: int = 0
+    thumb_url: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

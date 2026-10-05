@@ -3,20 +3,14 @@
 import html
 import json
 import re
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from app.services.broll import licenses
+from app.services.broll import licenses, net
 from app.services.broll.assets import Asset
 
 API = "https://commons.wikimedia.org/w/api.php"
 SOURCE = "Wikimedia Commons"
-# Wikimedia asks API clients to identify themselves.
-USER_AGENT = "PyCapSlap-broll/0.1 (https://github.com/ollisulopuisto/pycapslap)"
 # SVG is a diagram, not footage; the rest are what ffmpeg can scale to a frame.
 _RASTER = {"image/jpeg", "image/png", "image/webp", "image/tiff"}
 _VIDEO_PREFIX = "video/"
@@ -24,24 +18,8 @@ _VIDEO_PREFIX = "video/"
 Fetch = Callable[[str, dict[str, str]], dict[str, Any]]
 
 
-# Wikimedia answers 429 with Retry-After when a client is busy; three tries.
-_ATTEMPTS = 3
-
-
 def _http(url: str, params: dict[str, str]) -> dict[str, Any]:
-    req = urllib.request.Request(
-        f"{url}?{urllib.parse.urlencode(params)}",
-        headers={"User-Agent": USER_AGENT},
-    )
-    for attempt in range(1, _ATTEMPTS + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                return json.load(r)
-        except urllib.error.HTTPError as e:
-            if e.code != 429 or attempt == _ATTEMPTS:
-                raise
-            time.sleep(int(e.headers.get("Retry-After", 5)))
-    raise AssertionError("unreachable")
+    return json.loads(net.get(url, params))
 
 
 def _plain(markup: str) -> str:
@@ -67,6 +45,7 @@ def search(query: str, limit: int = 20, fetch: Fetch = _http) -> list[Asset]:
         "gsrlimit": str(limit),
         "prop": "imageinfo",
         "iiprop": "url|mime|size|extmetadata",
+        "iiurlwidth": "320",
     }
     pages = fetch(API, params).get("query", {}).get("pages", {})
     found: list[Asset] = []
@@ -90,6 +69,7 @@ def search(query: str, limit: int = 20, fetch: Fetch = _http) -> list[Asset]:
                 license=lic,
                 license_url=_meta(info, "LicenseUrl") or None,
                 source=SOURCE,
+                thumb_url=info.get("thumburl") or None,
                 width=int(info.get("width", 0)),
                 height=int(info.get("height", 0)),
             )
