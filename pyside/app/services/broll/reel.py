@@ -13,9 +13,11 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import hashlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from app.services import media
 from app.services.broll import credits, looks
 from app.services.broll.looks import FPS
 from app.services.broll.picks import Choice
@@ -50,6 +52,7 @@ class Part:
     credit: str
     size: tuple[int, int] | None = None
     motion: str = "zoom_out"
+    alpha: bool = True  # may be transparent; known after prepare_stills
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,7 @@ class Shot:
     motion: str = "zoom_in"  # of a still: see looks.MOTIONS
     transition: str = "cut"  # how it arrives
     second: Part | None = None
+    alpha: bool = True  # of the first picture, as for Part
 
     @property
     def seconds(self) -> float:
@@ -71,7 +75,9 @@ class Shot:
 
     @property
     def parts(self) -> list[Part]:
-        first = Part(self.path, self.kind, self.credit, self.size, self.motion)
+        first = Part(
+            self.path, self.kind, self.credit, self.size, self.motion, self.alpha
+        )
         return [first] + ([self.second] if self.second else [])
 
     @property
@@ -287,6 +293,59 @@ def _end_card(lines: list[str], size: tuple[int, int]) -> tuple[str, int]:
         fs -= 1
 
 
+def _prepare_part(part: Part, region: tuple[int, int], layout: str, work: Path) -> Part:
+    """A still made no bigger than its place in the frame can use, once.
+
+    Every frame of a looped still is decoded from the file again, so a 12
+    megapixel photo costs 12 megapixels thirty times a second. Shrunk first to
+    twice the region (the size the zoom works at), it costs a quarter of that.
+    Also finds out whether the picture can be transparent."""
+    if part.kind != "image":
+        return part
+    info = media.image_info(str(part.path))
+    if info is None:
+        return part
+    iw, ih, fmt = info
+    alpha = media.alpha_format(fmt)
+    w2, h2 = 2 * region[0], 2 * region[1]
+    # The cover for a fill, the fit for a blurred fit: what each really draws.
+    s = max(w2 / iw, h2 / ih) if layout == "fill" else min(w2 / iw, h2 / ih)
+    if s >= 1:
+        return replace(part, alpha=alpha)
+    nw, nh = looks.even(iw * s + 1), looks.even(ih * s + 1)
+    key = hashlib.sha1(f"{part.path}|{nw}x{nh}".encode()).hexdigest()[:16]
+    out = work / "prepared" / f"{key}{'.png' if alpha else '.jpg'}"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [ffmpeg_path(), "-y", "-v", "error", "-i", str(Path(part.path).resolve())]
+        cmd += ["-vf", f"scale={nw}:{nh}:flags=lanczos"]
+        cmd += ["-frames:v", "1"] + ([] if alpha else ["-q:v", "2"]) + [str(out)]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise ReelError(r.stderr.strip()[-400:] or "could not shrink a picture")
+    return replace(part, path=out, alpha=alpha)
+
+
+def prepare_stills(shots_: list[Shot], size: tuple[int, int], work: Path) -> list[Shot]:
+    """Every still of the reel shrunk to what the frame can use (see above)."""
+    w, h = size
+    out = []
+    for s in shots_:
+        region = (w, h // 2) if s.layout == "stack" else (w, h)
+        layout = "blur" if s.layout == "blur" else "fill"
+        parts = [_prepare_part(p, region, layout, work) for p in s.parts]
+        first = parts[0]
+        out.append(
+            replace(
+                s,
+                path=first.path,
+                alpha=first.alpha,
+                second=parts[1] if len(parts) > 1 else None,
+            )
+        )
+    return out
+
+
 def command(
     audio: Path,
     shots_: list[Shot],
@@ -353,6 +412,7 @@ def command(
                     th,
                     region_layout,
                     tag,
+                    part.alpha,
                 )
             else:
                 g += looks.video_filters(
@@ -450,6 +510,8 @@ def render(
     duration = duration_s if duration_s is not None else probe_duration(audio)
     if hw is None:
         hw = vt_available()
+    work.mkdir(parents=True, exist_ok=True)
+    shots_ = prepare_stills(shots_, size, work)
     # The GPU run may refuse a clip (10-bit, an odd codec) or lack a filter; it
     # fails at start-up, and the software run takes over.
     for use_hw in (True, False) if hw else (False,):

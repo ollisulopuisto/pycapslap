@@ -522,3 +522,154 @@ def test_a_transparent_picture_does_not_let_the_waveform_show_through(tmp_path, 
     row = [pixel(out, 1.0, x, 40) for x in range(0, 180, 3)]
     assert not any(sum(p) > 300 for p in row), "waveform lines show through the ground"
     assert max(max(p) for p in row) < 120
+
+
+# --- keeping a big still from being decoded at full size for every frame ------
+
+
+def big_photo(tmp_path, name="photo.jpg", size="4000x3000"):
+    out = tmp_path / name
+    run(
+        "-f",
+        "lavfi",
+        "-i",
+        f"testsrc2=s={size}:r=1",
+        "-frames:v",
+        "1",
+        "-q:v",
+        "3",
+        str(out),
+    )
+    return out
+
+
+def dims(path):
+    raw = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    w, h = raw.split(",")
+    return int(w), int(h)
+
+
+@needs_ffmpeg
+def test_a_wide_photo_in_a_blurred_fit_is_shrunk_once_to_what_the_frame_can_show(
+    tmp_path,
+):
+    photo = big_photo(tmp_path)
+    s = reel.Shot(0, 2000, photo, "image", "c", layout="blur")
+    (prepared,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    w, h = dims(prepared.path)
+    assert (w, h) == (2160, 1620)  # fits twice the frame's width, nothing more
+    assert prepared.path != photo and prepared.alpha is False
+
+
+@needs_ffmpeg
+def test_a_picture_already_small_enough_is_left_alone(tmp_path):
+    small = solid(tmp_path, "s.png", "red", "640x360")
+    s = reel.Shot(0, 2000, small, "image", "c", layout="blur")
+    (prepared,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    assert prepared.path == small and prepared.alpha is False
+
+
+@needs_ffmpeg
+def test_a_picture_with_transparency_is_kept_as_png_and_marked(tmp_path):
+    logo = tmp_path / "logo.png"
+    run(
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=white@0.0:s=3000x2000,format=rgba",
+        "-vf",
+        "drawbox=x=1000:y=800:w=300:h=300:color=red@1:t=fill",
+        "-frames:v",
+        "1",
+        str(logo),
+    )
+    s = reel.Shot(0, 2000, logo, "image", "c", layout="blur")
+    (prepared,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    assert prepared.alpha is True and prepared.path.suffix == ".png"
+    assert dims(prepared.path)[0] <= 2160
+
+
+@needs_ffmpeg
+def test_a_fill_shrinks_only_when_the_cover_is_smaller_than_the_photo(tmp_path):
+    tall = big_photo(tmp_path, "tall.jpg", "3000x4000")
+    s = reel.Shot(0, 2000, tall, "image", "c", layout="fill")
+    (prepared,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    w, h = dims(prepared.path)
+    assert w >= 2160 and h >= 3840 and (w, h) != (3000, 4000)  # covers 2x, no more
+    wide = big_photo(tmp_path, "wide.jpg", "4000x3000")
+    s2 = reel.Shot(0, 2000, wide, "image", "c", layout="fill")
+    (kept,) = reel.prepare_stills([s2], (1080, 1920), tmp_path / "w2")
+    assert kept.path == wide  # covering a tall frame needs more than it has
+
+
+@needs_ffmpeg
+def test_both_pictures_of_a_stack_are_prepared_for_a_half_frame(tmp_path):
+    a, b = big_photo(tmp_path, "a.jpg"), big_photo(tmp_path, "b.jpg", "3000x3000")
+    s = reel.Shot(
+        0,
+        2000,
+        a,
+        "image",
+        "c",
+        layout="stack",
+        second=reel.Part(b, "image", "d", None, "zoom_out"),
+    )
+    (p,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    assert dims(p.path)[0] <= 4000 and p.path != a
+    assert p.second.path != b and dims(p.second.path)[0] <= 3000
+    assert p.second.alpha is False
+
+
+@needs_ffmpeg
+def test_a_video_is_never_touched(tmp_path):
+    clip = tmp_path / "c.webm"
+    run("-f", "lavfi", "-i", "testsrc=s=320x240:d=1", "-c:v", "libvpx", str(clip))
+    s = reel.Shot(0, 2000, clip, "video", "c", layout="blur")
+    (kept,) = reel.prepare_stills([s], (1080, 1920), tmp_path / "w")
+    assert kept.path == clip
+
+
+def test_only_a_picture_with_transparency_is_flattened():
+    opaque = looks.still_filters(
+        "1:v", "o", "zoom_in", 30, 270, 480, "fill", "t", flatten=False
+    )
+    assert "premultiply" not in " ".join(opaque)
+    alpha = looks.still_filters(
+        "1:v", "o", "zoom_in", 30, 270, 480, "fill", "t", flatten=True
+    )
+    assert "premultiply" in " ".join(alpha)
+    blur = looks.still_filters(
+        "1:v", "o", "zoom_in", 30, 270, 480, "blur", "t", flatten=False
+    )
+    assert "premultiply" not in " ".join(blur)
+
+
+def test_an_unknown_picture_is_flattened_to_be_safe():
+    s = reel.Shot(0, 2000, Path("a.jpg"), "image", "c")
+    assert s.alpha is True and s.parts[0].alpha is True
+
+
+def test_the_alpha_formats_are_recognised():
+    from app.services import media
+
+    for fmt in ("rgba", "bgra", "argb", "ya8", "pal8", "yuva420p", "gbrap", "rgba64le"):
+        assert media.alpha_format(fmt), fmt
+    for fmt in ("yuvj420p", "yuv420p", "rgb24", "gray", "gray16le", "bgr24"):
+        assert not media.alpha_format(fmt), fmt
+    assert media.alpha_format(None)  # not knowing is treated as having it

@@ -93,22 +93,33 @@ def _backdrop(tag: str, w: int, h: int, out_w: int, out_h: int) -> str:
 
 
 def still_filters(
-    src: str, out: str, motion: str, frames: int, w: int, h: int, layout: str, tag: str
+    src: str,
+    out: str,
+    motion: str,
+    frames: int,
+    w: int,
+    h: int,
+    layout: str,
+    tag: str,
+    flatten: bool = True,
 ) -> list[str]:
     """A still, looped to `frames` frames, as a w x h picture moving by `motion`.
 
     Worked at twice the size so the zoom and pan have pixels to move over."""
     w2, h2 = 2 * w, 2 * h
     move = zoompan(motion, frames, w, h)
+    # Only a picture that may be transparent pays for the flattening: it costs
+    # about 40 % of a render on 12-megapixel JPEGs, which have no alpha.
+    pre = f"{FLATTEN}," if flatten else ""
     if layout == "blur":
         return [
-            f"[{src}]{FLATTEN},split[{tag}a][{tag}b]",
+            f"[{src}]{pre}split[{tag}a][{tag}b]",
             _backdrop(tag, w, h, w2, h2),
             f"[{tag}b]scale={w2}:{h2}:force_original_aspect_ratio=decrease[{tag}fg]",
             f"[{tag}bg][{tag}fg]overlay=(W-w)/2:(H-h)/2,{move}[{out}]",
         ]
     return [
-        f"[{src}]{FLATTEN},scale={w2}:{h2}:force_original_aspect_ratio=increase,"
+        f"[{src}]{pre}scale={w2}:{h2}:force_original_aspect_ratio=increase,"
         f"crop={w2}:{h2},{move}[{out}]"
     ]
 
