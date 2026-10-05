@@ -193,6 +193,10 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
         "transcribe" => {
             match serde_json::from_value::<core::types::GenerateCaptionsParams>(r.params) {
                 Ok(p) => {
+                    let range = core::types::AudioRange::from_ms(
+                        p.transcribe_start_ms,
+                        p.transcribe_end_ms,
+                    );
                     tokio::select! {
                         res = captions::extract_and_transcribe_with_server(
                             &id,
@@ -203,6 +207,7 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             p.api_key,
                             p.prompt,
                             p.whisper_base_url,
+                            range,
                             &mut emit
                         ) => {
                             match res {

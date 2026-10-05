@@ -912,3 +912,103 @@ def test_rendering_an_audio_file_says_what_to_do_instead(
     assert kind == "information"
     assert "audio" in text.lower() and "B-roll Reel" in text
     window.close()
+
+
+def _transcribing_window(qtbot, monkeypatch, tmp_path, duration_ms, marks=None):
+    from concurrent.futures import Future
+
+    from app.views import main_window as mw
+
+    audio = tmp_path / "ep.wav"
+    audio.write_bytes(b"x")
+    window = MainWindow()
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        window.player.media_player.__class__,
+        "source",
+        lambda self: mw.QUrl.fromLocalFile(str(audio)),
+    )
+    window.timeline.set_duration(duration_ms)
+    if marks:
+        window.timeline.set_trim_range(*marks)
+    sent = []
+    pending = Future()
+
+    def call(method, params, *a, **k):
+        sent.append((method, params))
+        return pending
+
+    monkeypatch.setattr(window.core, "call", call)
+    return window, sent, pending
+
+
+def test_transcribing_a_long_recording_without_marks_asks_for_a_range(
+    qtbot, monkeypatch, tmp_path, no_modal_message_boxes
+):
+    window, sent, _ = _transcribing_window(qtbot, monkeypatch, tmp_path, 47 * 60_000)
+    window._on_transcribe_requested()
+    assert sent == []  # nothing is sent to whisper
+    kind, text = no_modal_message_boxes[-1]
+    assert kind == "information" and "47:00" in text and "press I" in text
+    window.close()
+
+
+def test_transcribing_between_the_marks_sends_only_that_range(
+    qtbot, monkeypatch, tmp_path
+):
+    window, sent, _ = _transcribing_window(
+        qtbot, monkeypatch, tmp_path, 47 * 60_000, marks=(600_000, 900_000)
+    )
+    window._on_transcribe_requested()
+    ((method, params),) = sent
+    assert method == "transcribe"
+    assert (params["transcribeStartMs"], params["transcribeEndMs"]) == (
+        600_000,
+        900_000,
+    )
+    window.close()
+
+
+def test_a_short_recording_is_sent_whole(qtbot, monkeypatch, tmp_path):
+    window, sent, _ = _transcribing_window(qtbot, monkeypatch, tmp_path, 3 * 60_000)
+    window._on_transcribe_requested()
+    ((_, params),) = sent
+    assert "transcribeStartMs" not in params and "transcribeEndMs" not in params
+    window.close()
+
+
+def test_a_transcribed_range_lands_in_place_among_the_existing_cues(
+    qtbot, monkeypatch, tmp_path
+):
+    window, sent, pending = _transcribing_window(
+        qtbot, monkeypatch, tmp_path, 47 * 60_000, marks=(600_000, 900_000)
+    )
+    window.set_caption_segments(
+        [
+            CaptionSegment(1_000, 3_000, "before"),
+            CaptionSegment(650_000, 652_000, "old inside"),
+            CaptionSegment(1_200_000, 1_203_000, "after"),
+        ]
+    )
+    window._on_transcribe_requested()
+    # whisper counts from the start of the part it was given
+    pending.set_result(
+        {
+            "transcription": {
+                "segments": [
+                    {"startMs": 5_000, "endMs": 8_000, "text": "new one", "words": []},
+                    {"startMs": 8_000, "endMs": 11_000, "text": "new two", "words": []},
+                ]
+            }
+        }
+    )
+    qtbot.waitUntil(
+        lambda: (
+            [s.text for s in window.caption_panel.segments]
+            == ["before", "new one", "new two", "after"]
+        ),
+        timeout=3000,
+    )
+    starts = [s.start_ms for s in window.caption_panel.segments]
+    assert starts == [1_000, 605_000, 608_000, 1_200_000]
+    window.close()
