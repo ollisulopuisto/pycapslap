@@ -22,20 +22,22 @@ def build(
     sidecar: Path | None = None,
     size: tuple[int, int] = (1080, 1920),
     end_card_s: float = 5.0,
+    transition: str = "mixed",
 ) -> Path:
     accepted = picks.accepted()
     if not accepted:
         raise NothingAccepted("accept at least one picture or clip first")
     work = out.parent / f".{out.stem}-work"
-    files = {a.title: fetch(a, work / "assets") for _, a in accepted}
-    shots = reel.shots(accepted, files)
+    assets = [a for ch in accepted for a in ch.assets]
+    files = {a.title: fetch(a, work / "assets") for a in assets}
+    shots = reel.shots(accepted, files, transition)
     render(audio, shots, out, work=work, size=size, end_card_s=end_card_s)
     # The reel starts with the episode's first second, so the cue times still
     # fit: the app can load the reel and burn the captions as for any video.
     if sidecar and sidecar.exists():
         shutil.copyfile(sidecar, out.parent / f"{out.name}.capslap.json")
     (out.parent / f"{out.stem}.credits.txt").write_text(
-        credits.description([a for _, a in accepted]) + "\n", encoding="utf-8"
+        credits.description(assets) + "\n", encoding="utf-8"
     )
     shutil.rmtree(work, ignore_errors=True)
     return out
