@@ -420,22 +420,37 @@ def command(
                 )
         if stacked:
             g.append(f"[{labels[0]}][{labels[1]}]vstack=inputs=2[s{i}]")
-        fade = s.transition == "fade" and arrival(shots_, i) > 0
-        chain = [
-            "setsar=1",
-            f"format={'yuva420p' if fade else 'yuv420p'}",
-            f"setpts=PTS-STARTPTS+{a:.3f}/TB",
-        ]
-        if fade:
-            chain.append(f"fade=t=in:st={a:.3f}:d={arrival(shots_, i):.3f}:alpha=1")
+        d_in = arrival(shots_, i)
+        fade = s.transition == "fade" and d_in > 0
+        chain = ["setsar=1", "format=yuv420p", f"setpts=PTS-STARTPTS+{a:.3f}/TB"]
         blur = blur_enable(shots_, i)
         if blur:
             chain.append(f"gblur=sigma={WHIP_BLUR_SIGMA}:sigmaV=0:enable='{blur}'")
-        g.append(f"[s{i}]{','.join(chain)}[v{i}]")
-        g.append(
-            f"[bg{i}][v{i}]overlay=x='{overlay_x(shots_, i, w)}':y=0:"
-            f"enable='between(t,{a:.3f},{b + ext:.3f})':eof_action=pass[o{i}]"
-        )
+        x, end = overlay_x(shots_, i, w), b + ext
+        if fade:
+            # Only the fade itself needs an alpha channel. Carrying one for the
+            # whole shot cost a third of a render, so the shot is cut in two: its
+            # first d_in seconds, faded in with alpha, and the rest, opaque.
+            g.append(f"[s{i}]{','.join(chain)},split[v{i}h][v{i}r]")
+            g.append(
+                f"[v{i}h]trim=end={a + d_in:.3f},format=yuva420p,"
+                f"fade=t=in:st={a:.3f}:d={d_in:.3f}:alpha=1[h{i}]"
+            )
+            g.append(f"[v{i}r]trim=start={a + d_in:.3f}[r{i}]")
+            g.append(
+                f"[bg{i}][h{i}]overlay=x='0':y=0:"
+                f"enable='between(t,{a:.3f},{a + d_in:.3f})':eof_action=pass[oh{i}]"
+            )
+            g.append(
+                f"[oh{i}][r{i}]overlay=x='{x}':y=0:"
+                f"enable='between(t,{a + d_in:.3f},{end:.3f})':eof_action=pass[o{i}]"
+            )
+        else:
+            g.append(f"[s{i}]{','.join(chain)}[v{i}]")
+            g.append(
+                f"[bg{i}][v{i}]overlay=x='{x}':y=0:"
+                f"enable='between(t,{a:.3f},{end:.3f})':eof_action=pass[o{i}]"
+            )
         name = f"credit{i}.txt"
         wrapped = "\n".join(_wrap(line, w, _chars(w, fs)) for line in s.credit_lines)
         (work / name).write_text(wrapped, encoding="utf-8")

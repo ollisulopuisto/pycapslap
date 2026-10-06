@@ -767,3 +767,104 @@ def test_every_frame_of_a_looped_free_still_is_there(tmp_path):
         check=True,
     ).stdout.strip()
     assert 59 <= int(count) <= 61
+
+
+# --- a crossfade pays for transparency only while it fades --------------------
+
+
+def fade_graph(tmp_path, n=2, style="fade"):
+    shots = reel.assign_transitions(
+        [shot(i * 2000, (i + 1) * 2000, str(tmp_path / f"{i}.jpg")) for i in range(n)],
+        style,
+    )
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        shots,
+        tmp_path / "o.mp4",
+        2.0 * n,
+        tmp_path / "w",
+        size=(270, 480),
+        end_card_s=0,
+        hw=False,
+    )
+    return cmd[cmd.index("-filter_complex") + 1]
+
+
+def test_only_the_first_part_of_a_fading_shot_has_an_alpha_channel(tmp_path):
+    graph = fade_graph(tmp_path, n=3)
+    assert graph.count("yuva420p") == 3  # one short head per shot, not the whole shot
+    assert graph.count("fade=t=in") == 3
+    # the rest of each shot starts where its fade ends: 0.4 s in
+    for start in ("0.400", "2.400", "4.400"):
+        assert f"trim=start={start}" in graph
+        assert f"trim=end={start}" in graph
+
+
+def test_the_rest_of_a_fading_shot_is_overlaid_opaque(tmp_path):
+    graph = fade_graph(tmp_path)
+    # the fade's own overlay covers just the fade; the rest covers what follows
+    assert "enable='between(t,0.000,0.400)'" in graph
+    assert (
+        "enable='between(t,0.400,2.400)'" in graph
+    )  # up to the end, plus the 0.4 s under the next
+
+
+def test_other_transitions_still_use_a_single_opaque_stream(tmp_path):
+    for style in ("cut", "slide", "whip"):
+        graph = fade_graph(tmp_path, style=style)
+        assert "yuva420p" not in graph and "trim=" not in graph, style
+
+
+@needs_ffmpeg
+def test_a_crossfade_has_no_gap_where_the_fade_hands_over_to_the_rest(tmp_path):
+    out = render(tmp_path, two_shots(tmp_path, "fade"), 4)
+    # the fade of the second shot runs 2.0 to 2.4 s; sample frames across the join
+    for t in (2.30, 2.37, 2.40, 2.43, 2.50, 2.70):
+        px = pixel(out, t, 90, 160)
+        assert px[2] > 60, (
+            t,
+            px,
+        )  # blue is there, never the red underneath showing alone
+
+
+@needs_ffmpeg
+def test_the_first_shot_fades_in_over_the_waveform(tmp_path):
+    a, _ = two_colours(tmp_path)
+    s = reel.assign_transitions([reel.Shot(0, 2000, a, "image", "A")], "fade")
+    out = render(tmp_path, s, 2)
+    early, late = pixel(out, 0.05, 90, 160), pixel(out, 1.0, 90, 160)
+    assert reddish(late) and early[0] < late[0] - 60
+
+
+@needs_ffmpeg
+def test_a_mixed_reel_with_fades_whips_and_slides_renders_whole(tmp_path):
+    imgs = [
+        solid(tmp_path, f"{c}.png", c)
+        for c in ("red", "blue", "green", "yellow", "white")
+    ]
+    shots = [
+        reel.Shot(
+            i * 1500, (i + 1) * 1500, p, "image", f"c{i}", motion=looks.auto_motion(i)
+        )
+        for i, p in enumerate(imgs)
+    ]
+    out = render(tmp_path, reel.assign_transitions(shots, "mixed"), 7.5)
+    count = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert 224 <= int(count) <= 226  # 7.5 s at 30 fps
