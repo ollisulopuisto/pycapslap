@@ -856,6 +856,8 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     built = {}
 
     class Chooser:
+        transition = "whip"
+
         def __init__(self, picks, parent=None):
             picks.accept(0, 0)
 
@@ -867,8 +869,8 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(
         mw.broll_pipeline,
         "build",
-        lambda audio, picks, out, sidecar=None: built.update(
-            audio=audio, out=out, n=len(picks.accepted())
+        lambda audio, picks, out, sidecar=None, transition=None: built.update(
+            audio=audio, out=out, n=len(picks.accepted()), transition=transition
         ),
     )
     window = MainWindow()
@@ -882,6 +884,7 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     qtbot.waitUntil(lambda: bool(built), timeout=3000)
     assert built["n"] == 1
     assert built["out"].name == "ep.reel.mp4"
+    assert built["transition"] == "whip"  # the dialog's choice reaches the build
     window.close()
 
 
