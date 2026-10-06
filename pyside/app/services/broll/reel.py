@@ -386,7 +386,7 @@ def command(
             src = str(Path(part.path).resolve())
             gpu_scale = None
             if part.kind == "image":
-                cmd += ["-loop", "1", "-framerate", str(FPS), "-t", f"{shown:.3f}"]
+                # One frame: zoompan makes the rest of the shot out of it.
                 cmd += ["-i", src]
             else:
                 # VideoToolbox decodes the clip; with its size known (and the

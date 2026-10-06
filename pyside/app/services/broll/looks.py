@@ -57,8 +57,10 @@ def even(v: float) -> int:
 def zoompan(motion: str, frames: int, w: int, h: int, fps: int = FPS) -> str:
     """The Ken Burns filter for a still of `frames` frames, out at w x h.
 
-    Progress runs from 0 on the first frame to 1 on the last, so the move ends
-    exactly when the shot does, whatever its length."""
+    One input picture makes all `frames` frames (`d`), so the file is decoded
+    and scaled once rather than once per frame, which cost three quarters of a
+    render. Progress runs from 0 on the first frame to 1 on the last, so the
+    move ends exactly when the shot does, whatever its length."""
     p = f"min(on/{max(frames - 1, 1)},1)"
     a = KB_ZOOM - 1
     centre_x, centre_y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
@@ -79,7 +81,7 @@ def zoompan(motion: str, frames: int, w: int, h: int, fps: int = FPS) -> str:
             y = f"(ih-ih/zoom)*(1-{p})"
         else:
             raise ValueError(f"unknown motion {motion!r}")
-    return f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={w}x{h}:fps={fps}"
+    return f"zoompan=z='{z}':x='{x}':y='{y}':d={max(frames, 1)}:s={w}x{h}:fps={fps}"
 
 
 def _backdrop(tag: str, w: int, h: int, out_w: int, out_h: int) -> str:

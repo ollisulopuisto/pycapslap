@@ -131,7 +131,7 @@ def test_command_has_one_input_per_shot_and_the_audio_first(tmp_path):
     assert cmd[0].endswith("ffmpeg") or cmd[0] == "ffmpeg"
     ins = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
     assert ins[0].endswith("ep.m4a") and len(ins) == 3
-    assert "-loop" in cmd and "-stream_loop" in cmd
+    assert "-loop" not in cmd and "-stream_loop" in cmd  # stills are not looped
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "zoompan" in graph  # the still moves
     assert "showwaves" in graph  # gaps and the start show the audio

@@ -673,3 +673,97 @@ def test_the_alpha_formats_are_recognised():
     for fmt in ("yuvj420p", "yuv420p", "rgb24", "gray", "gray16le", "bgr24"):
         assert not media.alpha_format(fmt), fmt
     assert media.alpha_format(None)  # not knowing is treated as having it
+
+
+# --- a still is decoded once, not once per frame ------------------------------
+
+
+def test_zoompan_makes_all_the_frames_of_a_shot_from_one_picture():
+    assert "d=60:" in looks.zoompan("zoom_in", 60, 270, 480)
+    assert "d=1:" in looks.zoompan("zoom_in", 1, 270, 480)
+
+
+def test_a_still_is_fed_in_once_and_not_looped(tmp_path):
+    shots = [reel.Shot(0, 2000, tmp_path / "a.jpg", "image", "c")]
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        shots,
+        tmp_path / "o.mp4",
+        2.0,
+        tmp_path / "w",
+        size=(270, 480),
+        end_card_s=0,
+        hw=False,
+    )
+    assert "-loop" not in cmd, "looping re-decodes the file for every frame"
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "d=60:" in graph  # two seconds at 30 fps, all from the one frame
+
+
+def test_a_transition_lengthens_the_still_not_its_decoding(tmp_path):
+    shots = reel.assign_transitions(
+        [
+            shot(0, 2000, str(tmp_path / "a.jpg")),
+            shot(2000, 4000, str(tmp_path / "b.jpg")),
+        ],
+        "fade",
+    )
+    cmd = reel.command(
+        tmp_path / "ep.m4a",
+        shots,
+        tmp_path / "o.mp4",
+        4.0,
+        tmp_path / "w",
+        size=(270, 480),
+        end_card_s=0,
+        hw=False,
+    )
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "d=72:" in graph  # the first shot stays 0.4 s longer under the next one
+
+
+@needs_ffmpeg
+def test_a_zoom_in_really_grows_the_picture_over_the_shot(tmp_path):
+    # a red square in the middle of a blue picture: the closer the zoom, the
+    # more of the frame it covers
+    img = tmp_path / "sq.png"
+    run(
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=800x800",
+        "-vf",
+        "drawbox=x=250:y=250:w=300:h=300:color=red:t=fill",
+        "-frames:v",
+        "1",
+        str(img),
+    )
+    out = render_one(tmp_path / "z", img, "fill", motion="zoom_in", seconds=3)
+    # the square spans x 30..150 of the 180 px frame at the start and 21..159 at the
+    # end, so x=25 is off it at first and on it by the end
+    assert bluish(pixel(out, 0.1, 25, 160)) and reddish(pixel(out, 2.9, 25, 160))
+
+
+@needs_ffmpeg
+def test_every_frame_of_a_looped_free_still_is_there(tmp_path):
+    img = solid(tmp_path, "a.png", "green")
+    out = render_one(tmp_path / "f", img, "fill", seconds=2)
+    count = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "csv=p=0",
+            str(out),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert 59 <= int(count) <= 61
