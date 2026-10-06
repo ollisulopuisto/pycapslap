@@ -60,7 +60,7 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
   * **Client Review → Import from Portal** fetches the newest captions for this video, with the client's corrections, and applies them like an imported review. The admin page (`/admin`) lists every captions version and all feedback.
 * 💾 **Non-destructive Sidecar Storage**:
   * Projects are automatically saved as lightweight `.capslap.json` sidecar files next to your source video.
-* 🖼️ **B-roll reel for audio episodes**: **B-roll Reel…** finds Creative Commons pictures and footage on Wikimedia Commons for each stretch of the transcript, you accept or reject each, and it builds a 9:16 reel with credits on screen, a credits card at the end and a credits text for the episode description. Only CC0, public domain, CC BY and CC BY-SA are used.
+* 🖼️ **B-roll reel for audio episodes**: **B-roll Reel…** finds Creative Commons pictures and footage on Wikimedia Commons, Openverse, the Internet Archive and NASA for each stretch of the transcript, you accept or reject each, and it builds a 9:16 reel with credits on screen, a credits card at the end and a credits text for the episode description. Only CC0, public domain, CC BY and CC BY-SA are used.
 * 🎬 **Multi-Format Video Rendering**:
   * Burn captions with one click into **9:16 (TikTok / Reels / Shorts)**, **1:1 (Square)**, **4:5 (Instagram)**, or **16:9 (YouTube)** with Apple VideoToolbox hardware encoding.
   * A smaller **proof copy** (720p or 540p) is encoded in the same pass as the full-size video: send the small one to be checked, publish the big one.
