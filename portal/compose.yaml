@@ -1,7 +1,8 @@
 # The portal behind Caddy, which fetches and renews the HTTPS certificate.
 # From the repository root:
 #   PORTAL_DOMAIN=review.example.com PORTAL_ADMIN_TOKEN=... \
-#     docker compose -f portal/compose.yaml up -d
+#     podman compose -f portal/compose.yaml up -d   (or docker compose)
+# On a server, portal/podman/ runs the same thing as systemd services.
 services:
   portal:
     build:
