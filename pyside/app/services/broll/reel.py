@@ -91,9 +91,21 @@ def _size(a) -> tuple[int, int] | None:
 
 
 def shots(
-    choices: list[Choice], files: dict[str, Path], transition: str = "mixed"
+    choices: list[Choice],
+    files: dict[str, Path],
+    transition: str = "mixed",
+    sizes: dict[str, tuple[int, int]] | None = None,
 ) -> list[Shot]:
-    """One shot per accepted window, ending where the next one begins."""
+    """One shot per accepted window, ending where the next one begins.
+
+    `files` and `sizes` are keyed by the asset's URL: titles are not unique
+    across sources. `sizes` holds what was read from files whose source did not
+    say how big they are."""
+    sizes = sizes or {}
+
+    def size_of(a) -> tuple[int, int] | None:
+        return _size(a) or sizes.get(a.url)
+
     out: list[Shot] = []
     for i, ch in enumerate(choices):
         end = ch.window["endMs"]
@@ -102,15 +114,15 @@ def shots(
         a = ch.assets[0]
         motion = looks.auto_motion(i)
         credit = credits.line(a)
-        layout = looks.auto_layout(_size(a))
+        layout = looks.auto_layout(size_of(a))
         second = None
         if len(ch.assets) == 2:
             b = ch.assets[1]
             second = Part(
-                files[b.title],
+                files[b.url],
                 b.kind,
                 credits.line(b),
-                _size(b),
+                size_of(b),
                 looks.opposite(motion),
             )
             layout = "stack"
@@ -120,10 +132,10 @@ def shots(
             Shot(
                 ch.window["startMs"],
                 end,
-                files[a.title],
+                files[a.url],
                 a.kind,
                 credit,
-                _size(a),
+                size_of(a),
                 layout,
                 motion,
                 "cut",

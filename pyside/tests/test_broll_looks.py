@@ -33,7 +33,7 @@ def test_a_tall_picture_fills_the_frame_and_a_wide_or_square_one_is_fitted():
     assert looks.auto_layout((900, 1200)) == "fill"  # 3:4 loses a quarter, no more
     assert looks.auto_layout((1000, 1000)) == "blur"
     assert looks.auto_layout((1920, 1080)) == "blur"
-    assert looks.auto_layout(None) == "fill"
+    assert looks.auto_layout(None) == "blur"  # unknown: fit it, lose nothing
 
 
 def test_zoompan_reaches_its_target_over_the_whole_shot():
@@ -205,7 +205,7 @@ def test_shots_pick_layout_from_the_picture_and_cycle_the_motion(tmp_path):
     p = Picks(proposals())
     p.accept(0, 0)  # wide image: blurred fit
     p.accept(1, 0)  # tall image: fill
-    files = {"wide.jpg": tmp_path / "w.jpg", "tall.jpg": tmp_path / "t.jpg"}
+    files = {"u/wide.jpg": tmp_path / "w.jpg", "u/tall.jpg": tmp_path / "t.jpg"}
     a, b = reel.shots(p.accepted(), files, transition="fade")
     assert (a.layout, b.layout) == ("blur", "fill")
     assert a.motion != b.motion
@@ -215,7 +215,7 @@ def test_shots_pick_layout_from_the_picture_and_cycle_the_motion(tmp_path):
 def test_a_stack_shot_has_two_parts_two_motions_and_both_credits(tmp_path):
     p = Picks(proposals())
     p.accept(0, 0, also=2)
-    files = {"wide.jpg": tmp_path / "w.jpg", "sq.jpg": tmp_path / "s.jpg"}
+    files = {"u/wide.jpg": tmp_path / "w.jpg", "u/sq.jpg": tmp_path / "s.jpg"}
     (s,) = reel.shots(p.accepted(), files, transition="cut")
     assert s.layout == "stack" and s.second is not None
     assert s.second.motion == looks.opposite(s.motion)

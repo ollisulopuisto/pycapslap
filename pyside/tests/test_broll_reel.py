@@ -101,7 +101,10 @@ def test_shots_have_start_end_file_and_credit(tmp_path):
     p = picks.Picks(proposals())
     p.accept(0, 0)
     p.accept(1, 0)
-    files = {"A.jpg": tmp_path / "a.jpg", "C.jpg": tmp_path / "c.jpg"}
+    files = {
+        "https://x/A.jpg": tmp_path / "a.jpg",
+        "https://x/C.jpg": tmp_path / "c.jpg",
+    }
     shots = reel.shots(p.accepted(), files)
     assert [(s.start_ms, s.end_ms) for s in shots] == [(0, 4000), (4000, 9000)]
     assert shots[0].credit == "A.jpg by Ann, CC BY 2.0, Wikimedia Commons"
@@ -115,7 +118,10 @@ def test_shots_are_cut_off_where_the_next_begins(tmp_path):
     data = p.data()
     data[0]["endMs"] = 6000  # overlaps the next window
     q = picks.Picks(data)
-    files = {"A.jpg": tmp_path / "a.jpg", "C.jpg": tmp_path / "c.jpg"}
+    files = {
+        "https://x/A.jpg": tmp_path / "a.jpg",
+        "https://x/C.jpg": tmp_path / "c.jpg",
+    }
     shots = reel.shots(q.accepted(), files)
     assert shots[0].end_ms == 4000
 

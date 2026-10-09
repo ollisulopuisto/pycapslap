@@ -71,3 +71,9 @@ def image_info(path: str) -> tuple[int, int, str] | None:
         return int(w), int(h), fmt
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
+
+
+def size(path: str) -> tuple[int, int] | None:
+    """(width, height) of a picture or clip, None if it cannot be read."""
+    info = image_info(str(path))
+    return (info[0], info[1]) if info else None
