@@ -17,6 +17,9 @@ class Asset:
     width: int = 0
     height: int = 0
     thumb_url: str | None = None
+    # Set while `url` only leads to the file (a metadata page), not to the file
+    # itself: the name of the source module that finishes the job at download.
+    resolver: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

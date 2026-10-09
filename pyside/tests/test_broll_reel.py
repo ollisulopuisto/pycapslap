@@ -66,8 +66,8 @@ def test_accept_and_reject_set_status_and_choice():
     p.accept(0, 1)
     p.reject(1)
     assert p.status == ["accepted", "rejected"]
-    (win, a) = p.accepted()[0]
-    assert (win["startMs"], a.title) == (0, "B.webm")
+    choice = p.accepted()[0]
+    assert (choice.window["startMs"], choice.assets[0].title) == (0, "B.webm")
     assert p.pending() == []
 
 
@@ -91,7 +91,7 @@ def test_picks_round_trip_through_the_proposals_json():
     p.reject(1)
     q = picks.Picks(p.data())
     assert q.status == ["accepted", "rejected"]
-    assert q.accepted()[0][1].title == "B.webm"
+    assert q.accepted()[0].assets[0].title == "B.webm"
 
 
 # --- the reel's plan and ffmpeg command ---------------------------------------
@@ -101,7 +101,10 @@ def test_shots_have_start_end_file_and_credit(tmp_path):
     p = picks.Picks(proposals())
     p.accept(0, 0)
     p.accept(1, 0)
-    files = {"A.jpg": tmp_path / "a.jpg", "C.jpg": tmp_path / "c.jpg"}
+    files = {
+        "https://x/A.jpg": tmp_path / "a.jpg",
+        "https://x/C.jpg": tmp_path / "c.jpg",
+    }
     shots = reel.shots(p.accepted(), files)
     assert [(s.start_ms, s.end_ms) for s in shots] == [(0, 4000), (4000, 9000)]
     assert shots[0].credit == "A.jpg by Ann, CC BY 2.0, Wikimedia Commons"
@@ -115,7 +118,10 @@ def test_shots_are_cut_off_where_the_next_begins(tmp_path):
     data = p.data()
     data[0]["endMs"] = 6000  # overlaps the next window
     q = picks.Picks(data)
-    files = {"A.jpg": tmp_path / "a.jpg", "C.jpg": tmp_path / "c.jpg"}
+    files = {
+        "https://x/A.jpg": tmp_path / "a.jpg",
+        "https://x/C.jpg": tmp_path / "c.jpg",
+    }
     shots = reel.shots(q.accepted(), files)
     assert shots[0].end_ms == 4000
 
@@ -131,7 +137,7 @@ def test_command_has_one_input_per_shot_and_the_audio_first(tmp_path):
     assert cmd[0].endswith("ffmpeg") or cmd[0] == "ffmpeg"
     ins = [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"]
     assert ins[0].endswith("ep.m4a") and len(ins) == 3
-    assert "-loop" in cmd and "-stream_loop" in cmd
+    assert "-loop" not in cmd and "-stream_loop" in cmd  # stills are not looped
     graph = cmd[cmd.index("-filter_complex") + 1]
     assert "zoompan" in graph  # the still moves
     assert "showwaves" in graph  # gaps and the start show the audio

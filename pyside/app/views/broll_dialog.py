@@ -6,6 +6,8 @@ from collections.abc import Callable
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -21,6 +23,15 @@ from app.services.broll import net
 from app.services.broll.picks import Picks
 
 _MARK = {"pending": "·", "accepted": "✓", "rejected": "✗"}
+# What the layout menu offers for a single picture; None leaves it to the picture.
+_LAYOUTS = (("Layout: auto", None), ("Fill the frame", "fill"), ("Fit on blur", "blur"))
+_TRANSITIONS = (
+    ("Transitions: mixed", "mixed"),
+    ("Crossfades", "fade"),
+    ("Whip pans", "whip"),
+    ("Slides", "slide"),
+    ("Cuts", "cut"),
+)
 _THUMB = QSize(160, 120)
 
 
@@ -56,14 +67,31 @@ class BrollDialog(QDialog):
         self.candidates.setResizeMode(QListView.ResizeMode.Adjust)
         self.candidates.setMovement(QListView.Movement.Static)
         self.candidates.setWordWrap(True)
+        # Ctrl-click a second picture to stack two in one window.
+        self.candidates.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self.candidates.setGridSize(QSize(190, 190))
-        self.candidates.currentRowChanged.connect(self._sync)
+        self.candidates.itemSelectionChanged.connect(self._sync)
         self.candidates.itemDoubleClicked.connect(lambda _: self.accept_btn.click())
 
         self.accept_btn = QPushButton("Accept")
         self.accept_btn.clicked.connect(self._accept)
         self.reject_btn = QPushButton("Reject window")
         self.reject_btn.clicked.connect(self._reject)
+        self.layout_combo = QComboBox()
+        for label, value in _LAYOUTS:
+            self.layout_combo.addItem(label, value)
+        self.layout_combo.setToolTip(
+            "How one picture sits in the frame. Auto fills the frame with a tall "
+            "picture and fits a wide one over a blurred copy of itself."
+        )
+        self.transition_combo = QComboBox()
+        for label, value in _TRANSITIONS:
+            self.transition_combo.addItem(label, value)
+        self.transition_combo.setToolTip("How each picture arrives, for the whole reel")
+        hint = QLabel("Ctrl-click a second picture to stack two.")
+        hint.setStyleSheet("color: #a1a1aa;")
         self.build_btn = QPushButton("Build reel")
         self.build_btn.clicked.connect(self.accept)
         cancel = QPushButton("Cancel")
@@ -72,12 +100,15 @@ class BrollDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addWidget(self.accept_btn)
         buttons.addWidget(self.reject_btn)
+        buttons.addWidget(self.layout_combo)
         buttons.addStretch(1)
+        buttons.addWidget(self.transition_combo)
         buttons.addWidget(cancel)
         buttons.addWidget(self.build_btn)
         right = QVBoxLayout()
         right.addWidget(self.text)
         right.addWidget(self.candidates, 1)
+        right.addWidget(hint)
         right.addLayout(buttons)
         root = QHBoxLayout(self)
         root.addWidget(self.windows)
@@ -116,8 +147,8 @@ class BrollDialog(QDialog):
             item = QListWidgetItem(f"{c['title']}\n{author}, {c['license']}")
             item.setToolTip(f"{c['kind']}  {c['page_url']}")
             self.candidates.addItem(item)
-            if w.get("chosen") == j:
-                self.candidates.setCurrentRow(j)
+            if j in (w.get("chosen"), w.get("also")) and w.get("chosen") is not None:
+                item.setSelected(True)
             self._fetch_thumb(row, j, c.get("thumb_url"))
         self._sync()
 
@@ -144,16 +175,28 @@ class BrollDialog(QDialog):
         if pix.loadFromData(data):
             self.candidates.item(j).setIcon(QIcon(pix))
 
+    def _selected_rows(self) -> list[int]:
+        return sorted(i.row() for i in self.candidates.selectedIndexes())
+
+    @property
+    def transition(self) -> str:
+        return self.transition_combo.currentData()
+
     def _sync(self, *_: object) -> None:
-        self.accept_btn.setEnabled(self.candidates.currentRow() >= 0)
+        picked = len(self._selected_rows())
+        self.accept_btn.setEnabled(picked in (1, 2))
+        self.layout_combo.setEnabled(picked <= 1)
         self.reject_btn.setEnabled(self.windows.currentRow() >= 0)
         self.build_btn.setEnabled(bool(self.picks.accepted()))
 
     def _accept(self) -> None:
-        row, j = self.windows.currentRow(), self.candidates.currentRow()
-        if row < 0 or j < 0:
+        row, rows = self.windows.currentRow(), self._selected_rows()
+        if row < 0 or len(rows) not in (1, 2):
             return
-        self.picks.accept(row, j)
+        if len(rows) == 2:
+            self.picks.accept(row, rows[0], also=rows[1])
+        else:
+            self.picks.accept(row, rows[0], layout=self.layout_combo.currentData())
         self._refresh_row(row)
         self._next_pending(row)
 
