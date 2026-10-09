@@ -45,8 +45,9 @@ def opposite(motion: str) -> str:
 
 
 def auto_layout(size: tuple[int, int] | None) -> str:
-    if not size or size[1] <= 0:
-        return "fill"
+    # Not knowing the shape, fit it: a fit loses nothing, a crop may lose the subject.
+    if not size or size[0] <= 0 or size[1] <= 0:
+        return "blur"
     return "fill" if size[0] / size[1] <= FILL_ASPECT_LIMIT else "blur"
 
 
