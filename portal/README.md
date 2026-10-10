@@ -44,9 +44,19 @@ PORTAL_ADMIN_TOKEN=$(openssl rand -hex 24) uv run capslap-portal
 | `PORTAL_HOST` / `PORTAL_PORT` | `127.0.0.1` / `8080` | Where to listen |
 | `PORTAL_MAX_UPLOAD_MB` | `8192` | Largest video accepted |
 
-It speaks plain HTTP; put it behind HTTPS. The `podman/` folder runs it with
-Podman as systemd user services, with Caddy in front (it gets the certificate
-itself). Rootless, so nothing needs root except two one-time system settings.
+It speaks plain HTTP; put it behind HTTPS.
+
+The production portal already runs at https://thumbs.peliteoria.fi, installed
+from the infra repository (`registry.json`: `capslap-portal`). It uses the
+shared Caddy of that host, a rootless Podman Quadlet on `127.0.0.1:10190`, and
+a bind mount at `/opt/stacks/capslap-portal/data` that the host's borg backup
+covers. Updates go through `infra/capslap-portal/update.sh`. Do not install a
+second copy next to it with the steps below.
+
+The steps below are for other hosts, standalone. The `podman/` folder runs the
+portal with Podman as systemd user services, with its own Caddy in front (it
+gets the certificate itself). Rootless, so nothing needs root except two
+one-time system settings.
 
 ```sh
 # 1. Once, as root: let a normal user listen on 80 and 443 …
