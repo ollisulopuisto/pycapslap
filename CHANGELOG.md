@@ -7,6 +7,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.20.1] - 2026-10-20
+
 ### Added
 - **Split a caption where the speaker changes.** Whisper can put two speakers into one cue. Right-click a word in the caption table and choose **Split caption before “…”**: the cue is cut there, each half keeps its own word timings, and the cut is kept as a forced break. **Fix Orphans**, **Fix Syllables** and **Group Words** do not move words across a forced break, so a "ja" that ends one speaker's sentence stays with it. The break is saved in the sidecar as `breakAfter`; the renderer and the review portal ignore it.
 - **In and Out set a caption's start and end from the playhead.** Two buttons beside Adjust words: **In** sets the active caption's start, **Out** its end, to the exact millisecond the playback is at. The active caption is the selected row, or the one under the playhead when none is selected. The time cells show milliseconds (`00:01.234`) so the value can be checked.
