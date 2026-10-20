@@ -1,3 +1,6 @@
+from PySide6.QtCore import QPoint
+from PySide6.QtGui import QFontMetrics
+
 from app.models.captions import CaptionSegment, WordSpan
 from app.views.caption_panel import CaptionPanelWidget
 
@@ -499,3 +502,39 @@ def test_caption_panel_delete_empty_slot_stretches_previous_cue(qtbot):
     assert len(panel.segments) == 1
     # The freed time goes to the cue that absorbed the words.
     assert panel.segments[0].end_ms == 1800
+
+
+def test_caption_panel_split_before_word_under_pointer(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1500,
+        text="Hei moi Joo kiitos",
+        words=[
+            WordSpan(0, 300, "Hei"),
+            WordSpan(300, 600, "moi"),
+            WordSpan(600, 900, "Joo"),
+            WordSpan(900, 1500, "kiitos"),
+        ],
+    )
+    panel.set_segments([seg])
+
+    # A point just inside the word "Joo", measured the way the table lays it out.
+    rect = panel.cue_table.visualItemRect(panel.cue_table.item(0, 2)).adjusted(
+        4, 0, -4, 0
+    )
+    metrics = QFontMetrics(panel.cue_table.font())
+    pos = QPoint(rect.left() + metrics.horizontalAdvance("Hei moi ") + 1, rect.top())
+    assert panel._token_under(0, pos) == 2
+
+    emitted = []
+    panel.segments_updated.connect(emitted.append)
+    panel._split_cue(0, panel._token_under(0, pos))
+
+    assert [s.text for s in panel.segments] == ["Hei moi", "Joo kiitos"]
+    assert panel.segments[0].break_after is True
+    assert panel.cue_table.rowCount() == 2
+    assert panel.cue_table.currentRow() == 0
+    assert len(emitted) == 1

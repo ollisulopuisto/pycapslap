@@ -1,3 +1,5 @@
+import re
+
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -33,6 +35,7 @@ from app.models.captions import (
     set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
+    split_segment,
 )
 from app.services.preset_manager import PresetManager
 from app.services.spellcheck import get_shared_checker
@@ -283,7 +286,8 @@ class CaptionPanelWidget(QWidget):
         self.cue_table.setToolTip(
             "Start and End are editable (mm:ss.t).\n"
             f"Alt+←/→ nudges the start by {NUDGE_MS} ms, Alt+Shift+←/→ the end, "
-            "Alt+Ctrl+←/→ the whole cue."
+            "Alt+Ctrl+←/→ the whole cue.\n"
+            "Right-click a word in the text to split the caption before it."
         )
         self.cue_table.installEventFilter(self)
         layout.addWidget(self.cue_table, stretch=1)
@@ -863,30 +867,65 @@ class CaptionPanelWidget(QWidget):
                 return (start, end, word)
         return None
 
+    def _token_under(self, row: int, pos: QPoint) -> int | None:
+        """Index of the word at or just after a viewport point in a text cell."""
+        item = self.cue_table.item(row, 2)
+        if not item:
+            return None
+        rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
+        metrics = QFontMetrics(self.cue_table.font())
+        text = item.text()
+        offset = pos.x() - rect.left()
+        for index, match in enumerate(re.finditer(r"\S+", text)):
+            if offset <= metrics.horizontalAdvance(text[: match.end()]):
+                return index
+        return None
+
     def _on_table_context_menu(self, pos: QPoint) -> None:
         index = self.cue_table.indexAt(pos)
         if not index.isValid() or index.column() != 2:
             return
         row = index.row()
-        span = self._spell_span_at(row, pos)
-        if not span:
-            return
-
-        start, end, word = span
         menu = QMenu(self)
-        suggestions = self.spell_checker.suggest(word)[:6]
-        if suggestions:
-            for suggestion in suggestions:
-                action = menu.addAction(suggestion)
-                action.triggered.connect(
-                    lambda _checked=False, s=suggestion: self._replace_word(
-                        row, start, end, s
+
+        span = self._spell_span_at(row, pos)
+        if span:
+            start, end, word = span
+            suggestions = self.spell_checker.suggest(word)[:6]
+            if suggestions:
+                for suggestion in suggestions:
+                    action = menu.addAction(suggestion)
+                    action.triggered.connect(
+                        lambda _checked=False, s=suggestion: self._replace_word(
+                            row, start, end, s
+                        )
                     )
-                )
-        else:
-            no_hits = menu.addAction(f"No suggestions for “{word}”")
-            no_hits.setEnabled(False)
+            else:
+                no_hits = menu.addAction(f"No suggestions for “{word}”")
+                no_hits.setEnabled(False)
+
+        token = self._token_under(row, pos)
+        words = self.segments[row].text.split()
+        # The first word has nothing before it to split from.
+        if token and token < len(words):
+            if not menu.isEmpty():
+                menu.addSeparator()
+            split = menu.addAction(f"Split caption before “{words[token]}”")
+            split.triggered.connect(
+                lambda _checked=False, r=row, t=token: self._split_cue(r, t)
+            )
+
+        if menu.isEmpty():
+            return
         menu.exec(self.cue_table.viewport().mapToGlobal(pos))
+
+    def _split_cue(self, row: int, token_index: int) -> None:
+        self.commit_active_editor()
+        if not split_segment(self.segments, row, token_index):
+            return
+        self.set_segments(self.segments)
+        self.cue_table.selectRow(row)
+        self.segments_updated.emit(self.segments)
 
     def _replace_word(self, row: int, start: int, end: int, replacement: str) -> None:
         if not (0 <= row < len(self.segments)):

@@ -39,6 +39,9 @@ class CaptionSegment:
     end_ms: int
     text: str
     words: list[WordSpan] = field(default_factory=list)
+    # A forced break follows this cue (a speaker change, say). The cleanup
+    # rules must not move words across it.
+    break_after: bool = False
 
     def update_text(self, new_text: str) -> None:
         self.text = new_text
@@ -129,6 +132,8 @@ class CaptionSegment:
         }
         if self.words:
             d["words"] = [w.to_dict() for w in self.words]
+        if self.break_after:
+            d["breakAfter"] = True
         return d
 
     @classmethod
@@ -140,6 +145,7 @@ class CaptionSegment:
             end_ms=int(d.get("endMs", 0)),
             text=str(d.get("text", "")),
             words=words,
+            break_after=bool(d.get("breakAfter", False)),
         )
 
 
@@ -200,6 +206,7 @@ def combine_separated_syllables(
                 end_ms=seg.end_ms,
                 text=new_text,
                 words=new_words,
+                break_after=seg.break_after,
             )
         )
 
@@ -209,7 +216,7 @@ def combine_separated_syllables(
         seg_cur = cleaned_segments[i]
         seg_next = cleaned_segments[i + 1]
 
-        if seg_cur.words and seg_next.words:
+        if seg_cur.words and seg_next.words and not seg_cur.break_after:
             first_next = seg_next.words[0]
             last_cur = seg_cur.words[-1]
 
@@ -272,6 +279,8 @@ def group_words_into_phrases(
     the result is visible and can be adjusted.
     """
     words: list[WordSpan] = []
+    # Indexes into `words` that end a cue with a forced break.
+    forced: set[int] = set()
     for seg in segments:
         for w in seg.words or []:
             text = w.text.strip()
@@ -279,8 +288,13 @@ def group_words_into_phrases(
                 continue
             # A syllable marked as glued, or a piece left dangling by a
             # hyphen, belongs to the word before it — grouping them into one
-            # cue is not enough, they have to become one word.
-            if words and (w.glue_to_previous or words[-1].text.endswith("-")):
+            # cue is not enough, they have to become one word. Not across a
+            # forced break, though: that is another speaker.
+            if (
+                words
+                and len(words) - 1 not in forced
+                and (w.glue_to_previous or words[-1].text.endswith("-"))
+            ):
                 words[-1].text = words[-1].text.rstrip("-") + text
                 words[-1].end_ms = max(words[-1].end_ms, w.end_ms)
                 continue
@@ -300,27 +314,32 @@ def group_words_into_phrases(
                 start = seg.start_ms + i * step
                 end = seg.end_ms if i == len(tokens) - 1 else start + step
                 words.append(WordSpan(start_ms=start, end_ms=end, text=tok))
+        if seg.break_after and words:
+            forced.add(len(words) - 1)
 
     if not words:
         return list(segments)
 
-    groups: list[list[WordSpan]] = []
+    # Each group keeps the index of its last word, to know whether it ends
+    # at a forced break.
+    groups: list[tuple[list[WordSpan], int]] = []
     current: list[WordSpan] = []
-    for word in words:
+    for i, word in enumerate(words):
         if current:
             previous = current[-1]
             chars = len(" ".join(w.text for w in current)) + 1 + len(word.text)
             if (
                 previous.text.endswith(SENTENCE_ENDINGS)
+                or (i - 1) in forced
                 or word.start_ms - previous.end_ms > gap_ms
                 or len(current) >= max_words
                 or chars > max_chars
             ):
-                groups.append(current)
+                groups.append((current, i - 1))
                 current = []
         current.append(word)
     if current:
-        groups.append(current)
+        groups.append((current, len(words) - 1))
 
     return [
         CaptionSegment(
@@ -328,8 +347,9 @@ def group_words_into_phrases(
             end_ms=group[-1].end_ms,
             text=" ".join(w.text for w in group),
             words=group,
+            break_after=last in forced,
         )
-        for group in groups
+        for group, last in groups
     ]
 
 
@@ -459,6 +479,45 @@ def shift_word_to_next(segments: list[CaptionSegment], index: int) -> None:
         cur_seg.text = ""
 
 
+def split_segment(segments: list[CaptionSegment], index: int, token_index: int) -> bool:
+    """Cut a cue in two before its token_index-th word and force the break.
+
+    For a cue that holds two speakers, the cut goes on a word boundary: each
+    half keeps its own word timings, and the first half is marked
+    `break_after` so the cleanup rules leave the boundary alone. Returns False
+    when there is no word boundary there.
+    """
+    if not (0 <= index < len(segments)):
+        return False
+    seg = segments[index]
+    tokens = seg.text.split()
+    if not (0 < token_index < len(tokens)):
+        return False
+    if len(seg.words) != len(tokens):
+        # Words and text disagree (a cue edited by hand, say): derive the
+        # words from the text again, spreading their timing over the cue.
+        seg.update_text(seg.text)
+
+    head = seg.words[:token_index]
+    tail = seg.words[token_index:]
+    tail[0].text = tail[0].text.strip()
+    tail[0].glue_to_previous = False
+
+    tail_seg = CaptionSegment(
+        start_ms=tail[0].start_ms,
+        end_ms=seg.end_ms,
+        text=_join_words(tail),
+        words=tail,
+        break_after=seg.break_after,
+    )
+    seg.words = head
+    seg.end_ms = head[-1].end_ms
+    seg.text = _join_words(head)
+    seg.break_after = True
+    segments.insert(index + 1, tail_seg)
+    return True
+
+
 FINNISH_ORPHAN_WORDS: set[str] = {
     "ja",
     "tai",
@@ -503,7 +562,7 @@ def apply_orphan_rules(segments: list[CaptionSegment]) -> list[CaptionSegment]:
         for i in range(len(segments) - 1):
             cur_seg = segments[i]
 
-            if len(cur_seg.words) <= 1:
+            if len(cur_seg.words) <= 1 or cur_seg.break_after:
                 continue
 
             last_word_text = cur_seg.words[-1].text.strip()
