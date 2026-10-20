@@ -15,6 +15,7 @@ from app.models.captions import (
     set_segment_time,
     shift_word_to_next,
     shift_word_to_prev,
+    split_segment,
 )
 
 
@@ -548,3 +549,153 @@ def test_group_words_into_phrases_breaks_on_pauses_and_length():
     ]
     grouped = group_words_into_phrases(many, max_words=4)
     assert all(len(g.words) <= 4 for g in grouped)
+
+
+def test_split_segment_cuts_on_word_boundary_and_keeps_timings():
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1500,
+        text="Hei moi Joo kiitos",
+        words=[
+            WordSpan(0, 300, "Hei"),
+            WordSpan(300, 600, "moi"),
+            WordSpan(600, 900, "Joo"),
+            WordSpan(900, 1500, "kiitos"),
+        ],
+    )
+    segments = [seg]
+
+    assert split_segment(segments, 0, 2) is True
+
+    head, tail = segments
+    assert head.text == "Hei moi"
+    assert [w.text for w in head.words] == ["Hei", "moi"]
+    assert (head.start_ms, head.end_ms) == (0, 600)
+    assert head.break_after is True
+    assert tail.text == "Joo kiitos"
+    assert [w.text for w in tail.words] == ["Joo", "kiitos"]
+    assert (tail.start_ms, tail.end_ms) == (600, 1500)
+    assert tail.break_after is False
+
+
+def test_split_segment_rejects_positions_without_a_word_boundary():
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1000,
+        text="yksi kaksi",
+        words=[WordSpan(0, 500, "yksi"), WordSpan(500, 1000, "kaksi")],
+    )
+    segments = [seg]
+
+    assert split_segment(segments, 0, 0) is False
+    assert split_segment(segments, 0, 2) is False
+    assert split_segment(segments, 3, 1) is False
+    assert split_segment(segments, -1, 1) is False
+    assert len(segments) == 1
+    assert seg.break_after is False
+
+
+def test_split_segment_derives_words_from_text_when_missing():
+    seg = CaptionSegment(start_ms=0, end_ms=1000, text="yksi kaksi kolme")
+    segments = [seg]
+
+    assert split_segment(segments, 0, 1) is True
+
+    head, tail = segments
+    assert head.text == "yksi"
+    assert tail.text == "kaksi kolme"
+    assert len(tail.words) == 2
+    assert head.end_ms == tail.start_ms == 333
+    assert tail.end_ms == 1000
+
+
+def test_split_segment_keeps_speaker_boundary_through_orphan_rules():
+    # "ja" ends the first speaker's sentence. Unsplit, the rule would carry it
+    # into the next cue; the forced break has to stop that.
+    seg = CaptionSegment(
+        start_ms=0,
+        end_ms=1500,
+        text="Joo ja Ei tiedä",
+        words=[
+            WordSpan(0, 300, "Joo"),
+            WordSpan(300, 600, "ja"),
+            WordSpan(600, 900, "Ei"),
+            WordSpan(900, 1500, "tiedä"),
+        ],
+    )
+    segments = [seg]
+    split_segment(segments, 0, 2)
+
+    apply_orphan_rules(segments)
+
+    assert [s.text for s in segments] == ["Joo ja", "Ei tiedä"]
+
+    # The same two cues without the forced break do get the word moved.
+    unforced = [
+        CaptionSegment(
+            start_ms=0,
+            end_ms=600,
+            text="Joo ja",
+            words=[WordSpan(0, 300, "Joo"), WordSpan(300, 600, "ja")],
+        ),
+        CaptionSegment(
+            start_ms=600,
+            end_ms=1500,
+            text="Ei tiedä",
+            words=[WordSpan(600, 900, "Ei"), WordSpan(900, 1500, "tiedä")],
+        ),
+    ]
+    apply_orphan_rules(unforced)
+    assert unforced[0].text == "Joo"
+
+
+def test_forced_break_stops_syllable_glue_across_cues():
+    segments = [
+        CaptionSegment(
+            start_ms=0,
+            end_ms=1000,
+            text="korke",
+            words=[WordSpan(0, 1000, "korke")],
+            break_after=True,
+        ),
+        CaptionSegment(
+            start_ms=1000,
+            end_ms=2000,
+            text="alla",
+            words=[WordSpan(1000, 2000, "alla", glue_to_previous=True)],
+        ),
+    ]
+    result = combine_separated_syllables(segments)
+    assert [s.text for s in result] == ["korke", "alla"]
+
+
+def test_group_words_into_phrases_keeps_forced_break():
+    segments = [
+        CaptionSegment(
+            start_ms=0,
+            end_ms=600,
+            text="Joo",
+            words=[WordSpan(0, 600, "Joo")],
+            break_after=True,
+        ),
+        CaptionSegment(
+            start_ms=650,
+            end_ms=1200,
+            text="ei",
+            words=[WordSpan(650, 1200, "ei", glue_to_previous=True)],
+        ),
+    ]
+    grouped = group_words_into_phrases(segments)
+    assert [g.text for g in grouped] == ["Joo", "ei"]
+    assert grouped[0].break_after is True
+    assert grouped[1].break_after is False
+
+
+def test_break_after_roundtrips_through_sidecar_json():
+    seg = CaptionSegment(start_ms=0, end_ms=1000, text="a", break_after=True)
+    d = seg.to_dict()
+    assert d["breakAfter"] is True
+    assert CaptionSegment.from_dict(d).break_after is True
+
+    plain = CaptionSegment(start_ms=0, end_ms=1000, text="b").to_dict()
+    assert "breakAfter" not in plain

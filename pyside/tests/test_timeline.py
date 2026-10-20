@@ -94,3 +94,67 @@ def test_trim_end_before_the_start_releases_the_start(qtbot):
     timeline.set_trim_end_at(1000)
     assert (timeline.trim_start_ms, timeline.trim_end_ms) == (0, 1000)
     assert emitted == [(0, 1000)]
+
+
+def _cue_timeline(qtbot):
+    timeline = VisualTimelineWidget()
+    timeline.resize(1000, 80)
+    timeline.set_duration(10000)  # 1 px is about 10 ms
+    qtbot.addWidget(timeline)
+    timeline.show()
+    seg1 = CaptionSegment(start_ms=1000, end_ms=3000, text="First")
+    seg2 = CaptionSegment(start_ms=5000, end_ms=8000, text="Second")
+    timeline.set_segments([seg1, seg2])
+    return timeline, seg1, seg2
+
+
+def _drag(qtbot, timeline, start_x, end_x, y=50):
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(start_x, y))
+    qtbot.mouseMove(timeline, pos=QPoint(end_x, y))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(end_x, y))
+
+
+def test_dragging_a_caption_body_moves_it_and_keeps_its_length(qtbot):
+    timeline, seg1, _ = _cue_timeline(qtbot)
+    retimed = []
+    timeline.cue_retimed.connect(retimed.append)
+
+    # seg1 spans x = 100..300; press in its body and drag 100 px right (~1 s).
+    _drag(qtbot, timeline, 200, 300)
+
+    assert retimed == [seg1]
+    assert abs(seg1.start_ms - 2000) <= 20
+    assert seg1.end_ms - seg1.start_ms == 2000
+
+
+def test_dragging_the_start_edge_stops_at_the_previous_caption(qtbot):
+    timeline, seg1, seg2 = _cue_timeline(qtbot)
+
+    # seg2 starts at x = 500. Drag its start far left, into seg1.
+    _drag(qtbot, timeline, 500, 50)
+
+    assert seg2.start_ms == seg1.end_ms == 3000
+    assert seg2.end_ms == 8000
+
+
+def test_dragging_the_end_edge_stops_at_the_next_caption(qtbot):
+    timeline, seg1, seg2 = _cue_timeline(qtbot)
+
+    # seg1 ends at x = 300. Drag its end far right, into seg2.
+    _drag(qtbot, timeline, 300, 900)
+
+    assert seg1.end_ms == seg2.start_ms == 5000
+    assert seg1.start_ms == 1000
+
+
+def test_a_click_on_a_caption_selects_and_seeks_without_retiming(qtbot):
+    timeline, seg1, _ = _cue_timeline(qtbot)
+    retimed, selected = [], []
+    timeline.cue_retimed.connect(retimed.append)
+    timeline.segment_selected.connect(selected.append)
+
+    _drag(qtbot, timeline, 200, 201)  # under the drag threshold
+
+    assert retimed == []
+    assert selected[-1] is seg1
+    assert (seg1.start_ms, seg1.end_ms) == (1000, 3000)

@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
@@ -11,13 +13,36 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from app.models.captions import CaptionSegment
+from app.models.captions import (
+    CaptionSegment,
+    clamped_segment_time,
+    set_segment_time,
+)
+
+# Caption blocks start below the time ruler.
+_TRACK_TOP = 24
+# A press this close to a block's edge takes hold of that edge, not the body.
+_CUE_EDGE_PX = 6
+# Less movement than this is a click, not a drag.
+_CUE_DRAG_THRESHOLD_PX = 3
+
+
+@dataclass
+class _CueDrag:
+    seg: CaptionSegment
+    mode: str  # "start", "end" or "move"
+    press_x: float
+    start_ms: int
+    end_ms: int
+    moved: bool = False
 
 
 class VisualTimelineWidget(QWidget):
     seek_requested = Signal(int)
     segment_selected = Signal(object)
     trim_range_changed = Signal(int, int)
+    # A caption block was dragged to a new time; the cue already holds it.
+    cue_retimed = Signal(object)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -32,10 +57,12 @@ class VisualTimelineWidget(QWidget):
         self.trim_start_ms = 0
         self.trim_end_ms = 0
         self._trim_drag_handle: str | None = None
+        self._cue_drag: _CueDrag | None = None
         self._trim_min_gap_ms = 100
         self.setToolTip(
             "Drag the blue trim handles to shorten the beginning or end,\n"
-            "or press I / O to set the start / end at the playhead"
+            "or press I / O to set the start / end at the playhead.\n"
+            "Drag a caption's edges to retime it, or its body to move it"
         )
 
     def set_duration(self, duration_ms: int) -> None:
@@ -112,6 +139,68 @@ class VisualTimelineWidget(QWidget):
         handle = min(distances, key=distances.get)
         return handle if distances[handle] <= 10 else None
 
+    def _cue_at(self, x: float, y: float) -> tuple[CaptionSegment, str] | None:
+        """The caption block under a point, and which part of it: an edge or the body."""
+        if self.duration_ms <= 0 or y < _TRACK_TOP:
+            return None
+        for seg in self.segments:
+            x_start = self._ms_to_x(seg.start_ms)
+            x_end = x_start + max(6.0, self._ms_to_x(seg.end_ms) - x_start)
+            if abs(x - x_start) <= _CUE_EDGE_PX:
+                return seg, "start"
+            if abs(x - x_end) <= _CUE_EDGE_PX:
+                return seg, "end"
+            if x_start <= x <= x_end:
+                return seg, "move"
+        return None
+
+    def _index_of(self, seg: CaptionSegment) -> int:
+        for i, other in enumerate(self.segments):
+            if other is seg:
+                return i
+        return -1
+
+    def _drag_cue_to(self, x: float) -> None:
+        drag = self._cue_drag
+        if not drag.moved and abs(x - drag.press_x) < _CUE_DRAG_THRESHOLD_PX:
+            return
+        drag.moved = True
+        idx = self._index_of(drag.seg)
+        if idx < 0:
+            return
+        ms_per_px = self.duration_ms / max(1, self.width() - 1)
+        dx = round((x - drag.press_x) * ms_per_px)
+        prev_end = self.segments[idx - 1].end_ms if idx > 0 else 0
+        next_start = (
+            self.segments[idx + 1].start_ms
+            if idx + 1 < len(self.segments)
+            else self.duration_ms
+        )
+        if drag.mode == "move":
+            # Moving keeps the length; the neighbours stop it.
+            length = drag.end_ms - drag.start_ms
+            start = max(prev_end, min(drag.start_ms + dx, next_start - length))
+            end = start + length
+        elif drag.mode == "start":
+            start, end = clamped_segment_time(
+                self.segments, idx, drag.start_ms + dx, drag.end_ms
+            )
+        else:
+            start, end = clamped_segment_time(
+                self.segments,
+                idx,
+                drag.start_ms,
+                min(drag.end_ms + dx, self.duration_ms),
+            )
+        set_segment_time(drag.seg, start, end)
+        self.update()
+
+    def _finish_cue_drag(self) -> None:
+        drag = self._cue_drag
+        self._cue_drag = None
+        if drag and drag.moved:
+            self.cue_retimed.emit(drag.seg)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._trim_drag_handle = self._trim_handle_at(event.position().x())
@@ -135,6 +224,12 @@ class VisualTimelineWidget(QWidget):
                 self.segment_selected.emit(clicked_seg)
 
             self.seek_requested.emit(target_ms)
+            hit = self._cue_at(event.position().x(), event.position().y())
+            if hit:
+                seg, mode = hit
+                self._cue_drag = _CueDrag(
+                    seg, mode, event.position().x(), seg.start_ms, seg.end_ms
+                )
             self.update()
             event.accept()
         else:
@@ -151,6 +246,9 @@ class VisualTimelineWidget(QWidget):
             self.trim_range_changed.emit(self.trim_start_ms, self.trim_end_ms)
             self.update()
             event.accept()
+        elif self._cue_drag is not None:
+            self._drag_cue_to(event.position().x())
+            event.accept()
         elif self._is_scrubbing:
             target_ms = self._x_to_ms(event.position().x())
             self.current_position_ms = target_ms
@@ -158,11 +256,15 @@ class VisualTimelineWidget(QWidget):
             self.update()
             event.accept()
         else:
-            self.setCursor(
-                Qt.CursorShape.SizeHorCursor
-                if self._trim_handle_at(event.position().x())
-                else Qt.CursorShape.ArrowCursor
-            )
+            x, y = event.position().x(), event.position().y()
+            hit = self._cue_at(x, y)
+            if self._trim_handle_at(x) or (hit and hit[1] != "move"):
+                cursor = Qt.CursorShape.SizeHorCursor
+            elif hit:
+                cursor = Qt.CursorShape.SizeAllCursor
+            else:
+                cursor = Qt.CursorShape.ArrowCursor
+            self.setCursor(cursor)
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -171,6 +273,8 @@ class VisualTimelineWidget(QWidget):
             self.unsetCursor()
             event.accept()
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._cue_drag is not None:
+            self._finish_cue_drag()
         if event.button() == Qt.MouseButton.LeftButton and self._is_scrubbing:
             self._is_scrubbing = False
             event.accept()
