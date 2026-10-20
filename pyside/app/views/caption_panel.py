@@ -48,11 +48,11 @@ NUDGE_MS = 100
 
 
 def format_timestamp(ms: int) -> str:
+    """mm:ss.mmm, to the millisecond, so a cue shows the exact time it was set to."""
     total_sec = ms // 1000
     m = total_sec // 60
     s = total_sec % 60
-    tenth = (ms % 1000) // 100
-    return f"{m:02d}:{s:02d}.{tenth}"
+    return f"{m:02d}:{s:02d}.{ms % 1000:03d}"
 
 
 def parse_timestamp(text: str) -> int | None:
@@ -144,6 +144,8 @@ class CaptionPanelWidget(QWidget):
     transcribe_requested = Signal()
     whisper_settings_requested = Signal()
     add_cue_requested = Signal()
+    mark_start_requested = Signal()
+    mark_end_requested = Signal()
     safe_platforms_changed = Signal(object)
 
     def __init__(
@@ -298,6 +300,26 @@ class CaptionPanelWidget(QWidget):
         lbl_shift = QLabel("Adjust words:")
         lbl_shift.setStyleSheet("font-size: 11px; color: #a1a1aa;")
         row_shift.addWidget(lbl_shift)
+
+        self.btn_mark_start = QPushButton("In")
+        self.btn_mark_start.setToolTip(
+            "Set the active caption's start to the playback position"
+        )
+        self.btn_mark_start.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_mark_start.clicked.connect(self.mark_start_requested.emit)
+        row_shift.addWidget(self.btn_mark_start)
+
+        self.btn_mark_end = QPushButton("Out")
+        self.btn_mark_end.setToolTip(
+            "Set the active caption's end to the playback position"
+        )
+        self.btn_mark_end.setStyleSheet(
+            "QPushButton { font-size: 11px; padding: 2px 8px; }"
+        )
+        self.btn_mark_end.clicked.connect(self.mark_end_requested.emit)
+        row_shift.addWidget(self.btn_mark_end)
 
         self.btn_shift_prev = QPushButton("◀ Shift Start")
         self.btn_shift_prev.setToolTip(
@@ -1147,6 +1169,40 @@ class CaptionPanelWidget(QWidget):
                 self.nudge_selected_cue(delta, edge)
                 return True
         return super().eventFilter(obj, event)
+
+    def cue_moved_on_timeline(self, seg: CaptionSegment) -> None:
+        """The timeline has already retimed `seg`; bring the table and project along."""
+        row = next((i for i, s in enumerate(self.segments) if s is seg), -1)
+        if row < 0:
+            return
+        self._refresh_time_cells(row)
+        self.segment_updated.emit(seg)
+        self.segments_updated.emit(self.segments)
+
+    def active_row(self) -> int:
+        """The selected cue, or the one under the playhead when none is selected."""
+        row = self.cue_table.currentRow()
+        if 0 <= row < len(self.segments):
+            return row
+        if self.playhead_segment in self.segments:
+            return self.segments.index(self.playhead_segment)
+        return -1
+
+    def set_active_start(self, ms: int) -> bool:
+        """Put the active cue's start at `ms`. False when no cue is active."""
+        row = self.active_row()
+        if row < 0:
+            return False
+        self._retime_segment(row, ms, self.segments[row].end_ms)
+        return True
+
+    def set_active_end(self, ms: int) -> bool:
+        """Put the active cue's end at `ms`. False when no cue is active."""
+        row = self.active_row()
+        if row < 0:
+            return False
+        self._retime_segment(row, self.segments[row].start_ms, ms)
+        return True
 
     def nudge_selected_cue(self, delta_ms: int, edge: str) -> None:
         """Move one edge of the selected cue, or the whole cue when edge='both'."""

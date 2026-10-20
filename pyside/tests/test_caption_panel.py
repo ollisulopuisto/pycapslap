@@ -2,7 +2,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtGui import QFontMetrics
 
 from app.models.captions import CaptionSegment, WordSpan
-from app.views.caption_panel import CaptionPanelWidget
+from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 
 
 def test_caption_panel_initial_state(qtbot):
@@ -449,7 +449,7 @@ def test_caption_panel_edit_timecode_cell(qtbot):
     # Gibberish is rejected and the cell snaps back to the cue's own time.
     panel.cue_table.item(1, 0).setText("not a time")
     assert panel.segments[1].start_ms == 1500
-    assert panel.cue_table.item(1, 0).text() == "00:01.5"
+    assert panel.cue_table.item(1, 0).text() == "00:01.500"
 
     # A start dragged before the previous cue's end is clamped to it.
     panel.cue_table.item(1, 0).setText("00:00.2")
@@ -538,3 +538,49 @@ def test_caption_panel_split_before_word_under_pointer(qtbot):
     assert panel.cue_table.rowCount() == 2
     assert panel.cue_table.currentRow() == 0
     assert len(emitted) == 1
+
+
+def test_caption_panel_in_and_out_take_the_exact_playback_time(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg1 = CaptionSegment(
+        start_ms=0, end_ms=1000, text="First", words=[WordSpan(0, 1000, "First")]
+    )
+    seg2 = CaptionSegment(
+        start_ms=1000,
+        end_ms=2000,
+        text="Second",
+        words=[WordSpan(1000, 2000, "Second")],
+    )
+    panel.set_segments([seg1, seg2])
+    panel.cue_table.selectRow(1)
+
+    assert panel.set_active_start(1234) is True
+    assert panel.set_active_end(2567) is True
+
+    cue = panel.segments[1]
+    assert (cue.start_ms, cue.end_ms) == (1234, 2567)
+    # The table shows the value to the millisecond, not rounded to a tenth.
+    assert panel.cue_table.item(1, 0).text() == "00:01.234"
+    assert panel.cue_table.item(1, 1).text() == "00:02.567"
+
+
+def test_caption_panel_in_and_out_need_an_active_cue(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    seg = CaptionSegment(
+        start_ms=0, end_ms=1000, text="Only", words=[WordSpan(0, 1000, "Only")]
+    )
+    panel.set_segments([seg])
+
+    assert panel.cue_table.currentRow() == -1
+    assert panel.set_active_start(500) is False
+    assert panel.set_active_end(500) is False
+    assert (seg.start_ms, seg.end_ms) == (0, 1000)
+
+
+def test_format_timestamp_keeps_milliseconds():
+    assert format_timestamp(61005) == "01:01.005"
+    assert format_timestamp(1234) == "00:01.234"

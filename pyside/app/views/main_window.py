@@ -65,7 +65,7 @@ from app.models.review import (
     review_export_dict,
     unlock_file,
 )
-from app.views.caption_panel import CaptionPanelWidget
+from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
 from app.views.timeline import VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
@@ -395,6 +395,7 @@ class MainWindow(QMainWindow):
         self.player.mark_in_requested.connect(self._set_trim_start_here)
         self.player.mark_out_requested.connect(self._set_trim_end_here)
         self.timeline.segment_selected.connect(self._on_segment_selected)
+        self.timeline.cue_retimed.connect(self.caption_panel.cue_moved_on_timeline)
 
         # Overlay signals
         self.overlay.anchor_changed.connect(self._on_overlay_anchor_changed)
@@ -414,6 +415,8 @@ class MainWindow(QMainWindow):
         self.caption_panel.segments_updated.connect(self._on_segments_updated)
         self.caption_panel.style_changed.connect(self._on_style_changed)
         self.caption_panel.save_requested.connect(self._on_save_requested)
+        self.caption_panel.mark_start_requested.connect(self._set_caption_start_here)
+        self.caption_panel.mark_end_requested.connect(self._set_caption_end_here)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
         self.caption_panel.whisper_settings_requested.connect(
@@ -1417,6 +1420,20 @@ class MainWindow(QMainWindow):
             f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
             2000,
         )
+
+    def _set_caption_start_here(self) -> None:
+        pos = self.player.media_player.position()
+        if not self.caption_panel.set_active_start(pos):
+            self.status.showMessage("Select a caption to set its start", 2000)
+            return
+        self.status.showMessage(f"Caption start set to {format_timestamp(pos)}", 2000)
+
+    def _set_caption_end_here(self) -> None:
+        pos = self.player.media_player.position()
+        if not self.caption_panel.set_active_end(pos):
+            self.status.showMessage("Select a caption to set its end", 2000)
+            return
+        self.status.showMessage(f"Caption end set to {format_timestamp(pos)}", 2000)
 
     @staticmethod
     def _format_trim_time(ms: int) -> str:
