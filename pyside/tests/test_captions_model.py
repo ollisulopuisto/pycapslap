@@ -17,7 +17,6 @@ from app.models.captions import (
     shift_word_to_next,
     shift_word_to_prev,
     split_segment,
-    strip_trailing_commas,
     timing_flag,
 )
 
@@ -716,33 +715,3 @@ def test_timing_flag_compares_text_length_with_the_time_given():
     assert timing_flag(empty) is None
     assert chars_per_second(empty) is None
     assert chars_per_second(fits) == len("Kuinka huolissanne") / 2
-
-
-def test_strip_trailing_commas_keeps_periods_and_ellipses():
-    comma = CaptionSegment(
-        start_ms=0,
-        end_ms=1000,
-        text="Joo, kyllä,",
-        words=[WordSpan(0, 500, "Joo,"), WordSpan(500, 1000, " kyllä,")],
-    )
-    period = CaptionSegment(
-        start_ms=1000,
-        end_ms=2000,
-        text="Ei tule.",
-        words=[WordSpan(1000, 2000, " tule.")],
-    )
-    ellipsis = CaptionSegment(
-        start_ms=2000,
-        end_ms=3000,
-        text="Ehkä...",
-        words=[WordSpan(2000, 3000, "Ehkä...")],
-    )
-    plain = CaptionSegment(start_ms=3000, end_ms=4000, text="Joo, ei")
-
-    strip_trailing_commas([comma, period, ellipsis, plain])
-
-    assert comma.text == "Joo, kyllä"
-    assert [w.text for w in comma.words] == ["Joo,", " kyllä"]
-    assert period.text == "Ei tule."
-    assert ellipsis.text == "Ehkä..."
-    assert plain.text == "Joo, ei"

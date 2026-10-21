@@ -44,7 +44,6 @@ from app.models.captions import (
     CaptionStyle,
     ProjectState,
     apply_orphan_rules,
-    strip_trailing_commas,
     combine_separated_syllables,
 )
 from app.portal_client import Portal, PortalError
@@ -1599,7 +1598,6 @@ class MainWindow(QMainWindow):
                 new_segs = [CaptionSegment.from_dict(s) for s in segments_raw]
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
-                new_segs = strip_trailing_commas(new_segs)
                 count = len(new_segs)
                 # Whisper counted from the start of the part it was given.
                 part = (

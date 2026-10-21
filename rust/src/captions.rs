@@ -339,7 +339,7 @@ fn preview_lines(
         .map(|line| crate::types::PreviewLine {
             words: (line.start..line.end)
                 .map(|i| crate::types::PreviewWord {
-                    text: tokens[i].clone(),
+                    text: shown_word(&tokens[i], i + 1 == line.end).to_string(),
                     is_highlighted: i == hi_idx,
                 })
                 .collect(),
@@ -2212,6 +2212,16 @@ pub(crate) fn caption_box_width(frame_w: u32) -> f32 {
     (frame_w as f32) - 2.0 * horizontal_margin(frame_w) as f32
 }
 
+/// A comma that ends a rendered line is not shown. The text keeps it, so a
+/// later transcript merge brings it back; a comma inside a line stays.
+fn shown_word(token: &str, ends_line: bool) -> &str {
+    if ends_line && token.len() > 1 && token.ends_with(',') {
+        &token[..token.len() - 1]
+    } else {
+        token
+    }
+}
+
 /// Lay a cue out as justified lines, or as one plain line when justification
 /// is off, so both callers below share one notion of "the lines of this cue".
 fn cue_lines(
@@ -2301,7 +2311,7 @@ fn assemble_justified(
             // to the box, so growing one word would break the justification.
             s.push_str(&format!("{{\\1c&H{}&\\fs{}}}", color, line.font_px));
             s.push_str(
-                &token
+                &shown_word(token, i + 1 == line.end)
                     .replace('\\', r"\\")
                     .replace('{', r"\{")
                     .replace('}', r"\}"),
@@ -2345,13 +2355,13 @@ fn assemble_colored_lines(
         } else {
             &white
         });
+        let ends_line = line_starts.contains(&(i + 1)) || i + 1 == tokens.len();
         s.push_str(
-            &tokens[i]
+            &shown_word(&tokens[i], ends_line)
                 .replace('\\', r"\\")
                 .replace('{', r"\{")
                 .replace('}', r"\}"),
         );
-        let ends_line = line_starts.contains(&(i + 1));
         let ends_with_hyphen = tokens[i].ends_with('-') && tokens[i].len() > 1;
         if i + 1 < tokens.len() && !ends_line && !ends_with_hyphen {
             s.push(' ');
@@ -3186,6 +3196,14 @@ fn hex_to_ass_color(hex: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_comma_is_hidden_only_where_it_ends_a_line() {
+        assert_eq!(shown_word("KYLLÄ,", true), "KYLLÄ");
+        assert_eq!(shown_word("KYLLÄ,", false), "KYLLÄ,");
+        assert_eq!(shown_word("KYLLÄ.", true), "KYLLÄ.");
+        assert_eq!(shown_word(",", true), ",");
+    }
 
     #[test]
     fn test_assemble_colored_lines_hyphenation() {
