@@ -78,6 +78,8 @@ jobs:
 
       - name: pytest
         run: uv run python -m pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
 
   review:
     runs-on: ubuntu-latest

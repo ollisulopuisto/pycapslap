@@ -85,7 +85,18 @@ class CoreClient(QObject):
 
         env = dict(os.environ)
         # Ensure FFMPEG_PATH and rust/bin are in environment
-        rust_bin = Path(self.binary_path).resolve().parent.parent.parent / "bin"
+        project_root = Path(self.binary_path).resolve().parents[2]
+        if os.name == "nt":
+            rust_bin = project_root / "bin-win"
+            if not rust_bin.exists():
+                rust_bin = project_root / "bin"
+        elif sys.platform.startswith("linux"):
+            rust_bin = project_root / "bin-linux"
+            if not rust_bin.exists():
+                rust_bin = project_root / "bin"
+        else:
+            rust_bin = project_root / "bin"
+
         ffmpeg_candidates = [
             rust_bin / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg"),
             Path("/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg"),
