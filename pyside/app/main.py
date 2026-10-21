@@ -11,7 +11,7 @@ pyside_dir = Path(__file__).resolve().parent.parent
 if str(pyside_dir) not in sys.path:
     sys.path.insert(0, str(pyside_dir))
 
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFontDatabase, QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.views.main_window import MainWindow
@@ -86,6 +86,18 @@ def ensure_macos_app_name() -> bool:
         return False
 
 
+def _use_installed_default_font(app: QApplication) -> None:
+    families = set(QFontDatabase.families())
+    default = app.font()
+    if default.family() in families:
+        return
+    for family in ("Helvetica Neue", "Segoe UI", "Noto Sans", "DejaVu Sans", "Arial"):
+        if family in families:
+            default.setFamily(family)
+            app.setFont(default)
+            return
+
+
 def main():
     ensure_macos_app_name()
 
@@ -93,6 +105,10 @@ def main():
     app.setApplicationName("PyCapSlap")
     app.setApplicationDisplayName("PyCapSlap")
     app.setOrganizationName("PyCapSlap")
+    # Stylesheets resolve the default font's family; when it is the missing
+    # "Sans Serif" alias Qt spends ~300 ms building its alias table on the
+    # first styled widget. A family that exists skips that.
+    _use_installed_default_font(app)
 
     icon_path = Path(__file__).resolve().parent / "resources" / "icon.png"
     if icon_path.exists():
