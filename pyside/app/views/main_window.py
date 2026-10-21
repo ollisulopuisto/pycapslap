@@ -390,6 +390,7 @@ class MainWindow(QMainWindow):
         # Thumbnail: a frame from the playhead, with its own title written over it
         self.thumbnail_panel = ThumbnailPanel(self)
         self.thumbnail_panel.capture_requested.connect(self.trigger_extract_thumbnail)
+        self.thumbnail_panel.changed.connect(self._on_thumbnail_changed)
         self.thumbnail_panel.save_requested.connect(self._save_thumbnail)
         self.thumbnail_panel.set_style(self.project.style)
         right_col.addWidget(self.thumbnail_panel)
@@ -1942,6 +1943,7 @@ class MainWindow(QMainWindow):
         self._apply_bug()  # this video may have the logo turned off
         # Check if sidecar exists
         if self.project.load_sidecar() and self.project.segments:
+            self._restore_thumbnail()
             self.set_caption_segments(self.project.segments)
             if self.project.style:
                 self.caption_panel.set_style(self.project.style)
@@ -1981,14 +1983,18 @@ class MainWindow(QMainWindow):
             f"Size: {os.path.getsize(file_path) / (1024 * 1024):.1f} MB"
         )
 
-    def trigger_extract_thumbnail(self) -> None:
-        """Take the frame under the playhead into the thumbnail panel."""
+    def trigger_extract_thumbnail(self, time_ms: int | None = None) -> None:
+        """Take the frame under the playhead (or at `time_ms`) into the thumbnail."""
         video_path = self.player.media_player.source().toLocalFile()
         if not video_path and self.project.video_path:
             video_path = self.project.video_path
         if not video_path:
             return
-        time_ms = self.player.media_player.position()
+        # A capture at the playhead is a change to the project; restoring a saved
+        # frame at its saved time is not.
+        playhead = time_ms is None
+        if time_ms is None:
+            time_ms = self.player.media_player.position()
         self.status.showMessage("Capturing frame...")
         self.thumb_btn.setEnabled(False)
         fut = self.core.call(
@@ -2012,7 +2018,9 @@ class MainWindow(QMainWindow):
                     if img.isNull():
                         self.status.showMessage("No frame at the playhead", 3000)
                         return
-                    self.thumbnail_panel.set_frame(img)
+                    self.thumbnail_panel.set_frame(img, time_ms)
+                    if playhead:
+                        self._on_thumbnail_changed()
                     self.status.showMessage(
                         f"Frame captured at {format_timestamp(time_ms)}", 3000
                     )
@@ -2028,6 +2036,18 @@ class MainWindow(QMainWindow):
                 self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
+
+    def _on_thumbnail_changed(self) -> None:
+        self.project.thumbnail = self.thumbnail_panel.state()
+        self.project.is_dirty = True
+
+    def _restore_thumbnail(self) -> None:
+        """Show the thumbnail the project was saved with: its headline, and its frame."""
+        self.thumbnail_panel.load_state(self.project.thumbnail)
+        self.project.thumbnail = self.thumbnail_panel.state() or self.project.thumbnail
+        time_ms = self.project.thumbnail.get("timeMs")
+        if time_ms is not None and self.project.video_path:
+            self.trigger_extract_thumbnail(int(time_ms))
 
     def _save_thumbnail(self, image) -> None:
         if image is None or image.isNull():

@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **The sidecar keeps the thumbnail.** The `.capslap.json` file records which frame is the thumbnail (its time) and the headline. Opening the video takes that frame again and shows the headline.
 - **Caption position is part of the style, and defaults to 75%.** A preset saves where the captions sit. Moving the position with no caption picked moves every caption, and loading a style moves them to its position. The thumbnail title is set in the caption style's font, colours, outline, glow and background box, at the same position.
 - **The scrubber lines up with the timeline.** It spans the width of the timeline below, so both playheads sit in the same place. Play and Stop have icons, and the times show milliseconds, `mm:ss.mmm`, as the caption table does.
 - **Thumbnails from the playhead.** Extract Thumbnail takes the frame under the playhead at full size. The thumbnail panel under the captions shows it with a title field of its own; the preview draws the title as it will be saved, and Save thumbnail… writes a PNG next to the video.

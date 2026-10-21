@@ -97,10 +97,13 @@ def compose(frame: QImage, title: str, style: CaptionStyle | None = None) -> QIm
 class ThumbnailPanel(QWidget):
     capture_requested = Signal()
     save_requested = Signal(object)
+    # The title was edited: the project should be saved with the new headline.
+    changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.frame: QImage | None = None
+        self.time_ms: int | None = None
         self.style = CaptionStyle()
 
         # The preview is a 9:16 tile beside the title and buttons, so the panel
@@ -129,7 +132,7 @@ class ThumbnailPanel(QWidget):
         palette = self.title_edit.palette()
         palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#71717a"))
         self.title_edit.setPalette(palette)
-        self.title_edit.textChanged.connect(lambda _text: self._refresh())
+        self.title_edit.textChanged.connect(self._on_title_edited)
         side.addWidget(self.title_edit)
 
         self.capture_btn = QPushButton("Capture frame")
@@ -148,8 +151,28 @@ class ThumbnailPanel(QWidget):
         self.style = style
         self._refresh()
 
-    def set_frame(self, frame: QImage) -> None:
+    def state(self) -> dict:
+        """What the project saves: the frame's time and the headline."""
+        if self.time_ms is None and not self.title_edit.text():
+            return {}
+        return {"timeMs": self.time_ms, "title": self.title_edit.text()}
+
+    def load_state(self, state: dict) -> None:
+        """Show a saved headline and remember its frame. The frame itself is
+        taken again by the window, so a load does not count as a change."""
+        self.title_edit.blockSignals(True)
+        self.title_edit.setText(str(state.get("title", "")))
+        self.title_edit.blockSignals(False)
+        time_ms = state.get("timeMs")
+        self.time_ms = None if time_ms is None else int(time_ms)
+
+    def _on_title_edited(self, _text: str) -> None:
+        self._refresh()
+        self.changed.emit()
+
+    def set_frame(self, frame: QImage, time_ms: int | None = None) -> None:
         self.frame = frame
+        self.time_ms = time_ms
         self.save_btn.setEnabled(True)
         self._refresh()
 
