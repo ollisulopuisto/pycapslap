@@ -220,6 +220,7 @@ class VideoPlayerWidget(QWidget):
         seek_row.addWidget(self.latency_lbl)
 
         controls_layout.addLayout(buttons_row)
+        controls_layout.addWidget(self.slider)
         controls_layout.addLayout(seek_row)
         # The scrubber sits last, right above the timeline it lines up with.
         controls_layout.addWidget(self.slider)
