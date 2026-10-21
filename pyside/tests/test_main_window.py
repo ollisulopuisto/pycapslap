@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from app.models.captions import CaptionSegment
+from PySide6.QtWidgets import QSplitter
+
 from app.views.main_window import MainWindow
 
 
@@ -1015,4 +1017,25 @@ def test_a_transcribed_range_lands_in_place_among_the_existing_cues(
     )
     starts = [s.start_ms for s in window.caption_panel.segments]
     assert starts == [1_000, 605_000, 608_000, 1_200_000]
+    window.close()
+
+
+def test_the_sidebar_takes_three_parts_to_the_preview_columns_two(qtbot):
+    """Oikea sivupalkki on 3 osaa, vasen (esikatselu ja aikajana) 2 osaa.
+
+    Kapea sivupalkki ei näytä kaikkea tekstiä, joten se saa enemmän tilaa.
+    """
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.show()
+
+    column = window.caption_panel
+    while not isinstance(column.parentWidget(), QSplitter):
+        column = column.parentWidget()
+    splitter = column.parentWidget()
+    left, right = splitter.sizes()
+
+    # The preview column's minimum width follows the font metrics: 1.46 here and
+    # 1.42 on the macOS runner, so the band is wide enough for both.
+    assert 1.3 <= right / left <= 1.7
     window.close()

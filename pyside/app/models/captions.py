@@ -660,6 +660,9 @@ class CaptionStyle:
     # fills that width — the block look where a short line renders large and a
     # long one small. The renderer measures the real font to size them.
     justify_lines: bool = False
+    # Where captions sit, as a percentage of the frame from the top. Saved with
+    # the style, so a preset carries its position.
+    anchor_pct: float = 75.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -675,6 +678,7 @@ class CaptionStyle:
             "backgroundBox": self.background_box,
             "glowEffect": self.glow_effect,
             "justifyLines": self.justify_lines,
+            "anchorPct": float(self.anchor_pct),
         }
 
     @classmethod
@@ -692,6 +696,7 @@ class CaptionStyle:
             background_box=bool(d.get("backgroundBox", False)),
             glow_effect=bool(d.get("glowEffect", True)),
             justify_lines=bool(d.get("justifyLines", False)),
+            anchor_pct=float(d.get("anchorPct", 75.0)),
         )
 
 
@@ -757,6 +762,8 @@ class CaptionsFile:
     style: CaptionStyle = field(default_factory=CaptionStyle)
     trim_start_ms: int | None = None
     trim_end_ms: int | None = None
+    # The thumbnail: {"timeMs": the frame chosen, "title": the headline}.
+    thumbnail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -768,6 +775,8 @@ class CaptionsFile:
             data["trimStartMs"] = self.trim_start_ms
         if self.trim_end_ms is not None:
             data["trimEndMs"] = self.trim_end_ms
+        if self.thumbnail:
+            data["thumbnail"] = self.thumbnail
         return data
 
     @classmethod
@@ -788,6 +797,7 @@ class CaptionsFile:
             trim_end_ms=(
                 int(d["trimEndMs"]) if d.get("trimEndMs") is not None else None
             ),
+            thumbnail=dict(d.get("thumbnail") or {}),
         )
 
     @classmethod
@@ -815,6 +825,7 @@ class ProjectState:
     is_dirty: bool = False
     trim_start_ms: int | None = None
     trim_end_ms: int | None = None
+    thumbnail: dict[str, Any] = field(default_factory=dict)
 
     @property
     def video_path(self) -> str | None:
@@ -845,8 +856,10 @@ class ProjectState:
         return None
 
     def get_anchor_y_for_segment(
-        self, seg: CaptionSegment, default_y: float = 80.0
+        self, seg: CaptionSegment, default_y: float | None = None
     ) -> float:
+        if default_y is None:
+            default_y = self.style.anchor_pct
         midpoint = (seg.start_ms + seg.end_ms) // 2
         for ov in self.position_overrides:
             if ov.start_ms <= midpoint <= ov.end_ms:
@@ -870,6 +883,14 @@ class ProjectState:
             )
         )
         self.is_dirty = True
+
+    def ensure_position(self) -> None:
+        """With no caption positioned on its own, every caption sits at the style's
+        position. Loading or saving does not count as a change."""
+        if not self.position_overrides:
+            dirty = self.is_dirty
+            self.apply_position_to_all(self.style.anchor_pct)
+            self.is_dirty = dirty
 
     def apply_position_to_all(self, y_pct: float) -> None:
         """Replace every position override with a single one spanning the
@@ -903,6 +924,7 @@ class ProjectState:
             self.style = cf.style
             self.trim_start_ms = cf.trim_start_ms
             self.trim_end_ms = cf.trim_end_ms
+            self.thumbnail = cf.thumbnail
             self.is_dirty = False
             return True
         except (OSError, json.JSONDecodeError):
@@ -923,6 +945,7 @@ class ProjectState:
                 style=self.style,
                 trim_start_ms=self.trim_start_ms,
                 trim_end_ms=self.trim_end_ms,
+                thumbnail=self.thumbnail,
             )
             target.write_text(cf.to_json_str(), encoding="utf-8")
             self.is_dirty = False
