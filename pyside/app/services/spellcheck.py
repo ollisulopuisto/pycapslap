@@ -58,7 +58,14 @@ class SpellChecker:
     def __init__(self, language: str = "fi") -> None:
         self._voikko = None
         self._cache: dict[str, bool] = {}
-        self._load(language)
+        self._language = language
+        self._loaded = False
+
+    def _ensure_loaded(self) -> None:
+        """Load Voikko on first use, off the startup path."""
+        if not self._loaded:
+            self._loaded = True
+            self._load(self._language)
 
     def _load(self, language: str) -> None:
         if os.environ.get("PYCAPSLAP_DISABLE_SPELLCHECK"):
@@ -84,9 +91,11 @@ class SpellChecker:
 
     @property
     def available(self) -> bool:
+        self._ensure_loaded()
         return self._voikko is not None
 
     def is_correct(self, word: str) -> bool:
+        self._ensure_loaded()
         if self._voikko is None or not word:
             return True
         cached = self._cache.get(word)
@@ -100,6 +109,7 @@ class SpellChecker:
         return ok
 
     def suggest(self, word: str) -> list[str]:
+        self._ensure_loaded()
         if self._voikko is None or not word:
             return []
         try:
@@ -109,6 +119,7 @@ class SpellChecker:
 
     def check_text(self, text: str) -> list[tuple[int, int, str]]:
         """Return (start, end, word) for every misspelled word in `text`."""
+        self._ensure_loaded()
         if self._voikko is None or not text:
             return []
         spans: list[tuple[int, int, str]] = []
