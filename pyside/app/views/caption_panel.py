@@ -188,7 +188,7 @@ class CaptionPanelWidget(QWidget):
 
         # Header with actions
         header_layout = QGridLayout()
-        header_layout.setSpacing(8)
+        header_layout.setSpacing(6)
         self.header_layout = header_layout
         self.lbl_title = QLabel("Captions")
         self.lbl_title.setStyleSheet(
@@ -196,40 +196,40 @@ class CaptionPanelWidget(QWidget):
         )
         header_layout.addWidget(self.lbl_title, 0, 0, 1, 3)
 
-        self.btn_add_cue = tile("Add", "plus")
+        self.btn_add_cue = tile("Add", "plus", compact=True)
         self.btn_add_cue.setToolTip(
             "Add a new caption cue at the current playback position"
         )
         self.btn_add_cue.clicked.connect(self.add_cue_requested.emit)
         header_layout.addWidget(self.btn_add_cue, 1, 0)
 
-        self.btn_transcribe = tile("Transcribe", "mic")
+        self.btn_transcribe = tile("Transcribe", "mic", compact=True)
         self.btn_transcribe.setToolTip("Run AI Whisper transcription on video audio")
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
         header_layout.addWidget(self.btn_transcribe, 1, 1)
 
-        self.btn_whisper_settings = tile("Whisper", "gear")
+        self.btn_whisper_settings = tile("Whisper", "gear", compact=True)
         self.btn_whisper_settings.setToolTip(
             "Choose local (offline) Whisper vs. OpenAI API, and manage models"
         )
         self.btn_whisper_settings.clicked.connect(self.whisper_settings_requested.emit)
         header_layout.addWidget(self.btn_whisper_settings, 3, 1)
 
-        self.btn_autoplace = tile("Auto Dodge", "wand")
+        self.btn_autoplace = tile("Auto Dodge", "wand", compact=True)
         self.btn_autoplace.setToolTip(
             "Analyze video frame activity and automatically dodge faces/busy areas"
         )
         self.btn_autoplace.clicked.connect(self.auto_place_requested.emit)
         header_layout.addWidget(self.btn_autoplace, 2, 0)
 
-        self.btn_combine_syllables = tile("Fix Syllables", "text")
+        self.btn_combine_syllables = tile("Fix Syllables", "text", compact=True)
         self.btn_combine_syllables.setToolTip(
             "Combine separated syllables and fix broken words across segments"
         )
         self.btn_combine_syllables.clicked.connect(self._on_combine_syllables_clicked)
         header_layout.addWidget(self.btn_combine_syllables, 2, 1)
 
-        self.btn_group_words = tile("Group Words", "grid")
+        self.btn_group_words = tile("Group Words", "grid", compact=True)
         self.btn_group_words.setToolTip(
             "Merge a word-per-cue transcript into phrase-sized cues, breaking "
             "on sentence ends, pauses and length — what you need when every "
@@ -238,14 +238,14 @@ class CaptionPanelWidget(QWidget):
         self.btn_group_words.clicked.connect(self._on_group_words_clicked)
         header_layout.addWidget(self.btn_group_words, 2, 2)
 
-        self.btn_fix_orphans = tile("Fix Orphans", "align")
+        self.btn_fix_orphans = tile("Fix Orphans", "align", compact=True)
         self.btn_fix_orphans.setToolTip(
             "Prevent trailing conjunctions ('tai', 'ja') and lone words after commas"
         )
         self.btn_fix_orphans.clicked.connect(self._on_fix_orphans_clicked)
         header_layout.addWidget(self.btn_fix_orphans, 3, 0)
 
-        self.btn_save = tile("Save", "save")
+        self.btn_save = tile("Save", "save", compact=True)
         self.btn_save.setToolTip("Save captions to sidecar file (.capslap.json)")
         self.btn_save.clicked.connect(self.save_requested.emit)
         header_layout.addWidget(self.btn_save, 1, 2)

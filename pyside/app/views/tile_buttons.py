@@ -90,18 +90,33 @@ QToolButton#primary:disabled { background-color: #18181b; border-color: #27272a;
 
 
 def tile(
-    text: str, icon_name: str, tooltip: str = "", *, primary: bool = False
+    text: str,
+    icon_name: str,
+    tooltip: str = "",
+    *,
+    primary: bool = False,
+    compact: bool = False,
 ) -> QToolButton:
-    """A square-ish button: icon above label, in a 3-column grid it stretches to fill."""
+    """A square-ish button: icon above label, in a 3-column grid it stretches to fill.
+
+    `compact` gives a short button with the label beside a small icon, for places
+    that should leave the room to the content.
+    """
     button = QToolButton()
     button.setObjectName("primary" if primary else "tile")
     button.setStyleSheet(TILE_QSS)
     button.setText(text)
     button.setIcon(icon(icon_name))
-    button.setIconSize(QSize(22, 22))
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
     button.setToolTip(tooltip)
-    button.setMinimumSize(96, 66)
+    if compact:
+        button.setStyleSheet(TILE_QSS + "QToolButton#tile { padding: 4px 2px; }")
+        button.setIconSize(QSize(16, 16))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        button.setMinimumSize(72, 30)
+    else:
+        button.setIconSize(QSize(22, 22))
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        button.setMinimumSize(96, 66)
     button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return button
 

@@ -387,7 +387,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([420, 340])
+        splitter.setSizes([400, 380])
         root_layout.addWidget(splitter)
 
         # Status Bar
