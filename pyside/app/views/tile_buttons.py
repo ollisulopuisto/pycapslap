@@ -139,6 +139,9 @@ def tile(
     button.setIcon(icon(icon_name))
     button.setToolTip(tooltip)
     if compact or dense:
+        # Less side padding: label widths decide how narrow a column can get,
+        # and fonts differ between machines by a pixel or two.
+        button.setStyleSheet(TILE_QSS + "QToolButton#tile { padding: 2px 0px; }")
         button.setIconSize(QSize(16, 16))
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         height = ROW_HEIGHT + 6 if primary else ROW_HEIGHT
