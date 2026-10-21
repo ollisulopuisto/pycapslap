@@ -41,7 +41,7 @@ from app.models.captions import (
 )
 from app.services.preset_manager import PresetManager
 from app.services.spellcheck import get_shared_checker
-from app.views.tile_buttons import tile
+from app.views.tile_buttons import SMALL_QSS, tile
 from app.views.wrapped_text import WrappedText
 
 SPELL_ERROR_COLOR = "#f87171"
@@ -183,12 +183,12 @@ class CaptionPanelWidget(QWidget):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(6)
 
         # Header with actions
         header_layout = QGridLayout()
-        header_layout.setSpacing(6)
+        header_layout.setSpacing(4)
         self.header_layout = header_layout
         self.lbl_title = QLabel("Captions")
         self.lbl_title.setStyleSheet(
@@ -324,7 +324,7 @@ class CaptionPanelWidget(QWidget):
 
         # Row for word-level shifting
         row_shift = QGridLayout()
-        row_shift.setSpacing(6)
+        row_shift.setSpacing(4)
         lbl_shift = QLabel("Adjust words:")
         lbl_shift.setStyleSheet("font-size: 11px; color: #a1a1aa;")
         row_shift.addWidget(lbl_shift, 0, 0, 1, 3)
@@ -333,9 +333,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_mark_start.setToolTip(
             "Set the active caption's start to the playback position"
         )
-        self.btn_mark_start.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_mark_start.setStyleSheet(SMALL_QSS)
         self.btn_mark_start.clicked.connect(self.mark_start_requested.emit)
         row_shift.addWidget(self.btn_mark_start, 1, 0)
 
@@ -343,9 +341,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_mark_end.setToolTip(
             "Set the active caption's end to the playback position"
         )
-        self.btn_mark_end.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_mark_end.setStyleSheet(SMALL_QSS)
         self.btn_mark_end.clicked.connect(self.mark_end_requested.emit)
         row_shift.addWidget(self.btn_mark_end, 1, 1)
 
@@ -353,9 +349,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_shift_prev.setToolTip(
             "Move first word of selected segment to previous segment"
         )
-        self.btn_shift_prev.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_shift_prev.setStyleSheet(SMALL_QSS)
         self.btn_shift_prev.clicked.connect(self._on_shift_prev_clicked)
         row_shift.addWidget(self.btn_shift_prev, 2, 0)
 
@@ -363,9 +357,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_shift_next.setToolTip(
             "Move last word of selected segment to next segment"
         )
-        self.btn_shift_next.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_shift_next.setStyleSheet(SMALL_QSS)
         self.btn_shift_next.clicked.connect(self._on_shift_next_clicked)
         row_shift.addWidget(self.btn_shift_next, 2, 1, 1, 2)
 
@@ -374,9 +366,7 @@ class CaptionPanelWidget(QWidget):
             "Delete the selected caption slot once all its words have been "
             "shifted away and it is empty"
         )
-        self.btn_delete_empty.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_delete_empty.setStyleSheet(SMALL_QSS)
         self.btn_delete_empty.setEnabled(False)
         self.btn_delete_empty.clicked.connect(self._on_delete_empty_clicked)
         row_shift.addWidget(self.btn_delete_empty, 1, 2)
@@ -395,11 +385,7 @@ class CaptionPanelWidget(QWidget):
         pos_lbl.setStyleSheet("font-weight: 600; font-size: 11px; color: #a1a1aa;")
         pos_header.addWidget(pos_lbl, 0, 0)
 
-        btn_style = (
-            "QPushButton { font-size: 11px; padding: 2px 6px; border-radius: 3px; "
-            "background-color: #3f3f46; color: #f4f4f5; } "
-            "QPushButton:hover { background-color: #52525b; }"
-        )
+        btn_style = SMALL_QSS
         self.btn_top = QPushButton("Top (15%)")
         self.btn_top.setStyleSheet(btn_style)
         self.btn_top.setFixedHeight(22)
@@ -461,7 +447,7 @@ class CaptionPanelWidget(QWidget):
         safe_row.addWidget(safe_lbl)
 
         btn_safe_base = (
-            "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+            "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 6px; "
             "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
             "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
         )
@@ -538,9 +524,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_save_preset.setToolTip(
             "Save current style preference (font, color, size, etc.) for this show"
         )
-        self.btn_save_preset.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_save_preset.setStyleSheet(SMALL_QSS)
         self.btn_save_preset.clicked.connect(self._on_save_preset_clicked)
         row_preset.addWidget(self.btn_save_preset)
 
@@ -1297,13 +1281,13 @@ class CaptionPanelWidget(QWidget):
             c = colors[plat_id]
             if is_active:
                 btn.setStyleSheet(
-                    f"QPushButton {{ font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 3px; "
+                    f"QPushButton {{ font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 6px; "
                     f"border: 1px solid {c}; background-color: {c}33; color: {c}; }} "
                     f"QPushButton:hover {{ background-color: {c}55; }}"
                 )
             else:
                 btn.setStyleSheet(
-                    "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+                    "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 6px; "
                     "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
                     "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
                 )

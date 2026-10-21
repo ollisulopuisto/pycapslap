@@ -71,7 +71,7 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
-from app.views.tile_buttons import chip, dense_tile
+from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
 from app.views.timeline import TimelineScroll, VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
@@ -134,12 +134,17 @@ MAX_LAYER_RENDERS = 3
 
 
 # Dark combo boxes to match the buttons; without this the text is white on white.
-COMBO_STYLE = (
-    "QComboBox { background-color: #27272a; color: #f4f4f5; "
-    "border: 1px solid #3f3f46; border-radius: 6px; padding: 5px 8px; }"
-    "QComboBox QAbstractItemView { background-color: #27272a; color: #f4f4f5; "
-    "selection-background-color: #4f46e5; }"
-)
+def combo_style() -> str:
+    return (
+        "QComboBox { background-color: #27272a; color: #e4e4e7; font-size: 11px; "
+        "font-weight: 500; border: 1px solid #3f3f46; border-radius: 8px; "
+        "padding: 2px 8px; }"
+        "QComboBox:hover { background-color: #3f3f46; border-color: #52525b; }"
+        "QComboBox::drop-down { border: none; width: 18px; }"
+        f"QComboBox::down-arrow {{ image: url({chevron_url()}); width: 12px; height: 12px; }}"
+        "QComboBox QAbstractItemView { background-color: #27272a; color: #f4f4f5; "
+        "selection-background-color: #4f46e5; }"
+    )
 
 
 class MainWindow(QMainWindow):
@@ -227,7 +232,7 @@ class MainWindow(QMainWindow):
         # Top Action Bar: square tiles in three columns. A vertical video leaves
         # a narrow column beside its preview, so the bar has to fit that.
         action_bar = QGridLayout()
-        action_bar.setSpacing(6)
+        action_bar.setSpacing(4)
         self.action_bar = action_bar
         self.open_btn = dense_tile("Open", "folder", "Open a video")
         self.open_btn.clicked.connect(self.open_file_dialog)
@@ -286,12 +291,12 @@ class MainWindow(QMainWindow):
             "Aspect ratio of the exported video. The preview shows this frame."
         )
         self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
-        self.format_combo.setStyleSheet(COMBO_STYLE)
+        self.format_combo.setStyleSheet(combo_style())
         self.format_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.format_combo.setMinimumContentsLength(9)
-        self.format_combo.setFixedHeight(32)
+        self.format_combo.setFixedHeight(ROW_HEIGHT)
         action_bar.addWidget(self.format_combo, 1, 1)
 
         # A smaller copy from the same encode: small for clients to proof, the
@@ -303,12 +308,12 @@ class MainWindow(QMainWindow):
         self.proof_combo.setToolTip(
             "Also render a smaller proof copy, in the same pass as the full-size video"
         )
-        self.proof_combo.setStyleSheet(COMBO_STYLE)
+        self.proof_combo.setStyleSheet(combo_style())
         self.proof_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.proof_combo.setMinimumContentsLength(9)
-        self.proof_combo.setFixedHeight(32)
+        self.proof_combo.setFixedHeight(ROW_HEIGHT)
         action_bar.addWidget(self.proof_combo, 1, 2)
 
         # Intro and outro clips, joined to the render in the same encode.
@@ -389,7 +394,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(right_widget)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([400, 380])
+        splitter.setSizes([420, 360])
         root_layout.addWidget(splitter)
 
         # Status Bar

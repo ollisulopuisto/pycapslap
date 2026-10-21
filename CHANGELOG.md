@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **One button style across the window.** Buttons, chips and the format and proof menus share one height and one set of state colours, the menu arrows sit in their own slot, and the caption sidebar's controls are tighter, so the caption table is taller.
 - **The top bar is shorter and Render has a share icon.** The export buttons are shorter tiles, the format and proof menus match their height, and menu arrows sit inside their tiles so they do not push the rows out of line.
 - **The caption buttons are compact.** Add, Transcribe, Save, Auto Dodge and the others in the caption header are short buttons with a small icon beside the label, so the caption table gets the height.
 - **The window opens tall, for vertical video.** Most footage is 9:16, so the window now opens 760 px wide and up to 900 px high, with the preview taking the height and the caption sidebar beside it. The top bar and the buttons are square tiles with icons, in three columns, and their colours show the state: lit when a mode is on, solid for Render, faded when an action is unavailable.

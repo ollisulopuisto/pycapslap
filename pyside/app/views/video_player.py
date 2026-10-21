@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.views.tile_buttons import SMALL_QSS
 from app.views.video_canvas import VideoCanvasWidget
 
 
@@ -66,11 +67,12 @@ class VideoPlayerWidget(QWidget):
         # Controls Bar
         # Two rows: the transport buttons, then the scrubber with its times. A
         # single row runs out of width on a narrow (vertical-video) window.
+        self.setStyleSheet(SMALL_QSS)
         controls_layout = QVBoxLayout()
-        controls_layout.setContentsMargins(8, 4, 8, 8)
-        controls_layout.setSpacing(6)
+        controls_layout.setContentsMargins(8, 2, 8, 4)
+        controls_layout.setSpacing(4)
         buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(8)
+        buttons_row.setSpacing(4)
         seek_row = QHBoxLayout()
         seek_row.setSpacing(8)
 
@@ -124,24 +126,17 @@ class VideoPlayerWidget(QWidget):
         self.speed_btn.setToolTip(
             "Playback speed: click to cycle (1.0x, 1.25x, 1.5x, 2.0x)"
         )
-        self.speed_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27272a;
-                color: #e4e4e7;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                font-size: 11px;
-                font-weight: 600;
-                padding: 2px 4px;
-            }
-            QPushButton:hover {
-                background-color: #3f3f46;
-                color: #ffffff;
-            }
-        """)
         self.speed_btn.clicked.connect(self._cycle_playback_speed)
         buttons_row.addStretch()
         buttons_row.addWidget(self.speed_btn)
+        for btn in (
+            self.play_btn,
+            self.stop_btn,
+            self.mark_in_btn,
+            self.mark_out_btn,
+            self.speed_btn,
+        ):
+            btn.setFixedHeight(24)
 
         # Seek latency indicator
         self.latency_lbl = QLabel("Seek: -- ms")
