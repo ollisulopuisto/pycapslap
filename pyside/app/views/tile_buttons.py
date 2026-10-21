@@ -5,7 +5,7 @@ one is lit, the primary action is solid, and a button that cannot act now
 fades back into the panel.
 """
 
-from functools import lru_cache
+from functools import lru_cache, partial
 
 from PySide6.QtCore import QByteArray, QSize, Qt
 from PySide6.QtGui import QIcon, QPainter, QPixmap
@@ -20,12 +20,13 @@ DISABLED = "#52525b"
 _ICONS = {
     "folder": '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
     "save": '<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3"/><path d="M7 21v-7h10v7"/>',
-    "share": '<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/>',
+    "people": '<circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><path d="M16 3.1a4 4 0 0 1 0 7.8"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/>',
     "film": '<rect x="2" y="3" width="20" height="18" rx="2"/><path d="M7 3v18M17 3v18M2 8h5M2 16h5M17 8h5M17 16h5"/>',
     "layers": '<path d="M12 3 2 8l10 5 10-5-10-5z"/><path d="M2 13l10 5 10-5"/><path d="M2 18l10 5 10-5"/>',
     "tag": '<path d="M3 3h8l10 10-8 8L3 11z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
     "image": '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/>',
     "play": '<path d="M6 4l14 8-14 8z"/>',
+    "share": '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "mic": '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/>',
     "wand": '<path d="M15 4l5 5L9 20H4v-5z"/><path d="M13 6l5 5"/>',
@@ -79,6 +80,7 @@ QToolButton#tile:hover { background-color: #3f3f46; border-color: #52525b; }
 QToolButton#tile:pressed { background-color: #18181b; }
 QToolButton#tile:checked { background-color: #312e81; border-color: #6366f1; color: #ffffff; }
 QToolButton#tile:disabled { background-color: #18181b; border-color: #27272a; color: #52525b; }
+QToolButton::menu-indicator { subcontrol-origin: padding; subcontrol-position: right center; right: 4px; width: 8px; }
 QToolButton#primary {
     background-color: #4f46e5; border: 1px solid #6366f1; border-radius: 10px;
     color: #ffffff; font-size: 12px; font-weight: 600; padding: 6px 4px 4px 4px;
@@ -96,6 +98,7 @@ def tile(
     *,
     primary: bool = False,
     compact: bool = False,
+    dense: bool = False,
 ) -> QToolButton:
     """A square-ish button: icon above label, in a 3-column grid it stretches to fill.
 
@@ -113,6 +116,19 @@ def tile(
         button.setIconSize(QSize(16, 16))
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         button.setMinimumSize(72, 30)
+    elif dense:
+        # Short tiles: the main bar keeps its room for the preview and captions.
+        button.setIconSize(QSize(16, 16))
+        button.setMinimumSize(96, 50)
+        if primary:
+            button.setIconSize(QSize(18, 18))
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setMinimumSize(96, 36)
+        else:
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            button.setStyleSheet(
+                TILE_QSS + "QToolButton#tile { padding: 3px 2px 2px 2px; }"
+            )
     else:
         button.setIconSize(QSize(22, 22))
         button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
@@ -132,3 +148,7 @@ def chip(text: str, tooltip: str = "") -> QToolButton:
     button.setMinimumHeight(32)
     button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
     return button
+
+
+# The top bar's tiles: same look as tile(), at the short height.
+dense_tile = partial(tile, dense=True)

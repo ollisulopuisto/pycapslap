@@ -71,7 +71,7 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
-from app.views.tile_buttons import chip, tile
+from app.views.tile_buttons import chip, dense_tile
 from app.views.timeline import TimelineScroll, VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
@@ -229,11 +229,11 @@ class MainWindow(QMainWindow):
         action_bar = QGridLayout()
         action_bar.setSpacing(6)
         self.action_bar = action_bar
-        self.open_btn = tile("Open", "folder", "Open a video")
+        self.open_btn = dense_tile("Open", "folder", "Open a video")
         self.open_btn.clicked.connect(self.open_file_dialog)
         action_bar.addWidget(self.open_btn, 0, 0)
 
-        self.save_btn = tile(
+        self.save_btn = dense_tile(
             "Save",
             "save",
             "Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]",
@@ -243,9 +243,9 @@ class MainWindow(QMainWindow):
         action_bar.addWidget(self.save_btn, 0, 1)
 
         # Client review: send the captions to a client's browser, take the fixes back
-        self.review_btn = tile(
+        self.review_btn = dense_tile(
             "Review",
-            "share",
+            "people",
             "Send captions to a client to check and correct on the review page, "
             "then import what they send back",
         )
@@ -266,7 +266,7 @@ class MainWindow(QMainWindow):
         action_bar.addWidget(self.review_btn, 0, 2)
 
         # B-roll: Creative Commons pictures and footage over the audio, credited
-        self.broll_btn = tile(
+        self.broll_btn = dense_tile(
             "B-roll",
             "film",
             "Find Creative Commons pictures and footage for the episode, pick "
@@ -291,6 +291,7 @@ class MainWindow(QMainWindow):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.format_combo.setMinimumContentsLength(9)
+        self.format_combo.setFixedHeight(32)
         action_bar.addWidget(self.format_combo, 1, 1)
 
         # A smaller copy from the same encode: small for clients to proof, the
@@ -307,10 +308,11 @@ class MainWindow(QMainWindow):
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.proof_combo.setMinimumContentsLength(9)
+        self.proof_combo.setFixedHeight(32)
         action_bar.addWidget(self.proof_combo, 1, 2)
 
         # Intro and outro clips, joined to the render in the same encode.
-        self.bumpers_btn = tile("Intro/outro", "layers", "Intro and outro clips")
+        self.bumpers_btn = dense_tile("Intro/outro", "layers", "Intro and outro clips")
         self.bumpers_menu = QMenu(self.bumpers_btn)
         self.bumpers_menu.aboutToShow.connect(self._fill_bumpers_menu)
         self.bumpers_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -319,7 +321,7 @@ class MainWindow(QMainWindow):
         self._update_bumpers_button()
 
         # A logo in a corner, for videos that don't carry one of their own.
-        self.bug_btn = tile("Logo", "tag", "A logo in a corner of the video")
+        self.bug_btn = dense_tile("Logo", "tag", "A logo in a corner of the video")
         self.bug_menu = QMenu(self.bug_btn)
         self.bug_menu.aboutToShow.connect(self._fill_bug_menu)
         self.bug_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -327,16 +329,16 @@ class MainWindow(QMainWindow):
         action_bar.addWidget(self.bug_btn, 2, 1)
         self._apply_bug()
 
-        self.thumb_btn = tile(
+        self.thumb_btn = dense_tile(
             "Thumbnail", "image", "Extract a thumbnail from the video"
         )
         self.thumb_btn.clicked.connect(self.trigger_extract_thumbnail)
         self.thumb_btn.setEnabled(False)
         action_bar.addWidget(self.thumb_btn, 2, 2)
 
-        self.render_btn = tile(
+        self.render_btn = dense_tile(
             "Render",
-            "play",
+            "share",
             "Render and export video with burned-in captions",
             primary=True,
         )
