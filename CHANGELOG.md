@@ -8,6 +8,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **The window opens tall, for vertical video.** Most footage is 9:16, so the window now opens 760 px wide and up to 900 px high, with the preview taking the height and the caption sidebar beside it. The top bar and the buttons are square tiles with icons, in three columns, and their colours show the state: lit when a mode is on, solid for Render, faded when an action is unavailable.
+- **Long captions wrap in the sidebar.** A caption's text now wraps across lines in the table instead of running off the column, so the whole text is visible, and a word on a later line can be split off like any other.
 - **Menus and standard shortcuts.** File, Edit, Video, View and Captions menus, with the usual Mac keys: Cmd+O opens a video, Cmd+S saves, Cmd+W closes, Cmd+Q quits, Cmd+, opens the Whisper settings, Cmd+= / Cmd+- zoom the timeline and Cmd+0 fits it. Cmd+R renders, Cmd+T transcribes. Each item presses its button, so it does nothing while that button is disabled.
 - **The buttons line up.** The top bar and the caption header are grids now, so each button sits in the same column as the one above it instead of wrapping where the window happens to end. The export and proof menus are dark like the buttons.
 - **The timeline zooms, and has two edit tools.** Ctrl + scroll, or the + / − buttons, zoom in on the timeline, so a splice between two captions can be placed to the frame; Fit shows the whole video again. **Regular edit** (the default) moves only the caption whose edge is dragged. **Rolling edit** moves the splice between two touching captions: one grows as the other shrinks, and both stay in place otherwise.
