@@ -8,6 +8,7 @@ from app.models.captions import (
     ProjectState,
     WordSpan,
     apply_orphan_rules,
+    chars_per_second,
     clamped_segment_time,
     combine_separated_syllables,
     delete_segment,
@@ -16,6 +17,7 @@ from app.models.captions import (
     shift_word_to_next,
     shift_word_to_prev,
     split_segment,
+    timing_flag,
 )
 
 
@@ -699,3 +701,17 @@ def test_break_after_roundtrips_through_sidecar_json():
 
     plain = CaptionSegment(start_ms=0, end_ms=1000, text="b").to_dict()
     assert "breakAfter" not in plain
+
+
+def test_timing_flag_compares_text_length_with_the_time_given():
+    fits = CaptionSegment(start_ms=0, end_ms=2000, text="Kuinka huolissanne")
+    too_fast = CaptionSegment(start_ms=0, end_ms=500, text="Eli ei puhuttu pienistä")
+    too_slow = CaptionSegment(start_ms=0, end_ms=5000, text="Joo")
+    empty = CaptionSegment(start_ms=0, end_ms=5000, text="   ")
+
+    assert timing_flag(fits) is None
+    assert timing_flag(too_fast) == "short"
+    assert timing_flag(too_slow) == "long"
+    assert timing_flag(empty) is None
+    assert chars_per_second(empty) is None
+    assert chars_per_second(fits) == len("Kuinka huolissanne") / 2

@@ -2,7 +2,12 @@ from PySide6.QtCore import QPoint
 from PySide6.QtGui import QFontMetrics
 
 from app.models.captions import CaptionSegment, WordSpan
-from app.views.caption_panel import CaptionPanelWidget, format_timestamp
+from app.views.caption_panel import (
+    COL_DURATION,
+    COL_TEXT,
+    CaptionPanelWidget,
+    format_timestamp,
+)
 
 
 def test_caption_panel_initial_state(qtbot):
@@ -24,8 +29,8 @@ def test_caption_panel_load_segments(qtbot):
 
     assert len(panel.segments) == 2
     assert panel.cue_table.rowCount() == 2
-    assert panel.cue_table.item(0, 2).text() == "First cue"
-    assert panel.cue_table.item(1, 2).text() == "Second cue"
+    assert panel.cue_table.item(0, COL_TEXT).text() == "First cue"
+    assert panel.cue_table.item(1, COL_TEXT).text() == "Second cue"
 
 
 def test_caption_panel_preset_position_buttons(qtbot):
@@ -119,7 +124,7 @@ def test_caption_panel_edit_cell_syncs_segment(qtbot):
     panel.segment_updated.connect(emitted_updates.append)
 
     # Edit text in table item
-    item = panel.cue_table.item(0, 2)
+    item = panel.cue_table.item(0, COL_TEXT)
     item.setText("Replaced caption here")
 
     assert len(emitted_updates) == 1
@@ -151,7 +156,7 @@ def test_caption_panel_commit_active_editor_with_open_lineedit(qtbot):
     )
     panel.set_segments([seg])
 
-    item = panel.cue_table.item(0, 2)
+    item = panel.cue_table.item(0, COL_TEXT)
     panel.cue_table.editItem(item)
 
     editor = None
@@ -165,7 +170,7 @@ def test_caption_panel_commit_active_editor_with_open_lineedit(qtbot):
 
     panel.commit_active_editor()
     assert seg.text == "Editor edited text"
-    assert panel.cue_table.item(0, 2).text() == "Editor edited text"
+    assert panel.cue_table.item(0, COL_TEXT).text() == "Editor edited text"
 
 
 def test_caption_panel_fix_orphans_button(qtbot):
@@ -522,7 +527,7 @@ def test_caption_panel_split_before_word_under_pointer(qtbot):
     panel.set_segments([seg])
 
     # A point just inside the word "Joo", measured the way the table lays it out.
-    rect = panel.cue_table.visualItemRect(panel.cue_table.item(0, 2)).adjusted(
+    rect = panel.cue_table.visualItemRect(panel.cue_table.item(0, COL_TEXT)).adjusted(
         4, 0, -4, 0
     )
     metrics = QFontMetrics(panel.cue_table.font())
@@ -584,3 +589,33 @@ def test_caption_panel_in_and_out_need_an_active_cue(qtbot):
 def test_format_timestamp_keeps_milliseconds():
     assert format_timestamp(61005) == "01:01.005"
     assert format_timestamp(1234) == "00:01.234"
+
+
+def test_caption_panel_shows_duration_and_flags_cues_that_do_not_fit_their_text(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    fits = CaptionSegment(
+        start_ms=0, end_ms=2000, text="Kuinka huolissanne olette", words=[]
+    )
+    too_fast = CaptionSegment(
+        start_ms=2000,
+        end_ms=2500,
+        text="Eli ei puhuttu pienistä drooneista",
+        words=[],
+    )
+    panel.set_segments([fits, too_fast])
+
+    assert panel.cue_table.item(0, COL_DURATION).text() == "2.00 s"
+    assert panel.cue_table.item(1, COL_DURATION).text() == "0.50 s"
+    assert "too fast" in panel.cue_table.item(1, COL_DURATION).toolTip()
+    assert "too fast" not in panel.cue_table.item(0, COL_DURATION).toolTip()
+
+    # Lengthening the cue clears the flag, and the cell follows the new time.
+    panel._retime_segment(1, 2000, 4000)
+    assert panel.cue_table.item(1, COL_DURATION).text() == "2.00 s"
+    assert "too fast" not in panel.cue_table.item(1, COL_DURATION).toolTip()
+
+    # Editing the text re-checks the cue against its time.
+    panel.cue_table.item(0, COL_TEXT).setText("Joo")
+    assert "too slow" in panel.cue_table.item(0, COL_DURATION).toolTip()

@@ -28,6 +28,7 @@ from app.models.captions import (
     CaptionSegment,
     CaptionStyle,
     apply_orphan_rules,
+    chars_per_second,
     clamped_segment_time,
     combine_separated_syllables,
     delete_segment,
@@ -36,6 +37,7 @@ from app.models.captions import (
     shift_word_to_next,
     shift_word_to_prev,
     split_segment,
+    timing_flag,
 )
 from app.services.preset_manager import PresetManager
 from app.services.spellcheck import get_shared_checker
@@ -45,6 +47,13 @@ SPELL_ERROR_COLOR = "#f87171"
 
 
 NUDGE_MS = 100
+
+COL_START, COL_END, COL_DURATION, COL_TEXT = range(4)
+FLAG_COLORS = {"short": "#f87171", "long": "#fbbf24"}
+TIMING_NOTES = {
+    "short": "too fast for its text: lengthen the cue or shorten the text",
+    "long": "too slow for its text: it lingers on the screen",
+}
 
 
 def format_timestamp(ms: int) -> str:
@@ -87,7 +96,7 @@ class SpellCheckDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index) -> None:  # type: ignore[override]
         super().paint(painter, option, index)
-        if index.column() != 2:
+        if index.column() != COL_TEXT:
             return
         spans = self.panel.spell_spans_for_row(index.row())
         if not spans:
@@ -244,16 +253,14 @@ class CaptionPanelWidget(QWidget):
         layout.addLayout(header_layout)
 
         # Table of cues
-        self.cue_table = QTableWidget(0, 3)
-        self.cue_table.setHorizontalHeaderLabels(["Start", "End", "Text"])
+        self.cue_table = QTableWidget(0, 4)
+        self.cue_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "Text"])
+        for column in (COL_START, COL_END, COL_DURATION):
+            self.cue_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.cue_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.cue_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.cue_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
+            COL_TEXT, QHeaderView.ResizeMode.Stretch
         )
         self.cue_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -282,7 +289,7 @@ class CaptionPanelWidget(QWidget):
         """)
         self.cue_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
-        self.cue_table.setItemDelegateForColumn(2, SpellCheckDelegate(self))
+        self.cue_table.setItemDelegateForColumn(COL_TEXT, SpellCheckDelegate(self))
         self.cue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.cue_table.customContextMenuRequested.connect(self._on_table_context_menu)
         self.cue_table.setToolTip(
@@ -876,7 +883,7 @@ class CaptionPanelWidget(QWidget):
         spans = self.spell_spans_for_row(row)
         if not spans:
             return None
-        item = self.cue_table.item(row, 2)
+        item = self.cue_table.item(row, COL_TEXT)
         if not item:
             return None
         rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
@@ -891,7 +898,7 @@ class CaptionPanelWidget(QWidget):
 
     def _token_under(self, row: int, pos: QPoint) -> int | None:
         """Index of the word at or just after a viewport point in a text cell."""
-        item = self.cue_table.item(row, 2)
+        item = self.cue_table.item(row, COL_TEXT)
         if not item:
             return None
         rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
@@ -905,7 +912,7 @@ class CaptionPanelWidget(QWidget):
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         index = self.cue_table.indexAt(pos)
-        if not index.isValid() or index.column() != 2:
+        if not index.isValid() or index.column() != COL_TEXT:
             return
         row = index.row()
         menu = QMenu(self)
@@ -1000,9 +1007,16 @@ class CaptionPanelWidget(QWidget):
                 | Qt.ItemFlag.ItemIsEditable
             )
 
-            self.cue_table.setItem(row, 0, item_start)
-            self.cue_table.setItem(row, 1, item_end)
-            self.cue_table.setItem(row, 2, item_text)
+            item_duration = QTableWidgetItem()
+            item_duration.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
+
+            self.cue_table.setItem(row, COL_START, item_start)
+            self.cue_table.setItem(row, COL_END, item_end)
+            self.cue_table.setItem(row, COL_DURATION, item_duration)
+            self.cue_table.setItem(row, COL_TEXT, item_text)
+            self._refresh_duration_cell(row)
 
         self._block_signals = False
 
@@ -1097,7 +1111,7 @@ class CaptionPanelWidget(QWidget):
         self.cue_table.setCurrentItem(None)
         # Ensure any edited text in table items is completely synchronized to the segment objects
         for row in range(min(self.cue_table.rowCount(), len(self.segments))):
-            item = self.cue_table.item(row, 2)
+            item = self.cue_table.item(row, COL_TEXT)
             if item and item.text() != self.segments[row].text:
                 self.segments[row].update_text(item.text())
                 self.segment_updated.emit(self.segments[row])
@@ -1109,12 +1123,13 @@ class CaptionPanelWidget(QWidget):
         col = item.column()
         if not (0 <= row < len(self.segments)):
             return
-        if col == 2:
+        if col == COL_TEXT:
             seg = self.segments[row]
             seg.update_text(item.text())
             self._invalidate_spell_cache(row)
+            self._refresh_duration_cell(row)
             self.segment_updated.emit(seg)
-        elif col in (0, 1):
+        elif col in (COL_START, COL_END):
             self._apply_edited_timecode(row, col, item.text())
 
     def _apply_edited_timecode(self, row: int, col: int, text: str) -> None:
@@ -1124,8 +1139,8 @@ class CaptionPanelWidget(QWidget):
             # Unparseable: put the cue's own time back in the cell.
             self._refresh_time_cells(row)
             return
-        start_ms = parsed if col == 0 else seg.start_ms
-        end_ms = parsed if col == 1 else seg.end_ms
+        start_ms = parsed if col == COL_START else seg.start_ms
+        end_ms = parsed if col == COL_END else seg.end_ms
         self._retime_segment(row, start_ms, end_ms)
 
     def _retime_segment(self, row: int, start_ms: int, end_ms: int) -> None:
@@ -1140,10 +1155,33 @@ class CaptionPanelWidget(QWidget):
         seg = self.segments[row]
         was_blocked = self._block_signals
         self._block_signals = True
-        for col, ms in ((0, seg.start_ms), (1, seg.end_ms)):
+        for col, ms in ((COL_START, seg.start_ms), (COL_END, seg.end_ms)):
             cell = self.cue_table.item(row, col)
             if cell:
                 cell.setText(format_timestamp(ms))
+        self._refresh_duration_cell(row)
+        self._block_signals = was_blocked
+
+    def _refresh_duration_cell(self, row: int) -> None:
+        """Show the cue's length, flagged when the time does not fit its text."""
+        seg = self.segments[row]
+        cell = self.cue_table.item(row, COL_DURATION)
+        if cell is None:
+            return
+        was_blocked = self._block_signals
+        self._block_signals = True
+        cell.setText(f"{(seg.end_ms - seg.start_ms) / 1000:.2f} s")
+        flag = timing_flag(seg)
+        if flag:
+            cell.setForeground(QColor(FLAG_COLORS[flag]))
+        else:
+            cell.setData(Qt.ItemDataRole.ForegroundRole, None)
+        cps = chars_per_second(seg)
+        if cps is None:
+            cell.setToolTip("")
+        else:
+            note = f"; {TIMING_NOTES[flag]}" if flag else ""
+            cell.setToolTip(f"{cps:.1f} characters per second{note}")
         self._block_signals = was_blocked
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
