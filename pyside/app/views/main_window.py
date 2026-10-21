@@ -10,6 +10,7 @@ from pathlib import Path
 import psutil
 from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
+    QAction,
     QDesktopServices,
     QGuiApplication,
     QDragEnterEvent,
@@ -20,7 +21,9 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QGridLayout,
     QDialog,
     QFileDialog,
     QButtonGroup,
@@ -54,7 +57,6 @@ from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
 from app.services.broll.picks import Picks as BrollPicks
 from app.views.broll_dialog import BrollDialog
-from app.views.flow_layout import FlowLayout
 from app.views.portal_dialog import PublishDialog, portal_from_settings
 from app.models.review import (
     ReviewMismatch,
@@ -127,6 +129,15 @@ LAYER_CACHE_SIZE = 24
 
 # Renders allowed in flight at once. Each is two ffmpeg processes.
 MAX_LAYER_RENDERS = 3
+
+
+# Dark combo boxes to match the buttons; without this the text is white on white.
+COMBO_STYLE = (
+    "QComboBox { background-color: #27272a; color: #f4f4f5; "
+    "border: 1px solid #3f3f46; border-radius: 6px; padding: 5px 8px; }"
+    "QComboBox QAbstractItemView { background-color: #27272a; color: #f4f4f5; "
+    "selection-background-color: #4f46e5; }"
+)
 
 
 class MainWindow(QMainWindow):
@@ -208,11 +219,12 @@ class MainWindow(QMainWindow):
         left_col.setSpacing(8)
 
         # Top Action Bar
-        action_bar = FlowLayout(spacing=8)
+        action_bar = QGridLayout()
+        action_bar.setSpacing(4)
         self.action_bar = action_bar
         self.open_btn = QPushButton("Open Video...")
         self.open_btn.clicked.connect(self.open_file_dialog)
-        action_bar.addWidget(self.open_btn)
+        action_bar.addWidget(self.open_btn, 0, 0)
 
         self.save_btn = QPushButton("Save Project")
         self.save_btn.setToolTip(
@@ -220,7 +232,7 @@ class MainWindow(QMainWindow):
         )
         self.save_btn.clicked.connect(self._on_save_requested)
         self.save_btn.setEnabled(False)
-        action_bar.addWidget(self.save_btn)
+        action_bar.addWidget(self.save_btn, 0, 1)
 
         # Client review: send the captions to a client's browser, take the fixes back
         self.review_btn = QPushButton("Client Review")
@@ -241,7 +253,7 @@ class MainWindow(QMainWindow):
         )
         self.review_btn.setMenu(review_menu)
         self.review_btn.setEnabled(False)
-        action_bar.addWidget(self.review_btn)
+        action_bar.addWidget(self.review_btn, 0, 2)
 
         # B-roll: Creative Commons pictures and footage over the audio, credited
         self.broll_btn = QPushButton("B-roll Reel…")
@@ -251,7 +263,7 @@ class MainWindow(QMainWindow):
         )
         self.broll_btn.clicked.connect(self._on_broll)
         self.broll_btn.setEnabled(False)
-        action_bar.addWidget(self.broll_btn)
+        action_bar.addWidget(self.broll_btn, 0, 3)
 
         # The export format belongs here, not in a dialog at render time: it
         # decides the canvas the captions are laid out on, so the preview
@@ -263,7 +275,12 @@ class MainWindow(QMainWindow):
             "Aspect ratio of the exported video. The preview shows this frame."
         )
         self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
-        action_bar.addWidget(self.format_combo)
+        self.format_combo.setStyleSheet(COMBO_STYLE)
+        self.format_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.format_combo.setMinimumContentsLength(9)
+        action_bar.addWidget(self.format_combo, 1, 0)
 
         # A smaller copy from the same encode: small for clients to proof, the
         # full-size one for publishing.
@@ -274,14 +291,19 @@ class MainWindow(QMainWindow):
         self.proof_combo.setToolTip(
             "Also render a smaller proof copy, in the same pass as the full-size video"
         )
-        action_bar.addWidget(self.proof_combo)
+        self.proof_combo.setStyleSheet(COMBO_STYLE)
+        self.proof_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.proof_combo.setMinimumContentsLength(9)
+        action_bar.addWidget(self.proof_combo, 1, 1)
 
         # Intro and outro clips, joined to the render in the same encode.
         self.bumpers_btn = QPushButton()
         self.bumpers_menu = QMenu(self.bumpers_btn)
         self.bumpers_menu.aboutToShow.connect(self._fill_bumpers_menu)
         self.bumpers_btn.setMenu(self.bumpers_menu)
-        action_bar.addWidget(self.bumpers_btn)
+        action_bar.addWidget(self.bumpers_btn, 1, 2)
         self._update_bumpers_button()
 
         # A logo in a corner, for videos that don't carry one of their own.
@@ -289,7 +311,7 @@ class MainWindow(QMainWindow):
         self.bug_menu = QMenu(self.bug_btn)
         self.bug_menu.aboutToShow.connect(self._fill_bug_menu)
         self.bug_btn.setMenu(self.bug_menu)
-        action_bar.addWidget(self.bug_btn)
+        action_bar.addWidget(self.bug_btn, 2, 0)
         self._apply_bug()
 
         self.render_btn = QPushButton("Render Video")
@@ -299,24 +321,22 @@ class MainWindow(QMainWindow):
         )
         self.render_btn.clicked.connect(self._on_render_video_requested)
         self.render_btn.setEnabled(False)
-        action_bar.addWidget(self.render_btn)
+        action_bar.addWidget(self.render_btn, 2, 1)
 
         self.thumb_btn = QPushButton("Extract Thumbnail")
         self.thumb_btn.clicked.connect(self.trigger_extract_thumbnail)
         self.thumb_btn.setEnabled(False)
-        action_bar.addWidget(self.thumb_btn)
+        action_bar.addWidget(self.thumb_btn, 2, 2)
 
+        # The spare width goes to an empty column, so no button stretches.
+        action_bar.setColumnStretch(4, 1)
         left_col.addLayout(action_bar)
 
-        # Cmd+S / Ctrl+S shortcut for Save
         # I / O set the trim's start / end at the playhead, as in video editors: stop
         # playback on the right frame and mark it. Text fields keep their letters,
         # since a line edit claims plain keys before shortcuts see them.
         QShortcut(QKeySequence(Qt.Key.Key_I), self, activated=self._set_trim_start_here)
         QShortcut(QKeySequence(Qt.Key.Key_O), self, activated=self._set_trim_end_here)
-        QShortcut(
-            QKeySequence.StandardKey.Save, self, activated=self._on_save_requested
-        )
 
         # Video Player Widget with embedded Caption Overlay
         self.player = VideoPlayerWidget(self)
@@ -340,6 +360,7 @@ class MainWindow(QMainWindow):
 
         # Caption Editor & Inspector Panel
         self.caption_panel = CaptionPanelWidget(self)
+        self._build_menus()
         right_col.addWidget(self.caption_panel, stretch=1)
 
         # Internal labels retained for telemetry & unit tests without cluttering UI
@@ -1422,6 +1443,95 @@ class MainWindow(QMainWindow):
         self.status.showMessage(
             f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
             2000,
+        )
+
+    def _build_menus(self) -> None:
+        """Menu bar with the standard shortcuts. Each item presses the button it
+        names, so that button's own enabled state decides whether it does anything."""
+        panel = self.caption_panel
+        bar = self.menuBar()
+        bar.setStyleSheet(
+            "QMenuBar { background-color: #18181b; color: #f4f4f5; } "
+            "QMenuBar::item:selected { background-color: #27272a; } "
+            "QMenu { background-color: #27272a; color: #f4f4f5; } "
+            "QMenu::item:selected { background-color: #4f46e5; }"
+        )
+
+        def press(button: QPushButton):
+            def run() -> None:
+                if button.isEnabled():
+                    button.click()
+
+            return run
+
+        def add(menu: QMenu, text: str, key, action, role=None) -> None:
+            item = QAction(text, self)
+            if key is not None:
+                item.setShortcut(QKeySequence(key))
+            if role is not None:
+                item.setMenuRole(role)
+            item.triggered.connect(lambda _checked=False: action())
+            menu.addAction(item)
+
+        file_menu = bar.addMenu("File")
+        add(
+            file_menu,
+            "Open Video…",
+            QKeySequence.StandardKey.Open,
+            press(self.open_btn),
+        )
+        add(
+            file_menu,
+            "Save Project",
+            QKeySequence.StandardKey.Save,
+            press(self.save_btn),
+        )
+        file_menu.addSeparator()
+        add(file_menu, "Close Window", QKeySequence.StandardKey.Close, self.close)
+        add(
+            file_menu,
+            "Quit PyCapSlap",
+            QKeySequence.StandardKey.Quit,
+            QApplication.quit,
+            QAction.MenuRole.QuitRole,
+        )
+
+        edit_menu = bar.addMenu("Edit")
+        add(edit_menu, "Add Caption", "Ctrl+Shift+N", press(panel.btn_add_cue))
+
+        video_menu = bar.addMenu("Video")
+        add(video_menu, "Render Video…", "Ctrl+R", press(self.render_btn))
+        add(video_menu, "Extract Thumbnail", "Ctrl+Shift+T", press(self.thumb_btn))
+        add(video_menu, "B-roll Reel…", "Ctrl+Shift+B", press(self.broll_btn))
+
+        view_menu = bar.addMenu("View")
+        add(
+            view_menu,
+            "Zoom In",
+            QKeySequence.StandardKey.ZoomIn,
+            lambda: self.timeline_scroll.zoom_by(1.25),
+        )
+        add(
+            view_menu,
+            "Zoom Out",
+            QKeySequence.StandardKey.ZoomOut,
+            lambda: self.timeline_scroll.zoom_by(0.8),
+        )
+        add(view_menu, "Fit Timeline", "Ctrl+0", self.timeline_scroll.fit)
+
+        caption_menu = bar.addMenu("Captions")
+        add(caption_menu, "Transcribe", "Ctrl+T", press(panel.btn_transcribe))
+        add(caption_menu, "Auto Dodge", "Ctrl+Shift+D", press(panel.btn_autoplace))
+        add(caption_menu, "Fix Syllables", None, press(panel.btn_combine_syllables))
+        add(caption_menu, "Group Words", None, press(panel.btn_group_words))
+        add(caption_menu, "Fix Orphans", None, press(panel.btn_fix_orphans))
+        caption_menu.addSeparator()
+        add(
+            caption_menu,
+            "Whisper Settings…",
+            QKeySequence.StandardKey.Preferences,
+            press(panel.btn_whisper_settings),
+            QAction.MenuRole.PreferencesRole,
         )
 
     def _build_timeline_toolbar(self) -> QHBoxLayout:
