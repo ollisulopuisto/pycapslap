@@ -61,3 +61,16 @@ def test_thumbnail_title_follows_the_caption_style(qtbot):
 
     assert small != large
     assert high != low
+
+
+def test_glow_checkbox_sets_the_style(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    changed = []
+    panel.style_changed.connect(changed.append)
+
+    panel.chk_glow.setChecked(False)
+    assert changed and changed[-1].glow_effect is False
+
+    panel.set_style(CaptionStyle(glow_effect=True))
+    assert panel.chk_glow.isChecked()

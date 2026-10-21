@@ -620,6 +620,15 @@ class CaptionPanelWidget(QWidget):
         self.chk_bg_box.setChecked(self.current_style.background_box)
         self.chk_bg_box.toggled.connect(self._on_bg_box_toggled)
         row_colors.addWidget(self.chk_bg_box)
+
+        self.chk_glow = QCheckBox("Glow")
+        self.chk_glow.setToolTip(
+            "A soft halo of the text colour around the letters, in the captions "
+            "and in the thumbnail title"
+        )
+        self.chk_glow.setChecked(self.current_style.glow_effect)
+        self.chk_glow.toggled.connect(self._on_glow_toggled)
+        row_colors.addWidget(self.chk_glow)
         content_layout.addLayout(row_colors)
 
         # Initially collapsed
@@ -774,6 +783,10 @@ class CaptionPanelWidget(QWidget):
         self.current_style.background_box = checked
         self.style_changed.emit(self.current_style)
 
+    def _on_glow_toggled(self, checked: bool) -> None:
+        self.current_style.glow_effect = checked
+        self.style_changed.emit(self.current_style)
+
     def _pick_color(self, target: str) -> None:
         current_hex = (
             self.current_style.text_color
@@ -825,6 +838,7 @@ class CaptionPanelWidget(QWidget):
         self.chk_multiline.setChecked(style.multiline)
         self.chk_justify.setChecked(style.justify_lines)
         self.chk_bg_box.setChecked(style.background_box)
+        self.chk_glow.setChecked(style.glow_effect)
         self._update_color_buttons()
 
         self._block_signals = False
