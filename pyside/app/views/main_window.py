@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import threading
+from collections import deque
 from pathlib import Path
 
 import psutil
@@ -176,7 +177,7 @@ class MainWindow(QMainWindow):
         self._gui_call.connect(self._run_gui_call, Qt.ConnectionType.QueuedConnection)
         self.project = ProjectState()
 
-        self._seek_latencies: list[float] = []
+        self._seek_latencies: deque[float] = deque(maxlen=10)
 
         # Caption layout as the renderer computes it, so the preview draws the
         # same blocks the burn will. Refreshed off a timer because every
@@ -1862,8 +1863,10 @@ class MainWindow(QMainWindow):
         ):
             self.render_btn.setText(f"Rendering ({pct_str})...")
 
+    _gui_process = psutil.Process(os.getpid())
+
     def _update_telemetry(self) -> None:
-        process = psutil.Process(os.getpid())
+        process = self._gui_process
         gui_rss = process.memory_info().rss / (1024 * 1024)
 
         core_rss = 0.0
@@ -1876,7 +1879,7 @@ class MainWindow(QMainWindow):
 
         total_rss = gui_rss + core_rss
         avg_seek = (
-            sum(self._seek_latencies[-10:]) / len(self._seek_latencies[-10:])
+            sum(self._seek_latencies) / len(self._seek_latencies)
             if self._seek_latencies
             else 0.0
         )

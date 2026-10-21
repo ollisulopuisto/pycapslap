@@ -160,8 +160,15 @@ class VisualTimelineWidget(QWidget):
 
     def set_position(self, position_ms: int) -> None:
         if not self._is_scrubbing:
+            old_x = self._ms_to_x(self.current_position_ms)
             self.current_position_ms = max(0, min(self.duration_ms, int(position_ms)))
-            self.update()
+            new_x = self._ms_to_x(self.current_position_ms)
+            if int(old_x) == int(new_x):
+                return
+            # Only the needle moves; repainting every cue block for it is the
+            # lag during playback.
+            for x in (old_x, new_x):
+                self.update(int(x) - 8, 0, 17, self.height())
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self.segments = list(segments)
@@ -376,7 +383,7 @@ class VisualTimelineWidget(QWidget):
         else:
             super().mouseReleaseEvent(event)
 
-    def paintEvent(self, _event) -> None:
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -385,6 +392,8 @@ class VisualTimelineWidget(QWidget):
         h = self.height()
         if w <= 0 or h <= 0:
             return
+        clip_left = event.rect().left() - 1
+        clip_right = event.rect().right() + 1
 
         # Background
         painter.fillRect(0, 0, w, h, QColor(24, 24, 27))
@@ -406,6 +415,8 @@ class VisualTimelineWidget(QWidget):
             total_sec = int(self.duration_ms / 1000)
             for sec in range(0, total_sec + 1, step_sec):
                 x = self._ms_to_x(sec * 1000)
+                if x < clip_left - 44 or x > clip_right:
+                    continue
                 painter.drawLine(int(x), ruler_h - 6, int(x), ruler_h)
                 mins = sec // 60
                 secs = sec % 60
@@ -426,6 +437,8 @@ class VisualTimelineWidget(QWidget):
             x_start = self._ms_to_x(seg.start_ms)
             x_end = self._ms_to_x(seg.end_ms)
             seg_w = max(6.0, x_end - x_start)
+            if x_start > clip_right or x_start + seg_w < clip_left:
+                continue
 
             block_rect = QRectF(x_start, track_y, seg_w, track_h)
             path = QPainterPath()
