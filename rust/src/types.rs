@@ -363,6 +363,19 @@ pub struct ExtractFirstFrameResult {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ExtractFrameParams {
+    pub video_path: String,
+    pub time_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtractFrameResult {
+    pub image_data: String, // Base64 PNG data URI at the video's full size
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct PreviewLayoutParams {
     pub segments: Vec<CaptionSegment>,
     pub width: u32,

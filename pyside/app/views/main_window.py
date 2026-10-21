@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QDesktopServices,
@@ -71,6 +71,7 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
+from app.views.thumbnail_panel import ThumbnailPanel
 from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
 from app.views.timeline import TimelineScroll, VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
@@ -385,6 +386,12 @@ class MainWindow(QMainWindow):
         self.caption_panel = CaptionPanelWidget(self)
         self._build_menus()
         right_col.addWidget(self.caption_panel, stretch=1)
+
+        # Thumbnail: a frame from the playhead, with its own title written over it
+        self.thumbnail_panel = ThumbnailPanel(self)
+        self.thumbnail_panel.capture_requested.connect(self.trigger_extract_thumbnail)
+        self.thumbnail_panel.save_requested.connect(self._save_thumbnail)
+        right_col.addWidget(self.thumbnail_panel)
 
         # Internal labels retained for telemetry & unit tests without cluttering UI
         self.meta_lbl = QLabel("No video loaded\nDrop a file or click Open Video.")
@@ -1970,75 +1977,73 @@ class MainWindow(QMainWindow):
         )
 
     def trigger_extract_thumbnail(self) -> None:
+        """Take the frame under the playhead into the thumbnail panel."""
         video_path = self.player.media_player.source().toLocalFile()
         if not video_path and self.project.video_path:
             video_path = self.project.video_path
         if not video_path:
             return
-        self.status.showMessage("Extracting thumbnail via Rust core...")
+        time_ms = self.player.media_player.position()
+        self.status.showMessage("Capturing frame...")
         self.thumb_btn.setEnabled(False)
-        self.thumb_btn.setText("Extracting...")
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setVisible(True)
-
         fut = self.core.call(
-            "extractFirstFrame", {"videoPath": str(Path(video_path).resolve())}
+            "extractFrame",
+            {"videoPath": str(Path(video_path).resolve()), "timeMs": time_ms},
         )
 
         def on_done(f):
             try:
                 res = f.result()
                 data_uri = res.get("imageData", "")
-                if "," in data_uri:
-                    b64 = data_uri.split(",", 1)[1]
-                    raw_bytes = base64.b64decode(b64)
-                    qimg = QImage.fromData(raw_bytes)
+                raw_bytes = (
+                    base64.b64decode(data_uri.split(",", 1)[1])
+                    if "," in data_uri
+                    else b""
+                )
+                image = QImage.fromData(raw_bytes)
 
-                    def update_ui(img=qimg):
-                        pixmap = QPixmap.fromImage(img)
-                        thumb_sz = self.thumb_lbl.size()
-                        target_size = (
-                            thumb_sz
-                            if (thumb_sz.width() > 0 and thumb_sz.height() > 0)
-                            else QSize(320, 180)
-                        )
-                        scaled = pixmap.scaled(
-                            target_size,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation,
-                        )
-                        self.thumb_lbl.setPixmap(scaled)
-                        self.player.canvas.set_fallback_pixmap(pixmap)
-                        self.thumb_btn.setEnabled(True)
-                        self.thumb_btn.setText("Extract Thumbnail")
-                        self.progress_bar.setRange(0, 100)
-                        self.progress_bar.setValue(100)
-                        self.progress_bar.setVisible(False)
-                        self.status.showMessage("Thumbnail loaded.", 2000)
+                def show_frame(img=image):
+                    self.thumb_btn.setEnabled(True)
+                    if img.isNull():
+                        self.status.showMessage("No frame at the playhead", 3000)
+                        return
+                    self.thumbnail_panel.set_frame(img)
+                    self.status.showMessage(
+                        f"Frame captured at {format_timestamp(time_ms)}", 3000
+                    )
 
-                    self._in_gui(update_ui)
-                else:
-
-                    def reset_no_img():
-                        self.thumb_btn.setEnabled(True)
-                        self.thumb_btn.setText("Extract Thumbnail")
-                        self.progress_bar.setRange(0, 100)
-                        self.progress_bar.setVisible(False)
-
-                    self._in_gui(reset_no_img)
+                self._in_gui(show_frame)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
 
                 def reset_err(msg=err_msg):
                     self.thumb_btn.setEnabled(True)
-                    self.thumb_btn.setText("Extract Thumbnail")
-                    self.progress_bar.setRange(0, 100)
-                    self.progress_bar.setVisible(False)
-                    QMessageBox.warning(self, "Error", msg)
+                    QMessageBox.warning(self, "Thumbnail", msg)
 
                 self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
+
+    def _save_thumbnail(self, image) -> None:
+        if image is None or image.isNull():
+            return
+        video_path = self.project.video_path or ""
+        default = (
+            str(Path(video_path).with_suffix("")) + ".thumbnail.png"
+            if video_path
+            else "thumbnail.png"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save thumbnail", default, "PNG image (*.png)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        if image.save(path, "PNG"):
+            self.status.showMessage(f"Thumbnail saved: {Path(path).name}", 4000)
+        else:
+            QMessageBox.warning(self, "Thumbnail", f"Could not write {path}")
 
     def closeEvent(self, event) -> None:
         # Nothing of this window should fire after it is gone.

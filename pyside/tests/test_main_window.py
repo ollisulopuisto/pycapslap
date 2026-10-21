@@ -135,13 +135,14 @@ def test_main_window_clean_sidebar_layout(qtbot):
     layout = right_widget.layout()
     assert layout is not None
 
-    # Verify only caption_panel is added to the layout
+    # The sidebar holds the caption panel and, below it, the thumbnail panel
+    # (its title field and preview sit beside the captions)
     layout_widgets = [
         layout.itemAt(i).widget()
         for i in range(layout.count())
         if layout.itemAt(i).widget() is not None
     ]
-    assert layout_widgets == [window.caption_panel]
+    assert layout_widgets == [window.caption_panel, window.thumbnail_panel]
 
     # Check that style section in caption panel starts collapsed
     assert not window.caption_panel.style_content.isVisible()
