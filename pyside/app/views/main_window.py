@@ -371,8 +371,8 @@ class MainWindow(QMainWindow):
         # Visual Timeline Widget, with its edit tools and zoom above it
         self.timeline = VisualTimelineWidget(self)
         self.timeline_scroll = TimelineScroll(self.timeline, self)
-        left_col.addLayout(self._build_timeline_toolbar())
         left_col.addWidget(self.timeline_scroll)
+        left_col.addLayout(self._build_timeline_toolbar())
 
         splitter.addWidget(left_widget)
 
