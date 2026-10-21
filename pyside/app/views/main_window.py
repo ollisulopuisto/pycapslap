@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QButtonGroup,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -67,7 +68,7 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
-from app.views.timeline import VisualTimelineWidget
+from app.views.timeline import TimelineScroll, VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
 
@@ -323,9 +324,11 @@ class MainWindow(QMainWindow):
         self.overlay = self.player.overlay
         left_col.addWidget(self.player, stretch=1)
 
-        # Visual Timeline Widget
+        # Visual Timeline Widget, with its edit tools and zoom above it
         self.timeline = VisualTimelineWidget(self)
-        left_col.addWidget(self.timeline)
+        self.timeline_scroll = TimelineScroll(self.timeline, self)
+        left_col.addLayout(self._build_timeline_toolbar())
+        left_col.addWidget(self.timeline_scroll)
 
         splitter.addWidget(left_widget)
 
@@ -1420,6 +1423,43 @@ class MainWindow(QMainWindow):
             f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
             2000,
         )
+
+    def _build_timeline_toolbar(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.edit_group = QButtonGroup(self)
+        for mode, label, tip in (
+            (
+                "regular",
+                "Regular edit",
+                "Drag a caption's edge: only that caption changes length",
+            ),
+            (
+                "rolling",
+                "Rolling edit",
+                "Drag the splice between two captions: one grows as the other shrinks",
+            ),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(mode == self.timeline.edit_mode)
+            button.setToolTip(tip)
+            button.clicked.connect(
+                lambda _checked=False, m=mode: self.timeline.set_edit_mode(m)
+            )
+            self.edit_group.addButton(button)
+            row.addWidget(button)
+        row.addStretch()
+        for label, tip, action in (
+            ("−", "Zoom out", lambda: self.timeline_scroll.zoom_by(0.8)),
+            ("Fit", "Show the whole video", self.timeline_scroll.fit),
+            ("+", "Zoom in", lambda: self.timeline_scroll.zoom_by(1.25)),
+        ):
+            button = QPushButton(label)
+            button.setToolTip(tip)
+            button.clicked.connect(action)
+            row.addWidget(button)
+        return row
 
     def _set_caption_start_here(self) -> None:
         pos = self.player.media_player.position()

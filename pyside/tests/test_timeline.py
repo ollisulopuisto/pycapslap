@@ -2,7 +2,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import QWidget
 
 from app.models.captions import CaptionSegment
-from app.views.timeline import VisualTimelineWidget
+from app.views.timeline import MAX_ZOOM, VisualTimelineWidget
 
 
 def test_timeline_initial_state(qtbot):
@@ -158,3 +158,57 @@ def test_a_click_on_a_caption_selects_and_seeks_without_retiming(qtbot):
     assert retimed == []
     assert selected[-1] is seg1
     assert (seg1.start_ms, seg1.end_ms) == (1000, 3000)
+
+
+def _touching_timeline(qtbot):
+    timeline = VisualTimelineWidget()
+    timeline.resize(1000, 80)
+    timeline.set_duration(10000)
+    qtbot.addWidget(timeline)
+    timeline.show()
+    seg1 = CaptionSegment(start_ms=1000, end_ms=3000, text="First")
+    seg2 = CaptionSegment(start_ms=3000, end_ms=8000, text="Second")
+    timeline.set_segments([seg1, seg2])
+    return timeline, seg1, seg2
+
+
+def test_rolling_edit_moves_the_splice_and_both_captions_follow(qtbot):
+    timeline, seg1, seg2 = _touching_timeline(qtbot)
+    timeline.set_edit_mode("rolling")
+    retimed = []
+    timeline.cue_retimed.connect(retimed.append)
+
+    # The splice sits at x = 300. Drag it about 1 s to the left.
+    _drag(qtbot, timeline, 300, 200)
+
+    assert seg1.end_ms == seg2.start_ms
+    assert seg1.end_ms < 2500
+    assert seg1.start_ms == 1000
+    assert seg2.end_ms == 8000
+    assert {id(s) for s in retimed} == {id(seg1), id(seg2)}
+
+
+def test_regular_edit_changes_only_the_caption_whose_edge_is_dragged(qtbot):
+    timeline, seg1, seg2 = _touching_timeline(qtbot)
+    timeline.set_edit_mode("regular")
+
+    _drag(qtbot, timeline, 300, 200)
+
+    assert seg1.end_ms < 2500
+    assert (seg2.start_ms, seg2.end_ms) == (3000, 8000)
+
+
+def test_zoom_widens_the_timeline_and_is_limited(qtbot):
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+    timeline.set_duration(10000)
+    timeline.set_fit_width(800)
+    assert timeline.width() == 800
+
+    timeline.set_zoom(4)
+    assert timeline.width() == 3200
+
+    timeline.set_zoom(1000)
+    assert timeline.zoom == MAX_ZOOM
+    timeline.set_zoom(0.1)
+    assert timeline.zoom == 1.0

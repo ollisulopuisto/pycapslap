@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **The timeline zooms, and has two edit tools.** Ctrl + scroll, or the + / − buttons, zoom in on the timeline, so a splice between two captions can be placed to the frame; Fit shows the whole video again. **Regular edit** (the default) moves only the caption whose edge is dragged. **Rolling edit** moves the splice between two touching captions: one grows as the other shrinks, and both stay in place otherwise.
 - **A comma that ends a caption line is not shown.** Whisper's commas stay in the captions, so a later transcript merge brings them back, but the video shows a line without the comma when it ends the line or the caption. Periods are shown as before.
 - **Caption length in the table, and captions whose time does not fit their text.** A Duration column shows each caption's length in seconds. Its reading speed is the characters it holds per second: above 20 a caption is flagged red (too fast for its text, shorten it or give it more time), below 4 amber (it lingers on the screen). The flag and the characters per second are in the cell's tooltip, and the cell follows the text and the timing as they change.
 
