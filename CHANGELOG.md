@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- **Commas at the end of a caption are dropped when Whisper's text comes in.** Periods stay, since they end sentences and lines. Caption text that already exists is not touched.
 - **Caption length in the table, and captions whose time does not fit their text.** A Duration column shows each caption's length in seconds. Its reading speed is the characters it holds per second: above 20 a caption is flagged red (too fast for its text, shorten it or give it more time), below 4 amber (it lingers on the screen). The flag and the characters per second are in the cell's tooltip, and the cell follows the text and the timing as they change.
 
 ## [v26.10.20.1] - 2026-10-20

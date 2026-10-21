@@ -613,6 +613,22 @@ def apply_orphan_rules(segments: list[CaptionSegment]) -> list[CaptionSegment]:
     return segments
 
 
+def strip_trailing_commas(segments: list[CaptionSegment]) -> list[CaptionSegment]:
+    """Drop a comma that ends a caption. Periods stay: they end sentences and lines."""
+    for seg in segments:
+        if seg.words:
+            last = seg.words[-1]
+            stripped = last.text.rstrip()
+            if stripped.endswith(",") and stripped[:-1].strip():
+                last.text = stripped[:-1]
+                seg.text = _join_words(seg.words)
+        else:
+            stripped = seg.text.rstrip()
+            if stripped.endswith(",") and stripped[:-1].strip():
+                seg.text = stripped[:-1]
+    return segments
+
+
 @dataclass
 class PositionOverride:
     start_ms: int
