@@ -7,6 +7,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.21.2] - 2026-10-21
+
 ### Changed
 - **Frame scoring comes from the shared `framescore` package**, also used by YouThumber. The scoring rules and ranking weights are no longer copied in two places. Python 3.13 is now the minimum, because the package requires it.
 
