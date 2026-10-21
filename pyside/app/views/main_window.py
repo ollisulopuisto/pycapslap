@@ -391,6 +391,7 @@ class MainWindow(QMainWindow):
         self.thumbnail_panel = ThumbnailPanel(self)
         self.thumbnail_panel.capture_requested.connect(self.trigger_extract_thumbnail)
         self.thumbnail_panel.save_requested.connect(self._save_thumbnail)
+        self.thumbnail_panel.set_style(self.project.style)
         right_col.addWidget(self.thumbnail_panel)
 
         # Internal labels retained for telemetry & unit tests without cluttering UI
@@ -515,13 +516,17 @@ class MainWindow(QMainWindow):
         self.schedule_preview_layout()
 
     def _on_style_changed(self, style: CaptionStyle) -> None:
+        if style.anchor_pct != self.project.style.anchor_pct:
+            self.project.apply_position_to_all(style.anchor_pct)
         self.project.style = style
+        self.thumbnail_panel.set_style(style)
         self.project.is_dirty = True
         self.player.canvas.set_style(style)
         self.schedule_preview_layout()
 
     def schedule_preview_layout(self) -> None:
         """Ask the renderer for a fresh layout once the edits settle."""
+        self.project.ensure_position()
         self._invalidate_caption_layers()
         self._layout_timer.start()
 

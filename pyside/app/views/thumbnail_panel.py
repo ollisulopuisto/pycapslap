@@ -5,6 +5,7 @@ be saved, so the words can be checked before the PNG is written.
 """
 
 from PySide6.QtCore import Qt, Signal
+from app.models.captions import CaptionStyle
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -26,15 +27,19 @@ from PySide6.QtWidgets import (
 )
 
 
-def compose(frame: QImage, title: str) -> QImage:
-    """A copy of `frame` with `title` set in the lower part, wrapped and centred."""
+def compose(frame: QImage, title: str, style: CaptionStyle | None = None) -> QImage:
+    """A copy of `frame` with `title` set the way the captions are: the caption
+    style's font, colours, outline, glow and background box, at its position."""
+    style = style or CaptionStyle()
     out = frame.convertToFormat(QImage.Format.Format_ARGB32)
     title = title.strip()
     if not title or out.isNull():
         return out
 
-    size = max(12, out.height() // 11)
-    font = QFont("Helvetica Neue", size, QFont.Weight.Black)
+    # The style's sizes are for a 1080-line frame, as the captions are.
+    scale = out.height() / 1080
+    font = QFont(style.font_name)
+    font.setPixelSize(max(12, round(style.font_size * scale)))
     metrics = QFontMetrics(font)
     max_width = out.width() * 0.84
     lines: list[str] = []
@@ -51,7 +56,7 @@ def compose(frame: QImage, title: str) -> QImage:
 
     line_h = metrics.height()
     block_h = line_h * len(lines)
-    top = out.height() * 0.70 - block_h / 2
+    top = out.height() * style.anchor_pct / 100 - block_h / 2
 
     path = QPainterPath()
     for index, text in enumerate(lines):
@@ -62,13 +67,29 @@ def compose(frame: QImage, title: str) -> QImage:
 
     painter = QPainter(out)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-    outline = QPen(QColor("#000000"), max(3, size // 6))
+    if style.background_box:
+        pad = line_h * 0.3
+        box = path.boundingRect().adjusted(-pad, -pad, pad, pad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 140))
+        painter.drawRoundedRect(box, pad, pad)
+    if style.glow_effect:
+        glow_colour = QColor(style.text_color)
+        glow_colour.setAlpha(90)
+        glow = QPen(glow_colour, max(2.0, style.outline_width * scale * 4))
+        glow.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(glow)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+    outline = QPen(
+        QColor(style.outline_color), max(2.0, style.outline_width * scale * 2)
+    )
     outline.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     painter.setPen(outline)
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawPath(path)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.fillPath(path, QColor("#ffffff"))
+    painter.fillPath(path, QColor(style.text_color))
     painter.end()
     return out
 
@@ -80,6 +101,7 @@ class ThumbnailPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.frame: QImage | None = None
+        self.style = CaptionStyle()
 
         # The preview is a 9:16 tile beside the title and buttons, so the panel
         # stays short and the caption table keeps its height.
@@ -121,6 +143,11 @@ class ThumbnailPanel(QWidget):
         side.addStretch()
         layout.addLayout(side, stretch=1)
 
+    def set_style(self, style: CaptionStyle) -> None:
+        """Follow the caption style: the title is set in the same font and colours."""
+        self.style = style
+        self._refresh()
+
     def set_frame(self, frame: QImage) -> None:
         self.frame = frame
         self.save_btn.setEnabled(True)
@@ -129,7 +156,7 @@ class ThumbnailPanel(QWidget):
     def rendered(self) -> QImage | None:
         if self.frame is None:
             return None
-        return compose(self.frame, self.title_edit.text())
+        return compose(self.frame, self.title_edit.text(), self.style)
 
     def _refresh(self) -> None:
         image = self.rendered()

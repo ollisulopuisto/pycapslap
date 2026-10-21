@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -171,7 +173,7 @@ class CaptionPanelWidget(QWidget):
         self.selected_segment: CaptionSegment | None = None
         self.playhead_segment: CaptionSegment | None = None
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
-        self.active_anchor_pct: float = 80.0
+        self.active_anchor_pct: float = 75.0
         self.current_style: CaptionStyle = (
             self.preset_manager.get_default_style() or CaptionStyle()
         )
@@ -417,12 +419,10 @@ class CaptionPanelWidget(QWidget):
         )
         self.btn_apply_all.setStyleSheet(btn_style)
         self.btn_apply_all.setFixedHeight(22)
-        self.btn_apply_all.clicked.connect(
-            lambda: self.apply_position_to_all_requested.emit(self.active_anchor_pct)
-        )
+        self.btn_apply_all.clicked.connect(self._on_apply_all_clicked)
         pos_header.addWidget(self.btn_apply_all, 2, 0, 1, 3)
 
-        self.lbl_anchor_value = QLabel("80.0%")
+        self.lbl_anchor_value = QLabel("75.0%")
         self.lbl_anchor_value.setStyleSheet(
             "font-weight: bold; font-size: 11px; color: #818cf8;"
         )
@@ -797,6 +797,7 @@ class CaptionPanelWidget(QWidget):
 
     def set_style(self, style: CaptionStyle) -> None:
         self.current_style = style
+        self.set_anchor_pct(style.anchor_pct, user_action=False)
         self._block_signals = True
 
         idx = self.combo_template.findData(style.template_id)
@@ -1026,7 +1027,7 @@ class CaptionPanelWidget(QWidget):
         self._block_signals = False
 
     def select_segment(
-        self, segment: CaptionSegment | None, anchor_y_pct: float = 80.0
+        self, segment: CaptionSegment | None, anchor_y_pct: float = 75.0
     ) -> None:
         self.selected_segment = segment
         self.set_anchor_pct(anchor_y_pct, user_action=False)
@@ -1075,6 +1076,10 @@ class CaptionPanelWidget(QWidget):
             self.cue_table.clearSelection()
             self._block_signals = False
 
+    def _on_apply_all_clicked(self) -> None:
+        self._set_style_anchor(self.active_anchor_pct)
+        self.apply_position_to_all_requested.emit(self.active_anchor_pct)
+
     def set_anchor_pct(self, pct: float, user_action: bool = False) -> None:
         self.active_anchor_pct = float(pct)
         self.lbl_anchor_value.setText(f"{self.active_anchor_pct:.1f}%")
@@ -1087,6 +1092,14 @@ class CaptionPanelWidget(QWidget):
             self.position_override_changed.emit(
                 self.selected_segment, self.active_anchor_pct
             )
+        elif user_action:
+            # No caption picked: the position is the style's, so every caption moves.
+            self._set_style_anchor(self.active_anchor_pct)
+
+    def _set_style_anchor(self, pct: float) -> None:
+        # A new style object, so the listener can tell the position changed.
+        self.current_style = replace(self.current_style, anchor_pct=float(pct))
+        self.style_changed.emit(self.current_style)
 
     def _on_slider_changed(self, val: int) -> None:
         self.set_anchor_pct(float(val), user_action=True)
