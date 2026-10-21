@@ -20,13 +20,14 @@ from dataclasses import dataclass
 from PySide6.QtCore import QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage
 
-from .frame_scoring import (
+from framescore import (
     FrameCandidate,
     assign_hands_to_faces,
     expression_score,
     gesture_score,
     head_shoulders_box,
     rank_candidates,
+    sharpness,
 )
 
 logger = logging.getLogger(__name__)
@@ -236,18 +237,9 @@ def _sharpness(image: QImage) -> float:
     small = image.scaledToWidth(
         96, Qt.TransformationMode.SmoothTransformation
     ).convertToFormat(QImage.Format.Format_Grayscale8)
-    width, height, stride = small.width(), small.height(), small.bytesPerLine()
-    data = bytes(small.constBits())
-    edges = []
-    for y in range(height - 1):
-        row, below = y * stride, (y + 1) * stride
-        for x in range(width - 1):
-            value = data[row + x]
-            edges.append(abs(value - data[row + x + 1]) + abs(value - data[below + x]))
-    if not edges:
-        return 0.0
-    mean = sum(edges) / len(edges)
-    return sum((e - mean) ** 2 for e in edges) / len(edges)
+    return sharpness(
+        bytes(small.constBits()), small.width(), small.height(), small.bytesPerLine()
+    )
 
 
 def _jpeg(image: QImage, width: int) -> bytes:

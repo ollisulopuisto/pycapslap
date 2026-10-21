@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Changed
+- **Frame scoring comes from the shared `framescore` package**, also used by YouThumber. The scoring rules and ranking weights are no longer copied in two places. Python 3.13 is now the minimum, because the package requires it.
+
 ### Added
 - **A wider window, with the sidebar taking three parts to the preview column's two.** The window opens at 1060 px, so the caption list and its controls have room beside the 9:16 preview.
 - **Suggested thumbnail frames, from Apple Vision (macOS).** Suggest frames samples the video every few seconds and scores the faces in each frame: Apple's own capture quality, sharpness, the expression (smile, open mouth, raised eyebrows) and the gesture (a raised hand, most of all a pointing one). The best frames appear as pictures under the thumbnail; picking one takes that frame and the time is saved in the sidecar. The scoring is the same as YouThumber's.
