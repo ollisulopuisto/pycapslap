@@ -4,12 +4,14 @@ The title is its own field in the sidebar, and the preview shows it as it will
 be saved, so the words can be checked before the PNG is written.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from app.models.captions import CaptionStyle
+from app.views.caption_panel import format_timestamp
 from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetrics,
+    QIcon,
     QImage,
     QPainter,
     QPainterPath,
@@ -21,6 +23,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -97,6 +101,9 @@ def compose(frame: QImage, title: str, style: CaptionStyle | None = None) -> QIm
 class ThumbnailPanel(QWidget):
     capture_requested = Signal()
     save_requested = Signal(object)
+    suggest_requested = Signal()
+    # A suggested frame was picked: its time in seconds.
+    suggestion_chosen = Signal(float)
     # The title was edited: the project should be saved with the new headline.
     changed = Signal()
 
@@ -108,9 +115,12 @@ class ThumbnailPanel(QWidget):
 
         # The preview is a 9:16 tile beside the title and buttons, so the panel
         # stays short and the caption table keeps its height.
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(8, 6, 8, 6)
+        outer.setSpacing(6)
+        layout = QHBoxLayout()
         layout.setSpacing(8)
+        outer.addLayout(layout)
 
         self.preview = QLabel("No frame")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -143,13 +153,62 @@ class ThumbnailPanel(QWidget):
         self.save_btn.clicked.connect(lambda: self.save_requested.emit(self.rendered()))
         side.addWidget(self.capture_btn)
         side.addWidget(self.save_btn)
+        self.suggest_btn = QPushButton("Suggest frames")
+        self.suggest_btn.setToolTip(
+            "Look through the video for the most expressive frames, by Apple Vision"
+        )
+        self.suggest_btn.clicked.connect(self.suggest_requested.emit)
+        side.addWidget(self.suggest_btn)
         side.addStretch()
         layout.addLayout(side, stretch=1)
+
+        # Suggested frames: pick one to make it the thumbnail
+        self.suggestions = QListWidget()
+        self.suggestions.setViewMode(QListWidget.ViewMode.IconMode)
+        self.suggestions.setFlow(QListWidget.Flow.LeftToRight)
+        self.suggestions.setIconSize(QSize(128, 72))
+        self.suggestions.setFixedHeight(96)
+        self.suggestions.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.suggestions.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.suggestions.setVisible(False)
+        self.suggestions.itemClicked.connect(
+            lambda item: self.suggestion_chosen.emit(
+                item.data(Qt.ItemDataRole.UserRole)
+            )
+        )
+        outer.addWidget(self.suggestions)
 
     def set_style(self, style: CaptionStyle) -> None:
         """Follow the caption style: the title is set in the same font and colours."""
         self.style = style
         self._refresh()
+
+    def set_scanning(self, scanning: bool, fraction: float = 0.0) -> None:
+        self.suggest_btn.setEnabled(not scanning)
+        self.suggest_btn.setText(
+            f"Scanning {round(fraction * 100)}%" if scanning else "Suggest frames"
+        )
+
+    def show_suggestions(self, frames: list) -> None:
+        """Show the suggested frames as small pictures, best first."""
+        self.set_scanning(False)
+        self.suggestions.clear()
+        for frame in frames:
+            picture = QImage.fromData(frame.jpeg)
+            item = QListWidgetItem(
+                QIcon(QPixmap.fromImage(picture)),
+                format_timestamp(int(frame.time_seconds * 1000)),
+            )
+            item.setData(Qt.ItemDataRole.UserRole, frame.time_seconds)
+            item.setToolTip(
+                ", ".join(f"{name} {value}" for name, value in frame.scores.items())
+            )
+            self.suggestions.addItem(item)
+        self.suggestions.setVisible(bool(frames))
 
     def state(self) -> dict:
         """What the project saves: the frame's time and the headline."""
