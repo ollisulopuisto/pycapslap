@@ -8,8 +8,9 @@ import threading
 from pathlib import Path
 
 import psutil
-from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
+    QAction,
     QDesktopServices,
     QGuiApplication,
     QDragEnterEvent,
@@ -20,9 +21,12 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QGridLayout,
     QDialog,
     QFileDialog,
+    QButtonGroup,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -31,6 +35,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QProgressBar,
+    QToolButton,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -53,7 +58,6 @@ from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
 from app.services.broll.picks import Picks as BrollPicks
 from app.views.broll_dialog import BrollDialog
-from app.views.flow_layout import FlowLayout
 from app.views.portal_dialog import PublishDialog, portal_from_settings
 from app.models.review import (
     ReviewMismatch,
@@ -67,7 +71,9 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
-from app.views.timeline import VisualTimelineWidget
+from app.views.thumbnail_panel import ThumbnailPanel
+from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
+from app.views.timeline import TimelineScroll, VisualTimelineWidget
 from app.views.video_canvas import SAFE_PLATFORMS
 from app.views.video_player import VideoPlayerWidget
 
@@ -128,6 +134,20 @@ LAYER_CACHE_SIZE = 24
 MAX_LAYER_RENDERS = 3
 
 
+# Dark combo boxes to match the buttons; without this the text is white on white.
+def combo_style() -> str:
+    return (
+        "QComboBox { background-color: #27272a; color: #e4e4e7; font-size: 11px; "
+        "font-weight: 500; border: 1px solid #3f3f46; border-radius: 8px; "
+        "padding: 2px 8px; }"
+        "QComboBox:hover { background-color: #3f3f46; border-color: #52525b; }"
+        "QComboBox::drop-down { border: none; width: 18px; }"
+        f"QComboBox::down-arrow {{ image: url({chevron_url()}); width: 12px; height: 12px; }}"
+        "QComboBox QAbstractItemView { background-color: #27272a; color: #f4f4f5; "
+        "selection-background-color: #4f46e5; }"
+    )
+
+
 class MainWindow(QMainWindow):
     # Core replies arrive on the core client's reader thread. They reach the GUI
     # through this signal, queued onto the window's thread. QTimer.singleShot called
@@ -141,8 +161,12 @@ class MainWindow(QMainWindow):
     ):
         super().__init__(parent)
         self.setWindowTitle("PyCapSlap — High-Performance Native Video Captions")
-        self.resize(1300, 850)
-        self.setMinimumSize(1000, 650)
+        # Most video is vertical, so the window opens tall: the 9:16 preview
+        # gets the height and the sidebar sits beside it.
+        screen = QGuiApplication.primaryScreen()
+        height = min(900, screen.availableGeometry().height() - 60) if screen else 900
+        self.resize(760, height)
+        self.setMinimumSize(720, 640)
         self.setAcceptDrops(True)
 
         self.core = core_client or CoreClient(parent=self)
@@ -206,26 +230,30 @@ class MainWindow(QMainWindow):
         left_col.setContentsMargins(4, 4, 4, 4)
         left_col.setSpacing(8)
 
-        # Top Action Bar
-        action_bar = FlowLayout(spacing=8)
+        # Top Action Bar: square tiles in three columns. A vertical video leaves
+        # a narrow column beside its preview, so the bar has to fit that.
+        action_bar = QGridLayout()
+        action_bar.setSpacing(4)
         self.action_bar = action_bar
-        self.open_btn = QPushButton("Open Video...")
+        self.open_btn = dense_tile("Open", "folder", "Open a video")
         self.open_btn.clicked.connect(self.open_file_dialog)
-        action_bar.addWidget(self.open_btn)
+        action_bar.addWidget(self.open_btn, 0, 0)
 
-        self.save_btn = QPushButton("Save Project")
-        self.save_btn.setToolTip(
-            "Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]"
+        self.save_btn = dense_tile(
+            "Save",
+            "save",
+            "Save captions to sidecar file (.capslap.json) [Cmd+S / Ctrl+S]",
         )
         self.save_btn.clicked.connect(self._on_save_requested)
         self.save_btn.setEnabled(False)
-        action_bar.addWidget(self.save_btn)
+        action_bar.addWidget(self.save_btn, 0, 1)
 
         # Client review: send the captions to a client's browser, take the fixes back
-        self.review_btn = QPushButton("Client Review")
-        self.review_btn.setToolTip(
+        self.review_btn = dense_tile(
+            "Review",
+            "people",
             "Send captions to a client to check and correct on the review page, "
-            "then import what they send back"
+            "then import what they send back",
         )
         review_menu = QMenu(self.review_btn)
         review_menu.addAction("Export for Review…", self._on_export_for_review)
@@ -238,19 +266,21 @@ class MainWindow(QMainWindow):
             "Open Review Page",
             lambda: QDesktopServices.openUrl(QUrl(REVIEW_PAGE_URL)),
         )
+        self.review_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.review_btn.setMenu(review_menu)
         self.review_btn.setEnabled(False)
-        action_bar.addWidget(self.review_btn)
+        action_bar.addWidget(self.review_btn, 0, 2)
 
         # B-roll: Creative Commons pictures and footage over the audio, credited
-        self.broll_btn = QPushButton("B-roll Reel…")
-        self.broll_btn.setToolTip(
+        self.broll_btn = dense_tile(
+            "B-roll",
+            "film",
             "Find Creative Commons pictures and footage for the episode, pick "
-            "what fits and build a reel with credits"
+            "what fits and build a reel with credits",
         )
         self.broll_btn.clicked.connect(self._on_broll)
         self.broll_btn.setEnabled(False)
-        action_bar.addWidget(self.broll_btn)
+        action_bar.addWidget(self.broll_btn, 1, 0)
 
         # The export format belongs here, not in a dialog at render time: it
         # decides the canvas the captions are laid out on, so the preview
@@ -262,7 +292,13 @@ class MainWindow(QMainWindow):
             "Aspect ratio of the exported video. The preview shows this frame."
         )
         self.format_combo.currentIndexChanged.connect(self._on_export_format_changed)
-        action_bar.addWidget(self.format_combo)
+        self.format_combo.setStyleSheet(combo_style())
+        self.format_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.format_combo.setMinimumContentsLength(9)
+        self.format_combo.setFixedHeight(ROW_HEIGHT)
+        action_bar.addWidget(self.format_combo, 1, 1)
 
         # A smaller copy from the same encode: small for clients to proof, the
         # full-size one for publishing.
@@ -273,49 +309,58 @@ class MainWindow(QMainWindow):
         self.proof_combo.setToolTip(
             "Also render a smaller proof copy, in the same pass as the full-size video"
         )
-        action_bar.addWidget(self.proof_combo)
+        self.proof_combo.setStyleSheet(combo_style())
+        self.proof_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.proof_combo.setMinimumContentsLength(9)
+        self.proof_combo.setFixedHeight(ROW_HEIGHT)
+        action_bar.addWidget(self.proof_combo, 1, 2)
 
         # Intro and outro clips, joined to the render in the same encode.
-        self.bumpers_btn = QPushButton()
+        self.bumpers_btn = dense_tile("Intro/outro", "layers", "Intro and outro clips")
         self.bumpers_menu = QMenu(self.bumpers_btn)
         self.bumpers_menu.aboutToShow.connect(self._fill_bumpers_menu)
+        self.bumpers_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.bumpers_btn.setMenu(self.bumpers_menu)
-        action_bar.addWidget(self.bumpers_btn)
+        action_bar.addWidget(self.bumpers_btn, 2, 0)
         self._update_bumpers_button()
 
         # A logo in a corner, for videos that don't carry one of their own.
-        self.bug_btn = QPushButton()
+        self.bug_btn = dense_tile("Logo", "tag", "A logo in a corner of the video")
         self.bug_menu = QMenu(self.bug_btn)
         self.bug_menu.aboutToShow.connect(self._fill_bug_menu)
+        self.bug_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.bug_btn.setMenu(self.bug_menu)
-        action_bar.addWidget(self.bug_btn)
+        action_bar.addWidget(self.bug_btn, 2, 1)
         self._apply_bug()
 
-        self.render_btn = QPushButton("Render Video")
-        self.render_btn.setToolTip("Render and export video with burned-in captions")
-        self.render_btn.setStyleSheet(
-            "background-color: #4f46e5; color: #ffffff; font-weight: bold; padding: 5px 14px;"
+        self.thumb_btn = dense_tile(
+            "Thumbnail", "image", "Extract a thumbnail from the video"
+        )
+        self.thumb_btn.clicked.connect(self.trigger_extract_thumbnail)
+        self.thumb_btn.setEnabled(False)
+        action_bar.addWidget(self.thumb_btn, 2, 2)
+
+        self.render_btn = dense_tile(
+            "Render",
+            "share",
+            "Render and export video with burned-in captions",
+            primary=True,
         )
         self.render_btn.clicked.connect(self._on_render_video_requested)
         self.render_btn.setEnabled(False)
-        action_bar.addWidget(self.render_btn)
+        action_bar.addWidget(self.render_btn, 3, 0, 1, 3)
 
-        self.thumb_btn = QPushButton("Extract Thumbnail")
-        self.thumb_btn.clicked.connect(self.trigger_extract_thumbnail)
-        self.thumb_btn.setEnabled(False)
-        action_bar.addWidget(self.thumb_btn)
-
+        for column in range(3):
+            action_bar.setColumnStretch(column, 1)
         left_col.addLayout(action_bar)
 
-        # Cmd+S / Ctrl+S shortcut for Save
         # I / O set the trim's start / end at the playhead, as in video editors: stop
         # playback on the right frame and mark it. Text fields keep their letters,
         # since a line edit claims plain keys before shortcuts see them.
         QShortcut(QKeySequence(Qt.Key.Key_I), self, activated=self._set_trim_start_here)
         QShortcut(QKeySequence(Qt.Key.Key_O), self, activated=self._set_trim_end_here)
-        QShortcut(
-            QKeySequence.StandardKey.Save, self, activated=self._on_save_requested
-        )
 
         # Video Player Widget with embedded Caption Overlay
         self.player = VideoPlayerWidget(self)
@@ -323,9 +368,11 @@ class MainWindow(QMainWindow):
         self.overlay = self.player.overlay
         left_col.addWidget(self.player, stretch=1)
 
-        # Visual Timeline Widget
+        # Visual Timeline Widget, with its edit tools and zoom above it
         self.timeline = VisualTimelineWidget(self)
-        left_col.addWidget(self.timeline)
+        self.timeline_scroll = TimelineScroll(self.timeline, self)
+        left_col.addLayout(self._build_timeline_toolbar())
+        left_col.addWidget(self.timeline_scroll)
 
         splitter.addWidget(left_widget)
 
@@ -337,7 +384,14 @@ class MainWindow(QMainWindow):
 
         # Caption Editor & Inspector Panel
         self.caption_panel = CaptionPanelWidget(self)
+        self._build_menus()
         right_col.addWidget(self.caption_panel, stretch=1)
+
+        # Thumbnail: a frame from the playhead, with its own title written over it
+        self.thumbnail_panel = ThumbnailPanel(self)
+        self.thumbnail_panel.capture_requested.connect(self.trigger_extract_thumbnail)
+        self.thumbnail_panel.save_requested.connect(self._save_thumbnail)
+        right_col.addWidget(self.thumbnail_panel)
 
         # Internal labels retained for telemetry & unit tests without cluttering UI
         self.meta_lbl = QLabel("No video loaded\nDrop a file or click Open Video.")
@@ -345,8 +399,9 @@ class MainWindow(QMainWindow):
         self.perf_lbl = QLabel("Measuring...")
 
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([420, 360])
         root_layout.addWidget(splitter)
 
         # Status Bar
@@ -1385,7 +1440,7 @@ class MainWindow(QMainWindow):
                     if proof_path:
                         output_path += f" (proof: {os.path.basename(proof_path)})"
                 self._in_gui(lambda: self.render_btn.setEnabled(True))
-                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.render_btn.setText("Render"))
                 self._in_gui(lambda: self.progress_bar.setVisible(False))
                 self._in_gui(
                     lambda: self.status.showMessage(
@@ -1395,7 +1450,7 @@ class MainWindow(QMainWindow):
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
                 self._in_gui(lambda: self.render_btn.setEnabled(True))
-                self._in_gui(lambda: self.render_btn.setText("Render Video"))
+                self._in_gui(lambda: self.render_btn.setText("Render"))
                 self._in_gui(lambda: self.progress_bar.setVisible(False))
                 self._in_gui(
                     lambda msg=err_msg: QMessageBox.warning(self, "Render Error", msg),
@@ -1420,6 +1475,130 @@ class MainWindow(QMainWindow):
             f"Trim end set to {self._format_trim_time(self.timeline.trim_end_ms)}",
             2000,
         )
+
+    def _build_menus(self) -> None:
+        """Menu bar with the standard shortcuts. Each item presses the button it
+        names, so that button's own enabled state decides whether it does anything."""
+        panel = self.caption_panel
+        bar = self.menuBar()
+        bar.setStyleSheet(
+            "QMenuBar { background-color: #18181b; color: #f4f4f5; } "
+            "QMenuBar::item:selected { background-color: #27272a; } "
+            "QMenu { background-color: #27272a; color: #f4f4f5; } "
+            "QMenu::item:selected { background-color: #4f46e5; }"
+        )
+
+        def press(button: QPushButton):
+            def run() -> None:
+                if button.isEnabled():
+                    button.click()
+
+            return run
+
+        def add(menu: QMenu, text: str, key, action, role=None) -> None:
+            item = QAction(text, self)
+            if key is not None:
+                item.setShortcut(QKeySequence(key))
+            if role is not None:
+                item.setMenuRole(role)
+            item.triggered.connect(lambda _checked=False: action())
+            menu.addAction(item)
+
+        file_menu = bar.addMenu("File")
+        add(
+            file_menu,
+            "Open Video…",
+            QKeySequence.StandardKey.Open,
+            press(self.open_btn),
+        )
+        add(
+            file_menu,
+            "Save Project",
+            QKeySequence.StandardKey.Save,
+            press(self.save_btn),
+        )
+        file_menu.addSeparator()
+        add(file_menu, "Close Window", QKeySequence.StandardKey.Close, self.close)
+        add(
+            file_menu,
+            "Quit PyCapSlap",
+            QKeySequence.StandardKey.Quit,
+            QApplication.quit,
+            QAction.MenuRole.QuitRole,
+        )
+
+        edit_menu = bar.addMenu("Edit")
+        add(edit_menu, "Add Caption", "Ctrl+Shift+N", press(panel.btn_add_cue))
+
+        video_menu = bar.addMenu("Video")
+        add(video_menu, "Render Video…", "Ctrl+R", press(self.render_btn))
+        add(video_menu, "Extract Thumbnail", "Ctrl+Shift+T", press(self.thumb_btn))
+        add(video_menu, "B-roll Reel…", "Ctrl+Shift+B", press(self.broll_btn))
+
+        view_menu = bar.addMenu("View")
+        add(
+            view_menu,
+            "Zoom In",
+            QKeySequence.StandardKey.ZoomIn,
+            lambda: self.timeline_scroll.zoom_by(1.25),
+        )
+        add(
+            view_menu,
+            "Zoom Out",
+            QKeySequence.StandardKey.ZoomOut,
+            lambda: self.timeline_scroll.zoom_by(0.8),
+        )
+        add(view_menu, "Fit Timeline", "Ctrl+0", self.timeline_scroll.fit)
+
+        caption_menu = bar.addMenu("Captions")
+        add(caption_menu, "Transcribe", "Ctrl+T", press(panel.btn_transcribe))
+        add(caption_menu, "Auto Dodge", "Ctrl+Shift+D", press(panel.btn_autoplace))
+        add(caption_menu, "Fix Syllables", None, press(panel.btn_combine_syllables))
+        add(caption_menu, "Group Words", None, press(panel.btn_group_words))
+        add(caption_menu, "Fix Orphans", None, press(panel.btn_fix_orphans))
+        caption_menu.addSeparator()
+        add(
+            caption_menu,
+            "Whisper Settings…",
+            QKeySequence.StandardKey.Preferences,
+            press(panel.btn_whisper_settings),
+            QAction.MenuRole.PreferencesRole,
+        )
+
+    def _build_timeline_toolbar(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        self.edit_group = QButtonGroup(self)
+        for mode, label, tip in (
+            (
+                "regular",
+                "Regular edit",
+                "Drag a caption's edge: only that caption changes length",
+            ),
+            (
+                "rolling",
+                "Rolling edit",
+                "Drag the splice between two captions: one grows as the other shrinks",
+            ),
+        ):
+            button = chip(label, tip)
+            button.setChecked(mode == self.timeline.edit_mode)
+            button.clicked.connect(
+                lambda _checked=False, m=mode: self.timeline.set_edit_mode(m)
+            )
+            self.edit_group.addButton(button)
+            row.addWidget(button)
+        row.addStretch()
+        for label, tip, action in (
+            ("−", "Zoom out", lambda: self.timeline_scroll.zoom_by(0.8)),
+            ("Fit", "Show the whole video", self.timeline_scroll.fit),
+            ("+", "Zoom in", lambda: self.timeline_scroll.zoom_by(1.25)),
+        ):
+            button = QPushButton(label)
+            button.setToolTip(tip)
+            button.clicked.connect(action)
+            row.addWidget(button)
+        return row
 
     def _set_caption_start_here(self) -> None:
         pos = self.player.media_player.position()
@@ -1798,75 +1977,73 @@ class MainWindow(QMainWindow):
         )
 
     def trigger_extract_thumbnail(self) -> None:
+        """Take the frame under the playhead into the thumbnail panel."""
         video_path = self.player.media_player.source().toLocalFile()
         if not video_path and self.project.video_path:
             video_path = self.project.video_path
         if not video_path:
             return
-        self.status.showMessage("Extracting thumbnail via Rust core...")
+        time_ms = self.player.media_player.position()
+        self.status.showMessage("Capturing frame...")
         self.thumb_btn.setEnabled(False)
-        self.thumb_btn.setText("Extracting...")
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setVisible(True)
-
         fut = self.core.call(
-            "extractFirstFrame", {"videoPath": str(Path(video_path).resolve())}
+            "extractFrame",
+            {"videoPath": str(Path(video_path).resolve()), "timeMs": time_ms},
         )
 
         def on_done(f):
             try:
                 res = f.result()
                 data_uri = res.get("imageData", "")
-                if "," in data_uri:
-                    b64 = data_uri.split(",", 1)[1]
-                    raw_bytes = base64.b64decode(b64)
-                    qimg = QImage.fromData(raw_bytes)
+                raw_bytes = (
+                    base64.b64decode(data_uri.split(",", 1)[1])
+                    if "," in data_uri
+                    else b""
+                )
+                image = QImage.fromData(raw_bytes)
 
-                    def update_ui(img=qimg):
-                        pixmap = QPixmap.fromImage(img)
-                        thumb_sz = self.thumb_lbl.size()
-                        target_size = (
-                            thumb_sz
-                            if (thumb_sz.width() > 0 and thumb_sz.height() > 0)
-                            else QSize(320, 180)
-                        )
-                        scaled = pixmap.scaled(
-                            target_size,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation,
-                        )
-                        self.thumb_lbl.setPixmap(scaled)
-                        self.player.canvas.set_fallback_pixmap(pixmap)
-                        self.thumb_btn.setEnabled(True)
-                        self.thumb_btn.setText("Extract Thumbnail")
-                        self.progress_bar.setRange(0, 100)
-                        self.progress_bar.setValue(100)
-                        self.progress_bar.setVisible(False)
-                        self.status.showMessage("Thumbnail loaded.", 2000)
+                def show_frame(img=image):
+                    self.thumb_btn.setEnabled(True)
+                    if img.isNull():
+                        self.status.showMessage("No frame at the playhead", 3000)
+                        return
+                    self.thumbnail_panel.set_frame(img)
+                    self.status.showMessage(
+                        f"Frame captured at {format_timestamp(time_ms)}", 3000
+                    )
 
-                    self._in_gui(update_ui)
-                else:
-
-                    def reset_no_img():
-                        self.thumb_btn.setEnabled(True)
-                        self.thumb_btn.setText("Extract Thumbnail")
-                        self.progress_bar.setRange(0, 100)
-                        self.progress_bar.setVisible(False)
-
-                    self._in_gui(reset_no_img)
+                self._in_gui(show_frame)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
 
                 def reset_err(msg=err_msg):
                     self.thumb_btn.setEnabled(True)
-                    self.thumb_btn.setText("Extract Thumbnail")
-                    self.progress_bar.setRange(0, 100)
-                    self.progress_bar.setVisible(False)
-                    QMessageBox.warning(self, "Error", msg)
+                    QMessageBox.warning(self, "Thumbnail", msg)
 
                 self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
+
+    def _save_thumbnail(self, image) -> None:
+        if image is None or image.isNull():
+            return
+        video_path = self.project.video_path or ""
+        default = (
+            str(Path(video_path).with_suffix("")) + ".thumbnail.png"
+            if video_path
+            else "thumbnail.png"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save thumbnail", default, "PNG image (*.png)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        if image.save(path, "PNG"):
+            self.status.showMessage(f"Thumbnail saved: {Path(path).name}", 4000)
+        else:
+            QMessageBox.warning(self, "Thumbnail", f"Could not write {path}")
 
     def closeEvent(self, event) -> None:
         # Nothing of this window should fire after it is gone.

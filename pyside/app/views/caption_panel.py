@@ -1,19 +1,19 @@
-import re
-
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
     QLabel,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QStyledItemDelegate,
     QTableWidget,
@@ -28,6 +28,7 @@ from app.models.captions import (
     CaptionSegment,
     CaptionStyle,
     apply_orphan_rules,
+    chars_per_second,
     clamped_segment_time,
     combine_separated_syllables,
     delete_segment,
@@ -36,15 +37,24 @@ from app.models.captions import (
     shift_word_to_next,
     shift_word_to_prev,
     split_segment,
+    timing_flag,
 )
 from app.services.preset_manager import PresetManager
 from app.services.spellcheck import get_shared_checker
-from app.views.flow_layout import FlowLayout
+from app.views.tile_buttons import SMALL_QSS, tile
+from app.views.wrapped_text import WrappedText
 
 SPELL_ERROR_COLOR = "#f87171"
 
 
 NUDGE_MS = 100
+
+COL_START, COL_END, COL_DURATION, COL_TEXT = range(4)
+FLAG_COLORS = {"short": "#f87171", "long": "#fbbf24"}
+TIMING_NOTES = {
+    "short": "too fast for its text: lengthen the cue or shorten the text",
+    "long": "too slow for its text: it lingers on the screen",
+}
 
 
 def format_timestamp(ms: int) -> str:
@@ -87,7 +97,7 @@ class SpellCheckDelegate(QStyledItemDelegate):
 
     def paint(self, painter, option, index) -> None:  # type: ignore[override]
         super().paint(painter, option, index)
-        if index.column() != 2:
+        if index.column() != COL_TEXT:
             return
         spans = self.panel.spell_spans_for_row(index.row())
         if not spans:
@@ -95,13 +105,11 @@ class SpellCheckDelegate(QStyledItemDelegate):
 
         opt = option
         self.initStyleOption(opt, index)
-        metrics = QFontMetrics(opt.font)
         text = index.data() or ""
         # Mirror the 4px text inset QCommonStyle uses for item text.
         rect = opt.rect.adjusted(4, 0, -4, 0)
-        baseline = (
-            rect.top() + (rect.height() + metrics.ascent() - metrics.descent()) / 2
-        )
+        wrapped = WrappedText(text, opt.font, rect.width())
+        top = rect.top() + (rect.height() - wrapped.height) / 2
 
         painter.save()
         pen = QPen(QColor(SPELL_ERROR_COLOR))
@@ -109,12 +117,13 @@ class SpellCheckDelegate(QStyledItemDelegate):
         painter.setPen(pen)
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
         for start, end, _word in spans:
-            x1 = rect.left() + metrics.horizontalAdvance(text[:start])
-            x2 = rect.left() + metrics.horizontalAdvance(text[:end])
-            if x1 >= rect.right():
-                break
-            x2 = min(x2, rect.right())
-            painter.drawPath(_squiggle(x1, x2, baseline + 3))
+            for x1, x2, baseline in wrapped.underlines(start, end):
+                if x1 >= rect.width():
+                    continue
+                x2 = min(x2, rect.width())
+                painter.drawPath(
+                    _squiggle(rect.left() + x1, rect.left() + x2, top + baseline + 3)
+                )
         painter.restore()
 
 
@@ -174,91 +183,110 @@ class CaptionPanelWidget(QWidget):
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(8, 6, 8, 8)
+        layout.setSpacing(6)
 
         # Header with actions
-        header_layout = FlowLayout(spacing=8)
+        header_layout = QGridLayout()
+        header_layout.setSpacing(4)
         self.header_layout = header_layout
         self.lbl_title = QLabel("Captions")
         self.lbl_title.setStyleSheet(
             "font-weight: bold; font-size: 14px; color: #f4f4f5;"
         )
-        header_layout.addWidget(self.lbl_title)
+        header_layout.addWidget(self.lbl_title, 0, 0, 1, 3)
 
-        self.btn_add_cue = QPushButton("+ Add")
+        self.btn_add_cue = tile("Add", "plus", compact=True)
         self.btn_add_cue.setToolTip(
             "Add a new caption cue at the current playback position"
         )
         self.btn_add_cue.clicked.connect(self.add_cue_requested.emit)
-        header_layout.addWidget(self.btn_add_cue)
+        header_layout.addWidget(self.btn_add_cue, 1, 0)
 
-        self.btn_transcribe = QPushButton("Transcribe")
+        self.btn_transcribe = tile("Transcribe", "mic", compact=True)
         self.btn_transcribe.setToolTip("Run AI Whisper transcription on video audio")
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
-        header_layout.addWidget(self.btn_transcribe)
+        header_layout.addWidget(self.btn_transcribe, 1, 1)
 
-        self.btn_whisper_settings = QPushButton("⚙")
-        self.btn_whisper_settings.setFixedWidth(28)
+        self.btn_whisper_settings = tile("Whisper", "gear", compact=True)
         self.btn_whisper_settings.setToolTip(
             "Choose local (offline) Whisper vs. OpenAI API, and manage models"
         )
         self.btn_whisper_settings.clicked.connect(self.whisper_settings_requested.emit)
-        header_layout.addWidget(self.btn_whisper_settings)
+        header_layout.addWidget(self.btn_whisper_settings, 3, 1)
 
-        self.btn_autoplace = QPushButton("Auto Dodge")
+        self.btn_autoplace = tile("Auto Dodge", "wand", compact=True)
         self.btn_autoplace.setToolTip(
             "Analyze video frame activity and automatically dodge faces/busy areas"
         )
         self.btn_autoplace.clicked.connect(self.auto_place_requested.emit)
-        header_layout.addWidget(self.btn_autoplace)
+        header_layout.addWidget(self.btn_autoplace, 2, 0)
 
-        self.btn_combine_syllables = QPushButton("Fix Syllables")
+        self.btn_combine_syllables = tile("Fix Syllables", "text", compact=True)
         self.btn_combine_syllables.setToolTip(
             "Combine separated syllables and fix broken words across segments"
         )
         self.btn_combine_syllables.clicked.connect(self._on_combine_syllables_clicked)
-        header_layout.addWidget(self.btn_combine_syllables)
+        header_layout.addWidget(self.btn_combine_syllables, 2, 1)
 
-        self.btn_group_words = QPushButton("Group Words")
+        self.btn_group_words = tile("Group Words", "grid", compact=True)
         self.btn_group_words.setToolTip(
             "Merge a word-per-cue transcript into phrase-sized cues, breaking "
             "on sentence ends, pauses and length — what you need when every "
             "caption holds a single word"
         )
         self.btn_group_words.clicked.connect(self._on_group_words_clicked)
-        header_layout.addWidget(self.btn_group_words)
+        header_layout.addWidget(self.btn_group_words, 2, 2)
 
-        self.btn_fix_orphans = QPushButton("Fix Orphans")
+        self.btn_fix_orphans = tile("Fix Orphans", "align", compact=True)
         self.btn_fix_orphans.setToolTip(
             "Prevent trailing conjunctions ('tai', 'ja') and lone words after commas"
         )
         self.btn_fix_orphans.clicked.connect(self._on_fix_orphans_clicked)
-        header_layout.addWidget(self.btn_fix_orphans)
+        header_layout.addWidget(self.btn_fix_orphans, 3, 0)
 
-        self.btn_save = QPushButton("Save")
+        self.btn_save = tile("Save", "save", compact=True)
         self.btn_save.setToolTip("Save captions to sidecar file (.capslap.json)")
         self.btn_save.clicked.connect(self.save_requested.emit)
-        header_layout.addWidget(self.btn_save)
+        header_layout.addWidget(self.btn_save, 1, 2)
 
+        # Three equal columns: every button in a row lines up with the one above.
+        for column in range(3):
+            header_layout.setColumnStretch(column, 1)
+        for button in (
+            self.btn_add_cue,
+            self.btn_transcribe,
+            self.btn_autoplace,
+            self.btn_combine_syllables,
+            self.btn_group_words,
+            self.btn_fix_orphans,
+            self.btn_save,
+        ):
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         layout.addLayout(header_layout)
 
         # Table of cues
-        self.cue_table = QTableWidget(0, 3)
-        self.cue_table.setHorizontalHeaderLabels(["Start", "End", "Text"])
+        self.cue_table = QTableWidget(0, 4)
+        self.cue_table.setHorizontalHeaderLabels(["Start", "End", "Duration", "Text"])
+        for column in (COL_START, COL_END, COL_DURATION):
+            self.cue_table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.cue_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.cue_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.cue_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.Stretch
+            COL_TEXT, QHeaderView.ResizeMode.Stretch
         )
         self.cue_table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.cue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Long captions wrap onto more lines instead of running off the column.
+        self.cue_table.setWordWrap(True)
+        self.cue_table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.cue_table.horizontalHeader().sectionResized.connect(
+            lambda *_args: self.cue_table.resizeRowsToContents()
+        )
         self.cue_table.verticalHeader().setVisible(False)
         self.cue_table.setStyleSheet("""
             QTableWidget {
@@ -282,7 +310,7 @@ class CaptionPanelWidget(QWidget):
         """)
         self.cue_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
-        self.cue_table.setItemDelegateForColumn(2, SpellCheckDelegate(self))
+        self.cue_table.setItemDelegateForColumn(COL_TEXT, SpellCheckDelegate(self))
         self.cue_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.cue_table.customContextMenuRequested.connect(self._on_table_context_menu)
         self.cue_table.setToolTip(
@@ -295,64 +323,53 @@ class CaptionPanelWidget(QWidget):
         layout.addWidget(self.cue_table, stretch=1)
 
         # Row for word-level shifting
-        row_shift = QHBoxLayout()
-        row_shift.setSpacing(6)
+        row_shift = QGridLayout()
+        row_shift.setSpacing(4)
         lbl_shift = QLabel("Adjust words:")
         lbl_shift.setStyleSheet("font-size: 11px; color: #a1a1aa;")
-        row_shift.addWidget(lbl_shift)
+        row_shift.addWidget(lbl_shift, 0, 0, 1, 3)
 
         self.btn_mark_start = QPushButton("In")
         self.btn_mark_start.setToolTip(
             "Set the active caption's start to the playback position"
         )
-        self.btn_mark_start.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_mark_start.setStyleSheet(SMALL_QSS)
         self.btn_mark_start.clicked.connect(self.mark_start_requested.emit)
-        row_shift.addWidget(self.btn_mark_start)
+        row_shift.addWidget(self.btn_mark_start, 1, 0)
 
         self.btn_mark_end = QPushButton("Out")
         self.btn_mark_end.setToolTip(
             "Set the active caption's end to the playback position"
         )
-        self.btn_mark_end.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_mark_end.setStyleSheet(SMALL_QSS)
         self.btn_mark_end.clicked.connect(self.mark_end_requested.emit)
-        row_shift.addWidget(self.btn_mark_end)
+        row_shift.addWidget(self.btn_mark_end, 1, 1)
 
         self.btn_shift_prev = QPushButton("◀ Shift Start")
         self.btn_shift_prev.setToolTip(
             "Move first word of selected segment to previous segment"
         )
-        self.btn_shift_prev.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_shift_prev.setStyleSheet(SMALL_QSS)
         self.btn_shift_prev.clicked.connect(self._on_shift_prev_clicked)
-        row_shift.addWidget(self.btn_shift_prev)
+        row_shift.addWidget(self.btn_shift_prev, 2, 0)
 
         self.btn_shift_next = QPushButton("Shift End ▶")
         self.btn_shift_next.setToolTip(
             "Move last word of selected segment to next segment"
         )
-        self.btn_shift_next.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_shift_next.setStyleSheet(SMALL_QSS)
         self.btn_shift_next.clicked.connect(self._on_shift_next_clicked)
-        row_shift.addWidget(self.btn_shift_next)
+        row_shift.addWidget(self.btn_shift_next, 2, 1, 1, 2)
 
         self.btn_delete_empty = QPushButton("🗑 Delete Empty")
         self.btn_delete_empty.setToolTip(
             "Delete the selected caption slot once all its words have been "
             "shifted away and it is empty"
         )
-        self.btn_delete_empty.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_delete_empty.setStyleSheet(SMALL_QSS)
         self.btn_delete_empty.setEnabled(False)
         self.btn_delete_empty.clicked.connect(self._on_delete_empty_clicked)
-        row_shift.addWidget(self.btn_delete_empty)
-        row_shift.addStretch()
+        row_shift.addWidget(self.btn_delete_empty, 1, 2)
         layout.addLayout(row_shift)
 
         # Compact Position controls
@@ -362,24 +379,20 @@ class CaptionPanelWidget(QWidget):
         pos_layout.setContentsMargins(8, 6, 8, 6)
         pos_layout.setSpacing(4)
 
-        pos_header = QHBoxLayout()
+        pos_header = QGridLayout()
         pos_header.setSpacing(6)
         pos_lbl = QLabel("Position:")
         pos_lbl.setStyleSheet("font-weight: 600; font-size: 11px; color: #a1a1aa;")
-        pos_header.addWidget(pos_lbl)
+        pos_header.addWidget(pos_lbl, 0, 0)
 
-        btn_style = (
-            "QPushButton { font-size: 11px; padding: 2px 6px; border-radius: 3px; "
-            "background-color: #3f3f46; color: #f4f4f5; } "
-            "QPushButton:hover { background-color: #52525b; }"
-        )
+        btn_style = SMALL_QSS
         self.btn_top = QPushButton("Top (15%)")
         self.btn_top.setStyleSheet(btn_style)
         self.btn_top.setFixedHeight(22)
         self.btn_top.clicked.connect(
             lambda: self.set_anchor_pct(15.0, user_action=True)
         )
-        pos_header.addWidget(self.btn_top)
+        pos_header.addWidget(self.btn_top, 1, 0)
 
         self.btn_middle = QPushButton("Mid (50%)")
         self.btn_middle.setStyleSheet(btn_style)
@@ -387,7 +400,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_middle.clicked.connect(
             lambda: self.set_anchor_pct(50.0, user_action=True)
         )
-        pos_header.addWidget(self.btn_middle)
+        pos_header.addWidget(self.btn_middle, 1, 1)
 
         self.btn_bottom = QPushButton("Bot (80%)")
         self.btn_bottom.setStyleSheet(btn_style)
@@ -395,7 +408,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_bottom.clicked.connect(
             lambda: self.set_anchor_pct(80.0, user_action=True)
         )
-        pos_header.addWidget(self.btn_bottom)
+        pos_header.addWidget(self.btn_bottom, 1, 2)
 
         self.btn_apply_all = QPushButton("Apply to All")
         self.btn_apply_all.setToolTip(
@@ -407,15 +420,15 @@ class CaptionPanelWidget(QWidget):
         self.btn_apply_all.clicked.connect(
             lambda: self.apply_position_to_all_requested.emit(self.active_anchor_pct)
         )
-        pos_header.addWidget(self.btn_apply_all)
-
-        pos_header.addStretch()
+        pos_header.addWidget(self.btn_apply_all, 2, 0, 1, 3)
 
         self.lbl_anchor_value = QLabel("80.0%")
         self.lbl_anchor_value.setStyleSheet(
             "font-weight: bold; font-size: 11px; color: #818cf8;"
         )
-        pos_header.addWidget(self.lbl_anchor_value)
+        pos_header.addWidget(
+            self.lbl_anchor_value, 0, 2, alignment=Qt.AlignmentFlag.AlignRight
+        )
         pos_layout.addLayout(pos_header)
 
         # Precision slider
@@ -434,7 +447,7 @@ class CaptionPanelWidget(QWidget):
         safe_row.addWidget(safe_lbl)
 
         btn_safe_base = (
-            "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+            "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 6px; "
             "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
             "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
         )
@@ -511,9 +524,7 @@ class CaptionPanelWidget(QWidget):
         self.btn_save_preset.setToolTip(
             "Save current style preference (font, color, size, etc.) for this show"
         )
-        self.btn_save_preset.setStyleSheet(
-            "QPushButton { font-size: 11px; padding: 2px 8px; }"
-        )
+        self.btn_save_preset.setStyleSheet(SMALL_QSS)
         self.btn_save_preset.clicked.connect(self._on_save_preset_clicked)
         row_preset.addWidget(self.btn_save_preset)
 
@@ -871,41 +882,42 @@ class CaptionPanelWidget(QWidget):
         else:
             self._spell_cache.pop(row, None)
 
+    def _char_under(self, row: int, pos: QPoint) -> int | None:
+        """The character boundary under a viewport point in a text cell."""
+        item = self.cue_table.item(row, COL_TEXT)
+        if not item:
+            return None
+        rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
+        wrapped = WrappedText(item.text(), self.cue_table.font(), rect.width())
+        top = rect.top() + (rect.height() - wrapped.height) / 2
+        return wrapped.char_at(pos.x() - rect.left(), pos.y() - top)
+
     def _spell_span_at(self, row: int, pos: QPoint) -> tuple[int, int, str] | None:
         """The misspelled word under a viewport point, if any."""
         spans = self.spell_spans_for_row(row)
         if not spans:
             return None
-        item = self.cue_table.item(row, 2)
-        if not item:
+        char = self._char_under(row, pos)
+        if char is None:
             return None
-        rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
-        metrics = QFontMetrics(self.cue_table.font())
-        text = item.text()
         for start, end, word in spans:
-            x1 = rect.left() + metrics.horizontalAdvance(text[:start])
-            x2 = rect.left() + metrics.horizontalAdvance(text[:end])
-            if x1 <= pos.x() <= x2:
+            if start < char <= end:
                 return (start, end, word)
         return None
 
     def _token_under(self, row: int, pos: QPoint) -> int | None:
         """Index of the word at or just after a viewport point in a text cell."""
-        item = self.cue_table.item(row, 2)
-        if not item:
+        char = self._char_under(row, pos)
+        if char is None:
             return None
+        item = self.cue_table.item(row, COL_TEXT)
         rect: QRect = self.cue_table.visualItemRect(item).adjusted(4, 0, -4, 0)
-        metrics = QFontMetrics(self.cue_table.font())
-        text = item.text()
-        offset = pos.x() - rect.left()
-        for index, match in enumerate(re.finditer(r"\S+", text)):
-            if offset <= metrics.horizontalAdvance(text[: match.end()]):
-                return index
-        return None
+        wrapped = WrappedText(item.text(), self.cue_table.font(), rect.width())
+        return wrapped.token_index(char)
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         index = self.cue_table.indexAt(pos)
-        if not index.isValid() or index.column() != 2:
+        if not index.isValid() or index.column() != COL_TEXT:
             return
         row = index.row()
         menu = QMenu(self)
@@ -1000,9 +1012,16 @@ class CaptionPanelWidget(QWidget):
                 | Qt.ItemFlag.ItemIsEditable
             )
 
-            self.cue_table.setItem(row, 0, item_start)
-            self.cue_table.setItem(row, 1, item_end)
-            self.cue_table.setItem(row, 2, item_text)
+            item_duration = QTableWidgetItem()
+            item_duration.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            )
+
+            self.cue_table.setItem(row, COL_START, item_start)
+            self.cue_table.setItem(row, COL_END, item_end)
+            self.cue_table.setItem(row, COL_DURATION, item_duration)
+            self.cue_table.setItem(row, COL_TEXT, item_text)
+            self._refresh_duration_cell(row)
 
         self._block_signals = False
 
@@ -1097,7 +1116,7 @@ class CaptionPanelWidget(QWidget):
         self.cue_table.setCurrentItem(None)
         # Ensure any edited text in table items is completely synchronized to the segment objects
         for row in range(min(self.cue_table.rowCount(), len(self.segments))):
-            item = self.cue_table.item(row, 2)
+            item = self.cue_table.item(row, COL_TEXT)
             if item and item.text() != self.segments[row].text:
                 self.segments[row].update_text(item.text())
                 self.segment_updated.emit(self.segments[row])
@@ -1109,12 +1128,13 @@ class CaptionPanelWidget(QWidget):
         col = item.column()
         if not (0 <= row < len(self.segments)):
             return
-        if col == 2:
+        if col == COL_TEXT:
             seg = self.segments[row]
             seg.update_text(item.text())
             self._invalidate_spell_cache(row)
+            self._refresh_duration_cell(row)
             self.segment_updated.emit(seg)
-        elif col in (0, 1):
+        elif col in (COL_START, COL_END):
             self._apply_edited_timecode(row, col, item.text())
 
     def _apply_edited_timecode(self, row: int, col: int, text: str) -> None:
@@ -1124,8 +1144,8 @@ class CaptionPanelWidget(QWidget):
             # Unparseable: put the cue's own time back in the cell.
             self._refresh_time_cells(row)
             return
-        start_ms = parsed if col == 0 else seg.start_ms
-        end_ms = parsed if col == 1 else seg.end_ms
+        start_ms = parsed if col == COL_START else seg.start_ms
+        end_ms = parsed if col == COL_END else seg.end_ms
         self._retime_segment(row, start_ms, end_ms)
 
     def _retime_segment(self, row: int, start_ms: int, end_ms: int) -> None:
@@ -1140,10 +1160,33 @@ class CaptionPanelWidget(QWidget):
         seg = self.segments[row]
         was_blocked = self._block_signals
         self._block_signals = True
-        for col, ms in ((0, seg.start_ms), (1, seg.end_ms)):
+        for col, ms in ((COL_START, seg.start_ms), (COL_END, seg.end_ms)):
             cell = self.cue_table.item(row, col)
             if cell:
                 cell.setText(format_timestamp(ms))
+        self._refresh_duration_cell(row)
+        self._block_signals = was_blocked
+
+    def _refresh_duration_cell(self, row: int) -> None:
+        """Show the cue's length, flagged when the time does not fit its text."""
+        seg = self.segments[row]
+        cell = self.cue_table.item(row, COL_DURATION)
+        if cell is None:
+            return
+        was_blocked = self._block_signals
+        self._block_signals = True
+        cell.setText(f"{(seg.end_ms - seg.start_ms) / 1000:.2f} s")
+        flag = timing_flag(seg)
+        if flag:
+            cell.setForeground(QColor(FLAG_COLORS[flag]))
+        else:
+            cell.setData(Qt.ItemDataRole.ForegroundRole, None)
+        cps = chars_per_second(seg)
+        if cps is None:
+            cell.setToolTip("")
+        else:
+            note = f"; {TIMING_NOTES[flag]}" if flag else ""
+            cell.setToolTip(f"{cps:.1f} characters per second{note}")
         self._block_signals = was_blocked
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
@@ -1238,13 +1281,13 @@ class CaptionPanelWidget(QWidget):
             c = colors[plat_id]
             if is_active:
                 btn.setStyleSheet(
-                    f"QPushButton {{ font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 3px; "
+                    f"QPushButton {{ font-size: 11px; font-weight: bold; padding: 2px 8px; border-radius: 6px; "
                     f"border: 1px solid {c}; background-color: {c}33; color: {c}; }} "
                     f"QPushButton:hover {{ background-color: {c}55; }}"
                 )
             else:
                 btn.setStyleSheet(
-                    "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 3px; "
+                    "QPushButton { font-size: 11px; padding: 2px 8px; border-radius: 6px; "
                     "border: 1px solid #3f3f46; background-color: #27272a; color: #a1a1aa; } "
                     "QPushButton:hover { background-color: #3f3f46; color: #ffffff; }"
                 )

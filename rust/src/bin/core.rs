@@ -176,6 +176,18 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             },
             Err(e) => write_err(&id, format!("Invalid params for checkModelExists: {}", e)),
         },
+        "extractFrame" => {
+            match serde_json::from_value::<core::types::ExtractFrameParams>(r.params) {
+                Ok(p) => match core::video::extract_frame_png(&p.video_path, p.time_ms) {
+                    Ok(image_data) => write_ok(
+                        &id,
+                        &core::types::ExtractFrameResult { image_data },
+                    ),
+                    Err(e) => write_err(&id, e.to_string()),
+                },
+                Err(e) => write_err(&id, format!("Invalid params for extractFrame: {}", e)),
+            }
+        }
         "extractFirstFrame" => {
             match serde_json::from_value::<core::types::ExtractFirstFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_first_frame(&p.video_path) {

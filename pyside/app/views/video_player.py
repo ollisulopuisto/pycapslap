@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.views.tile_buttons import SMALL_QSS
 from app.views.video_canvas import VideoCanvasWidget
 
 
@@ -64,22 +65,29 @@ class VideoPlayerWidget(QWidget):
         layout.addWidget(self.canvas, stretch=1)
 
         # Controls Bar
-        controls_layout = QHBoxLayout()
-        controls_layout.setContentsMargins(8, 4, 8, 8)
-        controls_layout.setSpacing(8)
+        # Two rows: the transport buttons, then the scrubber with its times. A
+        # single row runs out of width on a narrow (vertical-video) window.
+        self.setStyleSheet(SMALL_QSS)
+        controls_layout = QVBoxLayout()
+        controls_layout.setContentsMargins(8, 2, 8, 4)
+        controls_layout.setSpacing(4)
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(4)
+        seek_row = QHBoxLayout()
+        seek_row.setSpacing(8)
 
         # Play/Pause button
         self.play_btn = QPushButton("Play")
         self.play_btn.setFixedWidth(65)
         self.play_btn.clicked.connect(self.toggle_play_pause)
-        controls_layout.addWidget(self.play_btn)
+        buttons_row.addWidget(self.play_btn)
 
         # Stop: back to the start of the trim, to check where playback begins
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setFixedWidth(55)
         self.stop_btn.setToolTip("Stop and go back to the start of the trim")
         self.stop_btn.clicked.connect(self.stop)
-        controls_layout.addWidget(self.stop_btn)
+        buttons_row.addWidget(self.stop_btn)
 
         # Mark the trim's start / end at the playhead (also the I and O keys)
         self.mark_in_btn = QPushButton("I")
@@ -93,11 +101,11 @@ class VideoPlayerWidget(QWidget):
             # Clicking must not take focus, or Space would press the button
             # instead of playing and pausing.
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            controls_layout.addWidget(btn)
+            buttons_row.addWidget(btn)
 
         # Time label (current)
         self.time_lbl = QLabel("00:00")
-        controls_layout.addWidget(self.time_lbl)
+        seek_row.addWidget(self.time_lbl)
 
         # Timeline Slider (Scrubber)
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -105,11 +113,11 @@ class VideoPlayerWidget(QWidget):
         self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
-        controls_layout.addWidget(self.slider, stretch=1)
+        seek_row.addWidget(self.slider, stretch=1)
 
         # Duration label
         self.duration_lbl = QLabel("00:00")
-        controls_layout.addWidget(self.duration_lbl)
+        seek_row.addWidget(self.duration_lbl)
 
         # Playback speed button (e.g. 1.0x, 1.25x, 1.5x, 2.0x)
         self.playback_rate: float = 1.0
@@ -118,29 +126,25 @@ class VideoPlayerWidget(QWidget):
         self.speed_btn.setToolTip(
             "Playback speed: click to cycle (1.0x, 1.25x, 1.5x, 2.0x)"
         )
-        self.speed_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27272a;
-                color: #e4e4e7;
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                font-size: 11px;
-                font-weight: 600;
-                padding: 2px 4px;
-            }
-            QPushButton:hover {
-                background-color: #3f3f46;
-                color: #ffffff;
-            }
-        """)
         self.speed_btn.clicked.connect(self._cycle_playback_speed)
-        controls_layout.addWidget(self.speed_btn)
+        buttons_row.addStretch()
+        buttons_row.addWidget(self.speed_btn)
+        for btn in (
+            self.play_btn,
+            self.stop_btn,
+            self.mark_in_btn,
+            self.mark_out_btn,
+            self.speed_btn,
+        ):
+            btn.setFixedHeight(24)
 
         # Seek latency indicator
         self.latency_lbl = QLabel("Seek: -- ms")
         self.latency_lbl.setStyleSheet("color: #888888; font-size: 11px;")
-        controls_layout.addWidget(self.latency_lbl)
+        seek_row.addWidget(self.latency_lbl)
 
+        controls_layout.addLayout(buttons_row)
+        controls_layout.addLayout(seek_row)
         layout.addLayout(controls_layout)
 
         # Keyboard shortcuts: + / - step one source frame.

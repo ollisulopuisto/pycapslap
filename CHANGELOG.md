@@ -7,6 +7,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Added
+- **Thumbnails from the playhead.** Extract Thumbnail takes the frame under the playhead at full size. The thumbnail panel under the captions shows it with a title field of its own; the preview draws the title as it will be saved, and Save thumbnail… writes a PNG next to the video.
+- **One button style across the window.** Buttons, chips and the format and proof menus share one height and one set of state colours, the menu arrows sit in their own slot, and the caption sidebar's controls are tighter, so the caption table is taller.
+- **The top bar is shorter and Render has a share icon.** The export buttons are shorter tiles, the format and proof menus match their height, and menu arrows sit inside their tiles so they do not push the rows out of line.
+- **The caption buttons are compact.** Add, Transcribe, Save, Auto Dodge and the others in the caption header are short buttons with a small icon beside the label, so the caption table gets the height.
+- **The window opens tall, for vertical video.** Most footage is 9:16, so the window now opens 760 px wide and up to 900 px high, with the preview taking the height and the caption sidebar beside it. The top bar and the buttons are square tiles with icons, in three columns, and their colours show the state: lit when a mode is on, solid for Render, faded when an action is unavailable.
+- **Long captions wrap in the sidebar.** A caption's text now wraps across lines in the table instead of running off the column, so the whole text is visible, and a word on a later line can be split off like any other.
+- **Menus and standard shortcuts.** File, Edit, Video, View and Captions menus, with the usual Mac keys: Cmd+O opens a video, Cmd+S saves, Cmd+W closes, Cmd+Q quits, Cmd+, opens the Whisper settings, Cmd+= / Cmd+- zoom the timeline and Cmd+0 fits it. Cmd+R renders, Cmd+T transcribes. Each item presses its button, so it does nothing while that button is disabled.
+- **The buttons line up.** The top bar and the caption header are grids now, so each button sits in the same column as the one above it instead of wrapping where the window happens to end. The export and proof menus are dark like the buttons.
+- **The timeline zooms, and has two edit tools.** Ctrl + scroll, or the + / − buttons, zoom in on the timeline, so a splice between two captions can be placed to the frame; Fit shows the whole video again. **Regular edit** (the default) moves only the caption whose edge is dragged. **Rolling edit** moves the splice between two touching captions: one grows as the other shrinks, and both stay in place otherwise.
+- **A comma that ends a caption line is not shown.** Whisper's commas stay in the captions, so a later transcript merge brings them back, but the video shows a line without the comma when it ends the line or the caption. Periods are shown as before.
+- **Caption length in the table, and captions whose time does not fit their text.** A Duration column shows each caption's length in seconds. Its reading speed is the characters it holds per second: above 20 a caption is flagged red (too fast for its text, shorten it or give it more time), below 4 amber (it lingers on the screen). The flag and the characters per second are in the cell's tooltip, and the cell follows the text and the timing as they change.
+
 ## [v26.10.20.1] - 2026-10-20
 
 ### Added

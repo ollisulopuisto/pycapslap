@@ -11,9 +11,10 @@ from PySide6.QtGui import (
     QPen,
     QPolygonF,
 )
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QFrame, QScrollArea, QWidget
 
 from app.models.captions import (
+    MIN_SEGMENT_MS,
     CaptionSegment,
     clamped_segment_time,
     set_segment_time,
@@ -25,6 +26,12 @@ _TRACK_TOP = 24
 _CUE_EDGE_PX = 6
 # Less movement than this is a click, not a drag.
 _CUE_DRAG_THRESHOLD_PX = 3
+# Two captions whose edges are this close (about a frame) share a splice.
+_ADJACENT_MS = 40
+MAX_ZOOM = 40.0
+# Seconds between ruler ticks; the first one that leaves room for a label.
+_TICK_STEPS = (1, 2, 5, 10, 15, 30, 60, 120, 300, 600)
+_MIN_TICK_PX = 70
 
 
 @dataclass
@@ -35,6 +42,8 @@ class _CueDrag:
     start_ms: int
     end_ms: int
     moved: bool = False
+    # The caption sharing the edge being dragged, when rolling; it moves too.
+    partner: "CaptionSegment | None" = None
 
 
 class VisualTimelineWidget(QWidget):
@@ -43,6 +52,8 @@ class VisualTimelineWidget(QWidget):
     trim_range_changed = Signal(int, int)
     # A caption block was dragged to a new time; the cue already holds it.
     cue_retimed = Signal(object)
+    # Ctrl + wheel: a zoom factor and the x it should keep in place.
+    zoom_requested = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -58,12 +69,54 @@ class VisualTimelineWidget(QWidget):
         self.trim_end_ms = 0
         self._trim_drag_handle: str | None = None
         self._cue_drag: _CueDrag | None = None
+        self.edit_mode = "regular"
+        self.zoom = 1.0
+        self._fit_width = 0
         self._trim_min_gap_ms = 100
         self.setToolTip(
             "Drag the blue trim handles to shorten the beginning or end,\n"
             "or press I / O to set the start / end at the playhead.\n"
-            "Drag a caption's edges to retime it, or its body to move it"
+            "Drag a caption's edges to retime it, or its body to move it.\n"
+            "Ctrl + scroll zooms the timeline"
         )
+
+    def set_edit_mode(self, mode: str) -> None:
+        """'regular': an edge changes only its own caption. 'rolling': an edge
+        shared with the next or previous caption moves the splice, so one grows
+        as the other shrinks."""
+        if mode not in ("regular", "rolling"):
+            raise ValueError(f"unknown edit mode: {mode}")
+        self.edit_mode = mode
+
+    def set_fit_width(self, width: int) -> None:
+        """The width that shows the whole video at zoom 1."""
+        self._fit_width = max(0, int(width))
+        self._apply_width()
+
+    def set_zoom(self, zoom: float) -> None:
+        self.zoom = min(MAX_ZOOM, max(1.0, zoom))
+        self._apply_width()
+
+    def _apply_width(self) -> None:
+        if self._fit_width > 0:
+            self.setFixedWidth(max(1, int(self._fit_width * self.zoom)))
+        self.update()
+
+    def _tick_step_sec(self) -> int:
+        seconds = max(1e-9, self.duration_ms / 1000)
+        px_per_sec = self.width() / seconds
+        for step in _TICK_STEPS:
+            if step * px_per_sec >= _MIN_TICK_PX:
+                return step
+        return _TICK_STEPS[-1]
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier and self.duration_ms:
+            factor = 1.25 if event.angleDelta().y() > 0 else 0.8
+            self.zoom_requested.emit(factor, event.position().x())
+            event.accept()
+        else:
+            super().wheelEvent(event)
 
     def set_duration(self, duration_ms: int) -> None:
         old_duration = self.duration_ms
@@ -170,6 +223,10 @@ class VisualTimelineWidget(QWidget):
             return
         ms_per_px = self.duration_ms / max(1, self.width() - 1)
         dx = round((x - drag.press_x) * ms_per_px)
+        if drag.partner is not None:
+            self._roll(drag, dx)
+            self.update()
+            return
         prev_end = self.segments[idx - 1].end_ms if idx > 0 else 0
         next_start = (
             self.segments[idx + 1].start_ms
@@ -195,11 +252,44 @@ class VisualTimelineWidget(QWidget):
         set_segment_time(drag.seg, start, end)
         self.update()
 
+    def _roll_partner(self, seg: CaptionSegment, mode: str) -> CaptionSegment | None:
+        """The caption on the other side of an edge that is shared with it."""
+        if self.edit_mode != "rolling" or mode not in ("start", "end"):
+            return None
+        idx = self._index_of(seg)
+        if mode == "start" and idx > 0:
+            prev = self.segments[idx - 1]
+            if abs(prev.end_ms - seg.start_ms) <= _ADJACENT_MS:
+                return prev
+        if mode == "end" and idx + 1 < len(self.segments):
+            nxt = self.segments[idx + 1]
+            if abs(nxt.start_ms - seg.end_ms) <= _ADJACENT_MS:
+                return nxt
+        return None
+
+    def _roll(self, drag: _CueDrag, dx: int) -> None:
+        """Move the splice: the dragged caption and its partner share the new edge."""
+        if drag.mode == "start":
+            # The partner comes before the dragged caption and ends at its start.
+            lo = drag.partner.start_ms + MIN_SEGMENT_MS
+            hi = drag.end_ms - MIN_SEGMENT_MS
+            edge = min(hi, max(lo, drag.start_ms + dx))
+            set_segment_time(drag.partner, drag.partner.start_ms, edge)
+            set_segment_time(drag.seg, edge, drag.end_ms)
+        else:
+            lo = drag.start_ms + MIN_SEGMENT_MS
+            hi = drag.partner.end_ms - MIN_SEGMENT_MS
+            edge = min(hi, max(lo, drag.end_ms + dx))
+            set_segment_time(drag.seg, drag.start_ms, edge)
+            set_segment_time(drag.partner, edge, drag.partner.end_ms)
+
     def _finish_cue_drag(self) -> None:
         drag = self._cue_drag
         self._cue_drag = None
         if drag and drag.moved:
             self.cue_retimed.emit(drag.seg)
+            if drag.partner is not None:
+                self.cue_retimed.emit(drag.partner)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -228,7 +318,12 @@ class VisualTimelineWidget(QWidget):
             if hit:
                 seg, mode = hit
                 self._cue_drag = _CueDrag(
-                    seg, mode, event.position().x(), seg.start_ms, seg.end_ms
+                    seg,
+                    mode,
+                    event.position().x(),
+                    seg.start_ms,
+                    seg.end_ms,
+                    partner=self._roll_partner(seg, mode),
                 )
             self.update()
             event.accept()
@@ -307,7 +402,7 @@ class VisualTimelineWidget(QWidget):
             painter.setPen(QColor(161, 161, 170))
 
             # Intervals: 1s ticks, 5s labels if duration < 60s, else 10s
-            step_sec = 5 if self.duration_ms < 60_000 else 10
+            step_sec = self._tick_step_sec()
             total_sec = int(self.duration_ms / 1000)
             for sec in range(0, total_sec + 1, step_sec):
                 x = self._ms_to_x(sec * 1000)
@@ -400,3 +495,40 @@ class VisualTimelineWidget(QWidget):
             painter.setBrush(needle_color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPolygon(triangle)
+
+
+class TimelineScroll(QScrollArea):
+    """Scrolls the timeline sideways once zoomed in past the window's width."""
+
+    def __init__(self, timeline: VisualTimelineWidget, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.timeline = timeline
+        self.setWidget(timeline)
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setFixedHeight(
+            timeline.height() + self.horizontalScrollBar().sizeHint().height()
+        )
+        timeline.zoom_requested.connect(self.zoom_by)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self.timeline.set_fit_width(self.viewport().width())
+
+    def zoom_by(self, factor: float, anchor_x: float | None = None) -> None:
+        """Zoom by `factor`, keeping `anchor_x` (timeline pixels) where it is on screen.
+        Without an anchor the middle of the view is kept."""
+        bar = self.horizontalScrollBar()
+        old_width = max(1, self.timeline.width())
+        if anchor_x is None:
+            anchor_x = bar.value() + self.viewport().width() / 2
+        offset = anchor_x - bar.value()
+        self.timeline.set_zoom(self.timeline.zoom * factor)
+        ratio = self.timeline.width() / old_width
+        bar.setValue(int(anchor_x * ratio - offset))
+
+    def fit(self) -> None:
+        self.timeline.set_zoom(1.0)
+        self.horizontalScrollBar().setValue(0)

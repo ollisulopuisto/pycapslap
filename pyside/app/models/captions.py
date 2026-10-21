@@ -434,6 +434,33 @@ def clamped_segment_time(
     return (start_ms, end_ms)
 
 
+# Reading speed, in characters per second, a caption should fit. Faster than
+# MAX and the cue flashes by; slower than MIN it lingers over a few words.
+MAX_CHARS_PER_SEC = 20.0
+MIN_CHARS_PER_SEC = 4.0
+
+
+def chars_per_second(seg: CaptionSegment) -> float | None:
+    """Reading speed of a cue, or None when it has no text or no length."""
+    text = seg.text.strip()
+    duration_sec = (seg.end_ms - seg.start_ms) / 1000
+    if not text or duration_sec <= 0:
+        return None
+    return len(text) / duration_sec
+
+
+def timing_flag(seg: CaptionSegment) -> str | None:
+    """'short' when the time is too little for the text, 'long' when it is too much."""
+    cps = chars_per_second(seg)
+    if cps is None:
+        return None
+    if cps > MAX_CHARS_PER_SEC:
+        return "short"
+    if cps < MIN_CHARS_PER_SEC:
+        return "long"
+    return None
+
+
 def shift_word_to_prev(segments: list[CaptionSegment], index: int) -> None:
     """Move the first word of segments[index] to the end of segments[index - 1]."""
     if index <= 0 or index >= len(segments):

@@ -1876,6 +1876,38 @@ fn placeholder_frame(ffmpeg: &str) -> anyhow::Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
+/// The frame at `time_ms` as a PNG data URI, at the video's full size, for a
+/// thumbnail. Not cached: it is taken once, when the user asks for it.
+pub fn extract_frame_png(video_path: &str, time_ms: u64) -> anyhow::Result<String> {
+    let ffmpeg_path = get_ffmpeg_path_sync();
+    let seconds = format!("{}.{:03}", time_ms / 1000, time_ms % 1000);
+    let output = Command::new(&ffmpeg_path)
+        .arg("-ss")
+        .arg(&seconds)
+        .arg("-i")
+        .arg(video_path)
+        .arg("-vframes")
+        .arg("1")
+        .arg("-f")
+        .arg("image2")
+        .arg("-c:v")
+        .arg("png")
+        .arg("-")
+        .output()
+        .map_err(|e| anyhow::anyhow!("Failed to run ffmpeg: {}", e))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        return Err(anyhow::anyhow!(
+            "FFmpeg failed to extract frame: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    use base64::Engine;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&output.stdout)
+    ))
+}
+
 /// Extract the first frame of a video as a base64 encoded data URI (JPEG format, bounded to UI preview dimensions)
 pub fn extract_first_frame(video_path: &str) -> anyhow::Result<String> {
     // Check in-memory cache first
