@@ -1,19 +1,93 @@
 import time
 
-from PySide6.QtCore import Qt, QUrl, Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QShortcut
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from app.views.tile_buttons import SMALL_QSS
+from app.views.caption_panel import format_timestamp
+from app.views.tile_buttons import SMALL_QSS, icon
 from app.views.video_canvas import VideoCanvasWidget
+
+
+class Scrubber(QWidget):
+    """The playback scrubber, laid out like the timeline: 0 at the left edge and
+    the end at the right, so its playhead sits where the timeline's does."""
+
+    sliderPressed = Signal()
+    sliderMoved = Signal(int)
+    sliderReleased = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._min = 0
+        self._max = 0
+        self._value = 0
+        self._dragging = False
+        self.setFixedHeight(18)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def setRange(self, low: int, high: int) -> None:
+        self._min = low
+        self._max = max(low, high)
+        self._value = min(max(self._value, self._min), self._max)
+        self.update()
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, value: int) -> None:
+        self._value = min(max(int(value), self._min), self._max)
+        self.update()
+
+    def _x_for(self, ms: int) -> float:
+        if self._max <= self._min:
+            return 0.0
+        return (ms - self._min) / (self._max - self._min) * max(1, self.width() - 1)
+
+    def _ms_at(self, x: float) -> int:
+        fraction = min(1.0, max(0.0, x / max(1, self.width() - 1)))
+        return int(self._min + fraction * (self._max - self._min))
+
+    def _move_to(self, x: float) -> None:
+        self._value = self._ms_at(x)
+        self.update()
+        self.sliderMoved.emit(self._value)
+
+    def paintEvent(self, _event) -> None:  # type: ignore[override]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        centre = self.height() / 2
+        x = self._x_for(self._value)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#3f3f46"))
+        painter.drawRoundedRect(QRectF(0, centre - 2, self.width(), 4), 2, 2)
+        painter.setBrush(QColor("#6366f1"))
+        painter.drawRoundedRect(QRectF(0, centre - 2, x, 4), 2, 2)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(QPointF(x, centre), 6, 6)
+        painter.end()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self.sliderPressed.emit()
+            self._move_to(event.position().x())
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._dragging:
+            self._move_to(event.position().x())
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            self.sliderReleased.emit()
 
 
 class VideoPlayerWidget(QWidget):
@@ -69,7 +143,7 @@ class VideoPlayerWidget(QWidget):
         # single row runs out of width on a narrow (vertical-video) window.
         self.setStyleSheet(SMALL_QSS)
         controls_layout = QVBoxLayout()
-        controls_layout.setContentsMargins(8, 2, 8, 4)
+        controls_layout.setContentsMargins(0, 2, 0, 4)
         controls_layout.setSpacing(4)
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(4)
@@ -78,13 +152,17 @@ class VideoPlayerWidget(QWidget):
 
         # Play/Pause button
         self.play_btn = QPushButton("Play")
-        self.play_btn.setFixedWidth(65)
+        self.play_btn.setIcon(icon("play"))
+        self.play_btn.setIconSize(QSize(12, 12))
+        self.play_btn.setFixedWidth(74)
         self.play_btn.clicked.connect(self.toggle_play_pause)
         buttons_row.addWidget(self.play_btn)
 
         # Stop: back to the start of the trim, to check where playback begins
         self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setFixedWidth(55)
+        self.stop_btn.setIcon(icon("stop"))
+        self.stop_btn.setIconSize(QSize(12, 12))
+        self.stop_btn.setFixedWidth(68)
         self.stop_btn.setToolTip("Stop and go back to the start of the trim")
         self.stop_btn.clicked.connect(self.stop)
         buttons_row.addWidget(self.stop_btn)
@@ -103,20 +181,18 @@ class VideoPlayerWidget(QWidget):
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             buttons_row.addWidget(btn)
 
-        # Time label (current)
-        self.time_lbl = QLabel("00:00")
-        seek_row.addWidget(self.time_lbl)
-
-        # Timeline Slider (Scrubber)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        # Scrubber, full width: it sits between the buttons and the times below
+        self.slider = Scrubber()
         self.slider.setRange(0, 0)
         self.slider.sliderPressed.connect(self._on_slider_pressed)
         self.slider.sliderMoved.connect(self._on_slider_moved)
         self.slider.sliderReleased.connect(self._on_slider_released)
-        seek_row.addWidget(self.slider, stretch=1)
 
-        # Duration label
-        self.duration_lbl = QLabel("00:00")
+        # Times under the scrubber: the playhead on the left, the length on the right
+        self.time_lbl = QLabel("00:00.000")
+        seek_row.addWidget(self.time_lbl)
+        seek_row.addStretch()
+        self.duration_lbl = QLabel("00:00.000")
         seek_row.addWidget(self.duration_lbl)
 
         # Playback speed button (e.g. 1.0x, 1.25x, 1.5x, 2.0x)
@@ -144,6 +220,7 @@ class VideoPlayerWidget(QWidget):
         seek_row.addWidget(self.latency_lbl)
 
         controls_layout.addLayout(buttons_row)
+        controls_layout.addWidget(self.slider)
         controls_layout.addLayout(seek_row)
         layout.addLayout(controls_layout)
 
@@ -224,7 +301,7 @@ class VideoPlayerWidget(QWidget):
     def load_video(self, file_path: str) -> None:
         url = QUrl.fromLocalFile(file_path)
         self.media_player.setSource(url)
-        self.play_btn.setText("Play")
+        self._show_playing(False)
 
     def release(self) -> None:
         """Let go of the media before the widget goes away.
@@ -249,21 +326,29 @@ class VideoPlayerWidget(QWidget):
         # stop again at once after an auto-stop.
         return self._range_end_ms is not None and pos_ms >= self._range_end_ms - 50
 
+    def _show_playing(self, playing: bool) -> None:
+        if playing:
+            self.play_btn.setText("Pause")
+            self.play_btn.setIcon(icon("pause"))
+        else:
+            self.play_btn.setText("Play")
+            self.play_btn.setIcon(icon("play"))
+
     def toggle_play_pause(self) -> None:
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
-            self.play_btn.setText("Play")
+            self._show_playing(False)
         else:
             # Past the trim's end there is nothing left to play: start the trim over.
             if self._at_or_past_range_end(self.media_player.position()):
                 self.seek_to_ms(self._range_start_ms)
             self.media_player.play()
-            self.play_btn.setText("Pause")
+            self._show_playing(True)
 
     def stop(self) -> None:
         """Pause and go back to the start of the trim."""
         self.media_player.pause()
-        self.play_btn.setText("Play")
+        self._show_playing(False)
         self.seek_to_ms(self._range_start_ms)
 
     def seek_to_ms(self, pos_ms: int) -> None:
@@ -297,7 +382,7 @@ class VideoPlayerWidget(QWidget):
             == QMediaPlayer.PlaybackState.PlayingState
         ):
             self.media_player.pause()
-            self.play_btn.setText("Play")
+            self._show_playing(False)
             if pos_ms > self._range_end_ms:
                 self.seek_to_ms(self._range_end_ms)
                 return
@@ -325,7 +410,5 @@ class VideoPlayerWidget(QWidget):
 
     @staticmethod
     def _format_time(ms: int) -> str:
-        s = ms // 1000
-        m = s // 60
-        s = s % 60
-        return f"{m:02d}:{s:02d}"
+        # The same mm:ss.mmm as the caption table, so the two can be compared.
+        return format_timestamp(ms)
