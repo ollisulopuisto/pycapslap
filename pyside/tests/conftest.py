@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,9 +47,15 @@ def no_modal_message_boxes(monkeypatch):
 
 
 def _ffmpeg() -> str | None:
-    bundled = REPO_ROOT / "rust" / "bin" / "ffmpeg"
-    if bundled.exists():
-        return str(bundled)
+    for search_dir in ("bin", "bin-linux", "bin-win"):
+        bundled = (
+            REPO_ROOT
+            / "rust"
+            / search_dir
+            / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        )
+        if bundled.exists():
+            return str(bundled)
     return shutil.which("ffmpeg")
 
 
