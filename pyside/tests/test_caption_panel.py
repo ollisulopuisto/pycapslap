@@ -16,7 +16,7 @@ def test_caption_panel_initial_state(qtbot):
 
     assert panel.segments == []
     assert panel.selected_segment is None
-    assert panel.active_anchor_pct == 80.0
+    assert panel.active_anchor_pct == 75.0
 
 
 def test_caption_panel_load_segments(qtbot):
