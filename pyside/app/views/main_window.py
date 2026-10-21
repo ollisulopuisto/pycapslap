@@ -166,7 +166,9 @@ class MainWindow(QMainWindow):
         # gets the height and the sidebar sits beside it.
         screen = QGuiApplication.primaryScreen()
         height = min(900, screen.availableGeometry().height() - 60) if screen else 900
-        self.resize(760, height)
+        # Wide enough that the sidebar keeps its 3:2 share (the preview column
+        # cannot shrink below about 372 px, see the splitter below).
+        self.resize(1060, height)
         self.setMinimumSize(720, 640)
         self.setAcceptDrops(True)
 
@@ -408,9 +410,11 @@ class MainWindow(QMainWindow):
         self.perf_lbl = QLabel("Measuring...")
 
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        splitter.setSizes([420, 360])
+        # The sidebar gets three parts to the preview column's two: the caption
+        # list and its controls need the room more than the 9:16 preview does.
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([420, 630])
         root_layout.addWidget(splitter)
 
         # Status Bar
