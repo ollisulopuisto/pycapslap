@@ -8,7 +8,6 @@ import threading
 from collections import deque
 from pathlib import Path
 
-import psutil
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
@@ -174,6 +173,8 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self.core = core_client or CoreClient(parent=self)
+        # Set by closeEvent; work finishing after that is not shown (see _in_gui).
+        self._closed = False
         self._gui_call.connect(self._run_gui_call, Qt.ConnectionType.QueuedConnection)
         self.project = ProjectState()
 
@@ -951,12 +952,21 @@ class MainWindow(QMainWindow):
             self.status.showMessage("Failed to save captions sidecar.", 3000)
 
     def _in_gui(self, fn) -> None:
-        """Run `fn` on the GUI thread, after the current event. Safe from any thread."""
-        self._gui_call.emit(fn)
+        """Run `fn` on the GUI thread, after the current event. Safe from any thread.
 
-    @staticmethod
-    def _run_gui_call(fn) -> None:
-        fn()
+        Workers and core replies can finish after the window is closed, or
+        deleted; their results are dropped then rather than shown on a dead window.
+        """
+        if self._closed:
+            return
+        try:
+            self._gui_call.emit(fn)
+        except RuntimeError:
+            pass  # the window's C++ side is already gone
+
+    def _run_gui_call(self, fn) -> None:
+        if not self._closed:
+            fn()
 
     def _on_broll(self) -> None:
         self.caption_panel.commit_active_editor()
@@ -1880,17 +1890,29 @@ class MainWindow(QMainWindow):
         ):
             self.render_btn.setText(f"Rendering ({pct_str})...")
 
-    _gui_process = psutil.Process(os.getpid())
+    _gui_process = None
+    _core_process = None
 
     def _update_telemetry(self) -> None:
-        process = self._gui_process
-        gui_rss = process.memory_info().rss / (1024 * 1024)
+        # The label is kept for debugging and is in no layout, so this normally
+        # stops here: no psutil import, no process queries every second.
+        if not self.perf_lbl.isVisible():
+            return
+        import psutil
+
+        if self._gui_process is None:
+            self._gui_process = psutil.Process(os.getpid())
+        gui_rss = self._gui_process.memory_info().rss / (1024 * 1024)
 
         core_rss = 0.0
         if self.core.proc and self.core.proc.poll() is None:
             try:
-                core_proc = psutil.Process(self.core.proc.pid)
-                core_rss = core_proc.memory_info().rss / (1024 * 1024)
+                if (
+                    self._core_process is None
+                    or self._core_process.pid != self.core.proc.pid
+                ):
+                    self._core_process = psutil.Process(self.core.proc.pid)
+                core_rss = self._core_process.memory_info().rss / (1024 * 1024)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
@@ -2137,6 +2159,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         # Nothing of this window should fire after it is gone.
+        self._closed = True
         self.perf_timer.stop()
         self._layout_timer.stop()
         self._layer_timer.stop()
