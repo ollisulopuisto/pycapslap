@@ -25,6 +25,8 @@ def test_ensure_macos_app_name_noop_if_reexec_flag_set(monkeypatch):
 def test_ensure_macos_app_name_reexecs(monkeypatch, tmp_path):
     monkeypatch.delenv("PYCAPSLAP_REEXECED", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # Set when the suite is run without a re-exec; this test is about the re-exec.
+    monkeypatch.delenv("PYCAPSLAP_NO_REEXEC", raising=False)
 
     fake_py = tmp_path / "python3"
     fake_py.write_text("#!/bin/sh\n")

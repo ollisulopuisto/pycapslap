@@ -10,6 +10,7 @@ from app.services import media
 from app.services.broll import looks, pipeline, reel
 from app.services.broll import picks as picks_mod
 from app.services.broll.assets import Asset
+from ffmpeg_support import needs_drawtext
 
 FFMPEG = shutil.which("ffmpeg")
 needs_ffmpeg = pytest.mark.skipif(
@@ -156,7 +157,7 @@ def test_build_does_not_look_at_files_whose_size_is_known(tmp_path, monkeypatch)
     assert looked == []
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_an_old_four_by_three_film_is_fitted_not_cropped_in_the_finished_reel(tmp_path):
     # Left third red, middle white, right third blue: a crop would lose the red.
     film = tmp_path / "film.webm"

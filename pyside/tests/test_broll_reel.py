@@ -5,6 +5,7 @@ import pytest
 
 from app.services.broll import picks, reel
 from app.services.broll.assets import Asset
+from ffmpeg_support import needs_drawtext
 
 FFMPEG = shutil.which("ffmpeg")
 
@@ -178,7 +179,7 @@ def test_no_end_card_when_zero(tmp_path):
     assert not (tmp_path / "endcard.txt").exists()
 
 
-@pytest.mark.skipif(FFMPEG is None, reason="needs ffmpeg")
+@needs_drawtext
 def test_the_reel_really_renders(tmp_path):
     def run(*a):
         subprocess.run([FFMPEG, "-v", "error", "-y", *a], check=True)
@@ -318,7 +319,7 @@ def test_hardware_is_chosen_only_on_a_mac_whose_ffmpeg_has_the_encoder(monkeypat
     reel.vt_available.cache_clear()
 
 
-@pytest.mark.skipif(FFMPEG is None, reason="needs ffmpeg")
+@needs_drawtext
 def test_a_failing_hardware_run_falls_back_to_software(tmp_path):
     # This ffmpeg has no h264_videotoolbox, so the hardware attempt fails at
     # start-up, as it would for a clip the GPU decoder refuses.
