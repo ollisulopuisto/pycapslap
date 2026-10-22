@@ -367,3 +367,123 @@ def test_the_logo_is_placed_like_the_renderer_places_it(qtbot):
     assert abs(rect.left() - 43.2) < 0.01 and abs(rect.bottom() - (1080 - 43.2)) < 0.01
     canvas.set_watermark(None)
     assert canvas.watermark is None
+
+
+def _max_channel_diff(a: QImage, b: QImage) -> int:
+    a = a.convertToFormat(QImage.Format.Format_ARGB32)
+    b = b.convertToFormat(QImage.Format.Format_ARGB32)
+    assert a.size() == b.size()
+    return max(
+        abs(x - y) for x, y in zip(bytes(a.constBits()), bytes(b.constBits()))
+    )
+
+
+def test_the_cached_safe_zones_look_like_the_painted_ones(qtbot):
+    """The safe zones come from a pixmap painted once; on screen they must be
+    what painting them straight onto the frame gives."""
+    from PySide6.QtGui import QPainter
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    # An odd size, so the canvas sits at a fractional offset.
+    canvas.resize(403, 611)
+    frame = QImage(1080, 1920, QImage.Format.Format_RGB32)
+    frame.fill(QColor(60, 80, 100))
+    canvas.set_fallback_pixmap(QPixmap.fromImage(frame))
+    canvas.set_active_safe_platforms({"tiktok", "reels", "shorts"})
+    shown = canvas.grab().toImage()
+
+    canvas.set_active_safe_platforms(set())
+    reference = canvas.grab().toImage()
+    painter = QPainter(reference)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    canvas.active_safe_platforms = {"tiktok", "reels", "shorts"}
+    canvas._paint_safe_areas(painter, canvas._get_canvas_rect())
+    painter.end()
+
+    # Blending through a transparent pixmap rounds a little differently.
+    assert _max_channel_diff(shown, reference) <= 3
+
+
+def test_the_safe_zones_are_painted_once_per_canvas(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 700)
+    rect = canvas._get_canvas_rect()
+    first = canvas._safe_area_pixmap(rect)[1]
+    assert canvas._safe_area_pixmap(rect)[1] is first
+    # Other platforms, or another canvas, paint them again.
+    canvas.set_active_safe_platforms({"tiktok"})
+    second = canvas._safe_area_pixmap(rect)[1]
+    assert second is not first
+    canvas.resize(500, 700)
+    assert canvas._safe_area_pixmap(canvas._get_canvas_rect())[1] is not second
+
+
+def test_the_caption_layer_is_scaled_once_not_per_frame(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 700)
+    layer = QPixmap(1080, 1920)
+    layer.fill(QColor(0, 0, 0, 0))
+    rect = canvas._get_canvas_rect()
+    scaled = canvas._scaled_layer(layer, rect)
+    dpr = canvas.devicePixelRatioF()
+    assert (scaled.width(), scaled.height()) == (
+        round(rect.width() * dpr),
+        round(rect.height() * dpr),
+    )
+    assert canvas._scaled_layer(layer, rect) is scaled
+    other = QPixmap(1080, 1920)
+    other.fill(QColor(0, 0, 0, 0))
+    assert canvas._scaled_layer(other, rect) is not scaled
+
+
+def test_a_prescaled_caption_layer_lands_where_the_scaled_draw_did(qtbot):
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QPainter
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 700)
+    canvas.set_active_safe_platforms(set())
+    frame = QImage(1080, 1920, QImage.Format.Format_RGB32)
+    frame.fill(QColor(60, 80, 100))
+    canvas.set_fallback_pixmap(QPixmap.fromImage(frame))
+    layer_img = QImage(1080, 1920, QImage.Format.Format_ARGB32_Premultiplied)
+    layer_img.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(layer_img)
+    painter.fillRect(QRectF(200, 1400, 680, 200), QColor(255, 255, 255))
+    painter.end()
+    layer = QPixmap.fromImage(layer_img)
+
+    reference = canvas.grab().toImage()
+    painter = QPainter(reference)
+    painter.drawPixmap(canvas._get_canvas_rect(), layer, QRectF(layer.rect()))
+    painter.end()
+
+    canvas.set_caption_layer(layer)
+    shown = canvas.grab().toImage()
+    a = shown.convertToFormat(QImage.Format.Format_RGB32)
+    b = reference.convertToFormat(QImage.Format.Format_RGB32)
+    differing = sum(
+        1
+        for y in range(0, a.height())
+        for x in range(0, a.width())
+        if a.pixel(x, y) != b.pixel(x, y)
+    )
+    # The same pixels but for an edge row or column nearest-neighbour rounds
+    # the other way.
+    assert differing <= a.width() + a.height()
+
+
+def test_the_renderers_answer_drops_the_ghost_even_as_the_same_pixmap(qtbot):
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    layer = QPixmap(10, 10)
+    canvas.set_caption_layer(layer)
+    canvas._drag_ghost = (layer, 50.0)
+    canvas.set_caption_layer(layer)
+    assert canvas._drag_ghost is None
+    assert canvas.caption_layer is layer

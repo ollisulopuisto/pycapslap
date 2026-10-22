@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QPainter,
     QPen,
     QPixmap,
+    QRegion,
 )
 from PySide6.QtMultimedia import QVideoFrame, QVideoSink
 from PySide6.QtWidgets import QWidget
@@ -126,9 +127,20 @@ class VideoCanvasWidget(QWidget):
         # or it is previewing a frame the render never produces.
         self.export_canvas_size: tuple[int, int] | None = None
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
+        # The safe zones only change with the canvas or the platforms, but
+        # their dashed, antialiased outlines and labels cost more to paint than
+        # the video frame itself. Painted once into a pixmap and reused on
+        # every frame until either changes. (key, pixmap, where it goes)
+        self._safe_area_cache: tuple[tuple, QPixmap, QPoint, QRegion] | None = None
+        # The caption layer scaled to the canvas, so playback blits it instead
+        # of rescaling a full frame on every video frame. (key, pixmap)
+        self._layer_scaled: tuple[tuple, QPixmap] | None = None
 
         # Initialize fonts database
         init_app_fonts()
+
+        self._badge_font = QFont("Helvetica Neue", 10, QFont.Weight.Bold)
+        self._safe_label_font = QFont("Helvetica Neue", 8, QFont.Weight.Bold)
 
     def set_active_safe_platforms(self, platforms: set[str]) -> None:
         self.active_safe_platforms = set(platforms)
@@ -178,8 +190,15 @@ class VideoCanvasWidget(QWidget):
 
     def set_caption_layer(self, pixmap: QPixmap | None) -> None:
         """Hand the canvas libass's own rendering of the current cue."""
+        # Playback hands the same layer back on every position tick; only a
+        # different one, or a ghost to drop, changes anything on screen.
+        drop_ghost = (
+            pixmap is not None and not self.is_dragging and self._drag_ghost is not None
+        )
+        if pixmap is self.caption_layer and not drop_ghost:
+            return
         self.caption_layer = pixmap
-        if pixmap is not None and not self.is_dragging:
+        if drop_ghost:
             self._drag_ghost = None
         self.update()
 
@@ -232,12 +251,19 @@ class VideoCanvasWidget(QWidget):
         anchor_y_pct: float = 80.0,
         current_pos_ms: int = 0,
     ) -> None:
+        changed = (
+            segment is not self.current_segment
+            or float(anchor_y_pct) != self.anchor_y_pct
+        )
         if segment is not self.current_segment:
             self._drag_ghost = None
         self.current_segment = segment
         self.anchor_y_pct = float(anchor_y_pct)
         self.current_pos_ms = int(current_pos_ms)
-        self.update()
+        # Called on every position tick with the same cue; the position itself
+        # is not drawn, and the frame that goes with it repaints on its own.
+        if changed:
+            self.update()
 
     def _on_video_frame_changed(self, frame: QVideoFrame) -> None:
         self._current_frame = frame
@@ -361,7 +387,11 @@ class VideoCanvasWidget(QWidget):
 
         # 3. Render Platform UI Safe Areas (TikTok, Reels, Shorts)
         if self.active_safe_platforms:
-            self._paint_safe_areas(painter, canvas_rect)
+            origin, safe_areas, zones = self._safe_area_pixmap(canvas_rect)
+            painter.save()
+            painter.setClipRegion(zones)
+            painter.drawPixmap(origin, safe_areas)
+            painter.restore()
 
         # 4. Dragging guidelines
         anchor_y = canvas_rect.top() + (
@@ -378,8 +408,7 @@ class VideoCanvasWidget(QWidget):
             )
 
             badge_text = f"{self.anchor_y_pct:.1f}%"
-            badge_font = QFont("Helvetica Neue", 10, QFont.Weight.Bold)
-            painter.setFont(badge_font)
+            painter.setFont(self._badge_font)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(99, 102, 241, 220))
             badge_rect = QRectF(
@@ -398,14 +427,17 @@ class VideoCanvasWidget(QWidget):
         # answers for the new position.
         layer = self.caption_layer
         if layer is not None and not layer.isNull() and not self.is_dragging:
-            painter.drawPixmap(canvas_rect, layer, QRectF(layer.rect()))
+            painter.drawPixmap(
+                canvas_rect.topLeft(), self._scaled_layer(layer, canvas_rect)
+            )
         elif self._drag_ghost is not None:
             ghost, start_pct = self._drag_ghost
             dy = canvas_rect.height() * (self.anchor_y_pct - start_pct) / 100.0
             painter.save()
             painter.setClipRect(canvas_rect)
             painter.drawPixmap(
-                canvas_rect.translated(0, dy), ghost, QRectF(ghost.rect())
+                canvas_rect.translated(0, dy).topLeft(),
+                self._scaled_layer(ghost, canvas_rect),
             )
             painter.restore()
 
@@ -420,6 +452,90 @@ class VideoCanvasWidget(QWidget):
                 QRectF(self.watermark.rect()),
             )
             painter.restore()
+
+    def _scaled_layer(self, layer: QPixmap, canvas_rect: QRectF) -> QPixmap:
+        """`layer` at the canvas's size in device pixels, scaled once.
+
+        The same nearest-pixel scaling drawPixmap did into the rectangle, done
+        when the layer or the canvas changes instead of on every video frame.
+        """
+        dpr = self.devicePixelRatioF()
+        w = max(1, round(canvas_rect.width() * dpr))
+        h = max(1, round(canvas_rect.height() * dpr))
+        key = (layer.cacheKey(), w, h, dpr)
+        if self._layer_scaled is not None and self._layer_scaled[0] == key:
+            return self._layer_scaled[1]
+        if layer.width() == w and layer.height() == h:
+            scaled = QPixmap(layer)
+        else:
+            scaled = layer.scaled(
+                w,
+                h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        scaled.setDevicePixelRatio(dpr)
+        self._layer_scaled = (key, scaled)
+        return scaled
+
+    def _safe_area_pixmap(
+        self, canvas_rect: QRectF
+    ) -> tuple[QPoint, QPixmap, QRegion]:
+        """The safe zones for `canvas_rect`, painted once and then reused:
+        where the pixmap goes, the pixmap, and the part of it worth drawing."""
+        dpr = self.devicePixelRatioF()
+        platforms = tuple(self.active_safe_platforms)
+        key = (
+            canvas_rect.left(),
+            canvas_rect.top(),
+            canvas_rect.width(),
+            canvas_rect.height(),
+            dpr,
+            platforms,
+        )
+        cached = self._safe_area_cache
+        if cached is not None and cached[0] == key:
+            return cached[2], cached[1], cached[3]
+
+        # A little past the canvas on every side: the outlines are centred on
+        # its edges, so half their width falls outside it.
+        margin = 2
+        left = math.floor(canvas_rect.left()) - margin
+        top = math.floor(canvas_rect.top()) - margin
+        width = math.ceil(canvas_rect.right()) + margin - left
+        height = math.ceil(canvas_rect.bottom()) + margin - top
+        pixmap = QPixmap(max(1, round(width * dpr)), max(1, round(height * dpr)))
+        pixmap.setDevicePixelRatio(dpr)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.translate(-left, -top)
+        self._paint_safe_areas(painter, canvas_rect)
+        painter.end()
+
+        # Most of the pixmap is transparent; blending only the zones (and
+        # their outlines) skips the rest of the frame on every paint.
+        zones = QRegion()
+        for plat_id in platforms:
+            platform = SAFE_PLATFORMS.get(plat_id)
+            if not platform:
+                continue
+            for region in platform.regions:
+                zone = QRectF(
+                    canvas_rect.left() + canvas_rect.width() * (region.left / 100.0),
+                    canvas_rect.top() + canvas_rect.height() * (region.top / 100.0),
+                    canvas_rect.width() * (region.width / 100.0),
+                    # The label badge is a fixed height, taller than a thin zone.
+                    max(15.0, canvas_rect.height() * (region.height / 100.0)),
+                )
+                zones += zone.toAlignedRect().adjusted(
+                    -margin, -margin, margin, margin
+                )
+
+        origin = QPoint(left, top)
+        self._safe_area_cache = (key, pixmap, origin, zones)
+        return origin, pixmap, zones
 
     def _paint_safe_areas(self, painter: QPainter, canvas_rect: QRectF) -> None:
         """Paint the platforms' own interface over the frame that gets exported."""
@@ -441,8 +557,7 @@ class VideoCanvasWidget(QWidget):
             painter.setPen(pen)
             painter.setBrush(QBrush(fill_color))
 
-            font = QFont("Helvetica Neue", 8, QFont.Weight.Bold)
-            painter.setFont(font)
+            painter.setFont(self._safe_label_font)
 
             for region in platform.regions:
                 rx = canvas_rect.left() + canvas_rect.width() * (region.left / 100.0)
@@ -470,9 +585,9 @@ class VideoCanvasWidget(QWidget):
     ) -> None:
         """The renderer's layout (`previewLayout`) for the current position.
 
-        Not drawn: the caption on screen is only ever the renderer's layer.
+        Not drawn: the caption on screen is only ever the renderer's layer, so
+        this does not repaint either — it is called on every position tick.
         """
         self.layout_cue = cue
         if frame_size and frame_size[0] > 0 and frame_size[1] > 0:
             self.layout_frame_size = frame_size
-        self.update()

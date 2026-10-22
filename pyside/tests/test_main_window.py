@@ -464,6 +464,93 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
     window.close()
 
 
+def _karaoke_block(n):
+    return [
+        {
+            "startMs": i * 300,
+            "endMs": (i + 1) * 300,
+            "lines": [],
+            "groupStartMs": 0,
+            "groupEndMs": n * 300,
+        }
+        for i in range(n)
+    ]
+
+
+def test_renders_made_stale_by_an_edit_still_count_against_the_limit(qtbot):
+    """Dragging a caption invalidates the layers on every move; the renders
+    already started keep their ffmpeg processes running regardless, so the
+    next block must wait for them instead of starting three more."""
+    from concurrent.futures import Future
+
+    from PySide6.QtCore import QObject, Signal
+
+    from app.models.captions import VideoMetadata
+    from app.views.main_window import MAX_LAYER_RENDERS
+
+    frames: list[tuple[dict, Future]] = []
+
+    class HeldCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            f: Future = Future()
+            if method == "generatePreviewFrame":
+                frames.append((params, f))
+            else:
+                f.set_result({})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=HeldCore())
+    qtbot.addWidget(window)
+    window.project.video = VideoMetadata(path="/tmp/nope.mp4", width=1080, height=1920)
+    window.project.segments = [CaptionSegment(start_ms=0, end_ms=3000, text="a b")]
+    window._layout_timer.stop()
+    cues = _karaoke_block(10)
+    window._preview_cues = cues
+
+    window._sync_caption_layer(cues[0])
+    assert len(frames) == MAX_LAYER_RENDERS
+
+    window._invalidate_caption_layers()
+    window._sync_caption_layer(cues[0])
+    # Nothing new while the stale ones still run.
+    assert len(frames) == MAX_LAYER_RENDERS
+
+    # As each stale one ends, a current one takes its place.
+    frames[0][1].set_exception(RuntimeError("stale"))
+    qtbot.waitUntil(lambda: len(frames) == MAX_LAYER_RENDERS + 1, timeout=2000)
+    assert window._layer_in_flight == MAX_LAYER_RENDERS
+    # The stale render's end does not release the current request for its key.
+    assert int(frames[-1][0]["timestampMs"]) // 300 * 300 in window._layer_pending
+    window.close()
+
+
+def test_the_layer_cache_keeps_what_was_used_last(qtbot):
+    from PySide6.QtGui import QPixmap
+
+    from app.views.main_window import LAYER_CACHE_SIZE
+
+    window = MainWindow(core_client=_mock_core_with_layer({}, "")[0])
+    qtbot.addWidget(window)
+    window._layout_timer.stop()
+    cues = _karaoke_block(LAYER_CACHE_SIZE)
+    window._preview_cues = cues
+    window._prefetched_block = (0, LAYER_CACHE_SIZE * 300)
+    for cue in cues:
+        window._layer_cache[cue["startMs"]] = QPixmap(4, 4)
+
+    # Looking at the oldest one makes it the newest.
+    window._sync_caption_layer(cues[0])
+    assert next(iter(window._layer_cache)) == cues[1]["startMs"]
+    assert list(window._layer_cache)[-1] == cues[0]["startMs"]
+    window.close()
+
+
 def test_export_format_drives_layout_layer_and_render(qtbot):
     """One canvas for the preview and the burn, chosen in the editor."""
     from PySide6.QtCore import QObject, Signal
