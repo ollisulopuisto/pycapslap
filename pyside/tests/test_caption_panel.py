@@ -619,3 +619,67 @@ def test_caption_panel_shows_duration_and_flags_cues_that_do_not_fit_their_text(
     # Editing the text re-checks the cue against its time.
     panel.cue_table.item(0, COL_TEXT).setText("Joo")
     assert "too slow" in panel.cue_table.item(0, COL_DURATION).toolTip()
+
+
+def test_caption_panel_reuses_its_rows_when_the_list_changes_shape(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    panel.resize(300, 600)
+    panel.show()
+
+    first = [
+        CaptionSegment(start_ms=i * 1000, end_ms=i * 1000 + 900, text=f"cue {i}")
+        for i in range(5)
+    ]
+    panel.set_segments(first)
+    qtbot.wait(20)
+    assert panel.cue_table.rowCount() == 5
+
+    # Fewer cues, and a changed one among them: the table shows exactly that.
+    long_text = " ".join(["sanoja"] * 30)
+    second = [first[0], CaptionSegment(5000, 9000, long_text), first[4]]
+    panel.set_segments(second)
+    qtbot.wait(20)
+    assert panel.cue_table.rowCount() == 3
+    assert [panel.cue_table.item(r, COL_TEXT).text() for r in range(3)] == [
+        "cue 0",
+        long_text,
+        "cue 4",
+    ]
+    assert panel.cue_table.item(1, 0).text() == format_timestamp(5000)
+    assert panel.cue_table.item(2, 1).text() == format_timestamp(4900)
+    # The row that got the long text is measured again and grows.
+    assert panel.cue_table.rowHeight(1) > panel.cue_table.rowHeight(0)
+
+    # More cues again: the new rows get cells of their own.
+    panel.set_segments(first + [CaptionSegment(6000, 7000, "cue 5")])
+    assert panel.cue_table.rowCount() == 6
+    assert panel.cue_table.item(5, COL_TEXT).text() == "cue 5"
+    assert panel.cue_table.item(1, COL_TEXT).text() == "cue 1"
+
+
+def test_caption_panel_finds_the_playhead_cue_by_identity(qtbot):
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    # Two cues that compare equal: the one under the playhead is the object
+    # the window passed, not the first that looks like it.
+    twin_a = CaptionSegment(start_ms=0, end_ms=1000, text="sama")
+    twin_b = CaptionSegment(start_ms=0, end_ms=1000, text="sama")
+    other = CaptionSegment(start_ms=2000, end_ms=3000, text="toinen")
+    panel.set_segments([twin_a, twin_b, other])
+
+    panel.set_playhead_segment(twin_b)
+    assert panel.cue_table.currentRow() == 1
+    assert panel.active_row() == 1
+
+    # A copy that is equal but not in the table still selects its twin.
+    panel.set_playhead_segment(CaptionSegment(2000, 3000, "toinen"))
+    assert panel.cue_table.currentRow() == 2
+
+    # After the list is rebuilt the map follows the new rows.
+    panel.set_segments([other, twin_a])
+    panel.set_playhead_segment(twin_a)
+    assert panel.cue_table.currentRow() == 1
+    panel.set_playhead_segment(None)
+    assert panel.cue_table.selectionModel().selectedRows() == []

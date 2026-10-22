@@ -180,6 +180,9 @@ class CaptionPanelWidget(QWidget):
         self._block_signals: bool = False
         self.spell_checker = get_shared_checker()
         self._spell_cache: dict[int, list[tuple[int, int, str]]] = {}
+        # id(segment) -> row, so the playhead can find its cue without a scan
+        # of the whole transcript on every position tick.
+        self._row_of: dict[int, int] = {}
 
         self._init_ui()
 
@@ -282,9 +285,13 @@ class CaptionPanelWidget(QWidget):
         )
         self.cue_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         # Long captions wrap onto more lines instead of running off the column.
+        # The rows are sized to their text by hand (_fit_rows) rather than by
+        # ResizeToContents: in that mode Qt re-measures every row of the table
+        # on every cell change, which with a long transcript turns one edit —
+        # five cell writes per row — into seconds of text layout.
         self.cue_table.setWordWrap(True)
         self.cue_table.verticalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
+            QHeaderView.ResizeMode.Fixed
         )
         self.cue_table.horizontalHeader().sectionResized.connect(
             lambda *_args: self.cue_table.resizeRowsToContents()
@@ -1003,9 +1010,17 @@ class CaptionPanelWidget(QWidget):
         self.segments_updated.emit(self.segments)
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
+        """Show `segments` in the table.
+
+        Called after every edit with the whole list, so the cells are written
+        in place: a cell whose text is unchanged costs nothing, and only the
+        rows whose text did change are measured again.
+        """
         self._block_signals = True
         self.segments = list(segments)
+        self._row_of = {id(seg): row for row, seg in enumerate(self.segments)}
         self._invalidate_spell_cache()
+        old_rows = self.cue_table.rowCount()
         self.cue_table.setRowCount(len(self.segments))
 
         editable = (
@@ -1013,7 +1028,20 @@ class CaptionPanelWidget(QWidget):
             | Qt.ItemFlag.ItemIsSelectable
             | Qt.ItemFlag.ItemIsEditable
         )
+        changed_rows: list[int] = []
         for row, seg in enumerate(self.segments):
+            if row < old_rows and self.cue_table.item(row, COL_TEXT) is not None:
+                item_text = self.cue_table.item(row, COL_TEXT)
+                if item_text.text() != seg.text:
+                    item_text.setText(seg.text)
+                    changed_rows.append(row)
+                self.cue_table.item(row, COL_START).setText(
+                    format_timestamp(seg.start_ms)
+                )
+                self.cue_table.item(row, COL_END).setText(format_timestamp(seg.end_ms))
+                self._refresh_duration_cell(row)
+                continue
+
             item_start = QTableWidgetItem(format_timestamp(seg.start_ms))
             item_start.setFlags(editable)
 
@@ -1021,11 +1049,7 @@ class CaptionPanelWidget(QWidget):
             item_end.setFlags(editable)
 
             item_text = QTableWidgetItem(seg.text)
-            item_text.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsEditable
-            )
+            item_text.setFlags(editable)
 
             item_duration = QTableWidgetItem()
             item_duration.setFlags(
@@ -1037,8 +1061,29 @@ class CaptionPanelWidget(QWidget):
             self.cue_table.setItem(row, COL_DURATION, item_duration)
             self.cue_table.setItem(row, COL_TEXT, item_text)
             self._refresh_duration_cell(row)
+            changed_rows.append(row)
 
+        self._fit_rows(changed_rows)
         self._block_signals = False
+
+    def _fit_rows(self, rows: list[int]) -> None:
+        """Size the given rows to their (wrapped) text; all rows past a third
+        of the table, since then one pass over the table is the cheaper way."""
+        if len(rows) > max(1, self.cue_table.rowCount() // 3):
+            self.cue_table.resizeRowsToContents()
+            return
+        for row in rows:
+            self.cue_table.resizeRowToContents(row)
+
+    def _row_for(self, segment: CaptionSegment | None) -> int:
+        """The row showing `segment`: the same object first, an equal one
+        failing that, as before the row map; -1 when it is not in the table."""
+        if segment is None:
+            return -1
+        row = self._row_of.get(id(segment), -1)
+        if row >= 0 and self.segments[row] is segment:
+            return row
+        return next((i for i, seg in enumerate(self.segments) if seg == segment), -1)
 
     def select_segment(
         self, segment: CaptionSegment | None, anchor_y_pct: float = 75.0
@@ -1051,25 +1096,20 @@ class CaptionPanelWidget(QWidget):
             self.btn_delete_empty.setEnabled(False)
             return
 
-        for row, seg in enumerate(self.segments):
-            if seg == segment:
-                self._block_signals = True
-                self.cue_table.selectRow(row)
-                self._block_signals = False
-                self.btn_delete_empty.setEnabled(not seg.text.strip())
-                break
+        row = self._row_for(segment)
+        if row >= 0:
+            self._block_signals = True
+            self.cue_table.selectRow(row)
+            self._block_signals = False
+            self.btn_delete_empty.setEnabled(not self.segments[row].text.strip())
 
     def set_playhead_segment(self, segment: CaptionSegment | None) -> None:
         """Highlight and reveal the cue currently under the video playhead."""
         if self.playhead_segment is segment:
             return
-        previous = (
-            self.segments.index(self.playhead_segment)
-            if self.playhead_segment in self.segments
-            else -1
-        )
+        previous = self._row_for(self.playhead_segment)
         self.playhead_segment = segment
-        current = self.segments.index(segment) if segment in self.segments else -1
+        current = self._row_for(segment)
         for row in {previous, current} - {-1}:
             for column in range(self.cue_table.columnCount()):
                 item = self.cue_table.item(row, column)
@@ -1160,6 +1200,7 @@ class CaptionPanelWidget(QWidget):
             seg.update_text(item.text())
             self._invalidate_spell_cache(row)
             self._refresh_duration_cell(row)
+            self.cue_table.resizeRowToContents(row)
             self.segment_updated.emit(seg)
         elif col in (COL_START, COL_END):
             self._apply_edited_timecode(row, col, item.text())
@@ -1242,7 +1283,7 @@ class CaptionPanelWidget(QWidget):
 
     def cue_moved_on_timeline(self, seg: CaptionSegment) -> None:
         """The timeline has already retimed `seg`; bring the table and project along."""
-        row = next((i for i, s in enumerate(self.segments) if s is seg), -1)
+        row = self._row_for(seg)
         if row < 0:
             return
         self._refresh_time_cells(row)
@@ -1254,9 +1295,7 @@ class CaptionPanelWidget(QWidget):
         row = self.cue_table.currentRow()
         if 0 <= row < len(self.segments):
             return row
-        if self.playhead_segment in self.segments:
-            return self.segments.index(self.playhead_segment)
-        return -1
+        return self._row_for(self.playhead_segment)
 
     def set_active_start(self, ms: int) -> bool:
         """Put the active cue's start at `ms`. False when no cue is active."""

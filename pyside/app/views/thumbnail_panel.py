@@ -244,9 +244,20 @@ class ThumbnailPanel(QWidget):
         image = self.rendered()
         if image is None:
             return
-        scaled = QPixmap.fromImage(image).scaled(
-            self.preview.size(),
+        # Two steps down from the full frame: a fast scale to four times the
+        # preview, then a smooth one. Smooth scaling straight from a 1080p
+        # frame took most of the time of every keystroke in the title.
+        target = self.preview.size()
+        coarse = image.scaled(
+            target * 4,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
+        )
+        scaled = QPixmap.fromImage(
+            coarse.scaled(
+                target,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         )
         self.preview.setPixmap(scaled)

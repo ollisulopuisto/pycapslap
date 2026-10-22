@@ -58,6 +58,9 @@ class SpellChecker:
     def __init__(self, language: str = "fi") -> None:
         self._voikko = None
         self._cache: dict[str, bool] = {}
+        # Spans per caption text, so a repaint after an edit elsewhere does
+        # not run the regex and the word lookups over the same cue again.
+        self._span_cache: dict[tuple[str, bool], list[tuple[int, int, str]]] = {}
         self._language = language
         self._loaded = False
 
@@ -137,19 +140,24 @@ class SpellChecker:
         the first and last word are skipped when they look like a split word.
         """
         text = segment.text
-        spans = self.check_text(text)
-        if not spans:
-            return []
-
         words = getattr(segment, "words", None) or []
         skip_first = bool(words) and words[0].glue_to_previous
+        key = (text, skip_first)
+        cached = self._span_cache.get(key)
+        if cached is not None:
+            return list(cached)
+
+        spans = self.check_text(text)
         skip_last = text.rstrip().endswith("-")
 
         if skip_first and spans and spans[0][0] == (len(text) - len(text.lstrip())):
             spans = spans[1:]
         if skip_last and spans and spans[-1][1] >= len(text.rstrip().rstrip("-")):
             spans = spans[:-1]
-        return spans
+        if len(self._span_cache) >= 4096:
+            self._span_cache.clear()
+        self._span_cache[key] = spans
+        return list(spans)
 
 
 _shared: SpellChecker | None = None

@@ -55,9 +55,16 @@ class WrappedText:
             if s < e:
                 marks.append(
                     (
-                        line.cursorToX(s),
-                        line.cursorToX(e),
+                        _cursor_x(line, s),
+                        _cursor_x(line, e),
                         line.y() + line.ascent(),
                     )
                 )
         return marks
+
+
+def _cursor_x(line, cursor: int) -> float:
+    """The x of a cursor position. PySide returns (x, cursor) for the C++
+    out-parameter overload; take the x so the squiggle gets a number."""
+    x = line.cursorToX(cursor)
+    return x[0] if isinstance(x, tuple) else x
