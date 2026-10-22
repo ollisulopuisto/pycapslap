@@ -28,6 +28,9 @@ def test_ensure_macos_app_name_reexecs(monkeypatch, tmp_path):
     # Set when the suite is run without a re-exec; this test is about the re-exec.
     monkeypatch.delenv("PYCAPSLAP_NO_REEXEC", raising=False)
 
+    # Keep the MacOS/ link out of the real venv, where it would go stale.
+    monkeypatch.setattr("sys.prefix", str(tmp_path / "venv"))
+
     fake_py = tmp_path / "python3"
     fake_py.write_text("#!/bin/sh\n")
 
