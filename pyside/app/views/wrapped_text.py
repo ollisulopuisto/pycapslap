@@ -55,8 +55,9 @@ class WrappedText:
             if s < e:
                 marks.append(
                     (
-                        line.cursorToX(s),
-                        line.cursorToX(e),
+                        # PySide6 returns (x, cursor position) here.
+                        line.cursorToX(s)[0],
+                        line.cursorToX(e)[0],
                         line.y() + line.ascent(),
                     )
                 )

@@ -7,6 +7,7 @@ import pytest
 from app.services.broll import looks, reel
 from app.services.broll.picks import Picks
 from app.services.broll.assets import Asset
+from ffmpeg_support import needs_drawtext
 
 FFMPEG = shutil.which("ffmpeg")
 needs_ffmpeg = pytest.mark.skipif(FFMPEG is None, reason="needs ffmpeg")
@@ -291,7 +292,7 @@ def render(tmp_path, shots, seconds, size=(180, 320), end_card_s=0):
     return out
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_stack_puts_one_picture_over_the_other(tmp_path):
     red = solid(tmp_path, "r.png", "red")
     blue = solid(tmp_path, "b.png", "blue")
@@ -310,7 +311,7 @@ def test_a_stack_puts_one_picture_over_the_other(tmp_path):
     assert bluish(pixel(out, 1.0, 90, 200))  # bottom half
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_wide_picture_is_fitted_over_a_blurred_copy_not_cropped(tmp_path):
     # left third red, middle white, right third blue
     img = tmp_path / "wide.png"
@@ -351,7 +352,7 @@ def render_one(folder, img, layout, motion="zoom_in", seconds=2):
     return out
 
 
-@needs_ffmpeg
+@needs_drawtext
 @pytest.mark.parametrize("motion", looks.MOTIONS)
 def test_every_ken_burns_motion_renders(tmp_path, motion):
     img = solid(tmp_path, "a.png", "green")
@@ -359,7 +360,7 @@ def test_every_ken_burns_motion_renders(tmp_path, motion):
     assert out.stat().st_size > 0
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_pan_really_moves_the_picture(tmp_path):
     # left half red, right half blue: panning right shows more blue as it goes
     img = tmp_path / "rb.png"
@@ -392,13 +393,13 @@ def two_shots(tmp_path, transition):
     return reel.assign_transitions(shots, transition)
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_cut_switches_at_once(tmp_path):
     out = render(tmp_path, two_shots(tmp_path, "cut"), 4)
     assert reddish(pixel(out, 1.9, 90, 160)) and bluish(pixel(out, 2.1, 90, 160))
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_crossfade_passes_through_a_mix(tmp_path):
     out = render(tmp_path, two_shots(tmp_path, "fade"), 4)
     assert reddish(pixel(out, 1.5, 90, 160)) and bluish(pixel(out, 2.6, 90, 160))
@@ -406,7 +407,7 @@ def test_a_crossfade_passes_through_a_mix(tmp_path):
     assert mid[0] > 40 and mid[2] > 40, mid
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_slide_brings_the_new_shot_in_over_the_old_one(tmp_path):
     out = render(tmp_path, two_shots(tmp_path, "slide"), 4)
     left, right = pixel(out, 2.17, 20, 160), pixel(out, 2.17, 160, 160)
@@ -416,7 +417,7 @@ def test_a_slide_brings_the_new_shot_in_over_the_old_one(tmp_path):
     assert bluish(pixel(out, 2.6, 20, 160))
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_whip_pushes_the_old_shot_out_to_the_left(tmp_path):
     out = render(tmp_path, two_shots(tmp_path, "whip"), 4)
     left, right = pixel(out, 2.125, 20, 160), pixel(out, 2.125, 160, 160)
@@ -424,7 +425,7 @@ def test_a_whip_pushes_the_old_shot_out_to_the_left(tmp_path):
     assert bluish(pixel(out, 2.6, 20, 160)) and reddish(pixel(out, 1.8, 160, 160))
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_video_clip_can_be_stacked_and_blurred(tmp_path):
     clip = tmp_path / "c.webm"
     run("-f", "lavfi", "-i", "testsrc=s=320x240:d=1", "-c:v", "libvpx", str(clip))
@@ -490,7 +491,7 @@ def loud_tone(folder, seconds):
     return out
 
 
-@needs_ffmpeg
+@needs_drawtext
 @pytest.mark.parametrize("layout", ["fill", "blur"])
 def test_a_transparent_picture_does_not_let_the_waveform_show_through(tmp_path, layout):
     # A red square on a fully transparent ground, with white underneath the
@@ -722,7 +723,7 @@ def test_a_transition_lengthens_the_still_not_its_decoding(tmp_path):
     assert "d=72:" in graph  # the first shot stays 0.4 s longer under the next one
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_zoom_in_really_grows_the_picture_over_the_shot(tmp_path):
     # a red square in the middle of a blue picture: the closer the zoom, the
     # more of the frame it covers
@@ -744,7 +745,7 @@ def test_a_zoom_in_really_grows_the_picture_over_the_shot(tmp_path):
     assert bluish(pixel(out, 0.1, 25, 160)) and reddish(pixel(out, 2.9, 25, 160))
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_every_frame_of_a_looped_free_still_is_there(tmp_path):
     img = solid(tmp_path, "a.png", "green")
     out = render_one(tmp_path / "f", img, "fill", seconds=2)
@@ -815,7 +816,7 @@ def test_other_transitions_still_use_a_single_opaque_stream(tmp_path):
         assert "yuva420p" not in graph and "trim=" not in graph, style
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_crossfade_has_no_gap_where_the_fade_hands_over_to_the_rest(tmp_path):
     out = render(tmp_path, two_shots(tmp_path, "fade"), 4)
     # the fade of the second shot runs 2.0 to 2.4 s; sample frames across the join
@@ -827,7 +828,7 @@ def test_a_crossfade_has_no_gap_where_the_fade_hands_over_to_the_rest(tmp_path):
         )  # blue is there, never the red underneath showing alone
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_the_first_shot_fades_in_over_the_waveform(tmp_path):
     a, _ = two_colours(tmp_path)
     s = reel.assign_transitions([reel.Shot(0, 2000, a, "image", "A")], "fade")
@@ -836,7 +837,7 @@ def test_the_first_shot_fades_in_over_the_waveform(tmp_path):
     assert reddish(late) and early[0] < late[0] - 60
 
 
-@needs_ffmpeg
+@needs_drawtext
 def test_a_mixed_reel_with_fades_whips_and_slides_renders_whole(tmp_path):
     imgs = [
         solid(tmp_path, f"{c}.png", c)

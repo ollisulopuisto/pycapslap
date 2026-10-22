@@ -716,6 +716,10 @@ class CaptionPanelWidget(QWidget):
         self.style_changed.emit(self.current_style)
 
     def _on_template_changed(self, _idx: int) -> None:
+        if self._block_signals:
+            # set_style moving the combo to the style's template must not load
+            # that preset over the style's own values.
+            return
         tpl_id = self.combo_template.currentData()
         if not tpl_id or tpl_id == "custom":
             return
