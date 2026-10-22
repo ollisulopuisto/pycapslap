@@ -212,3 +212,124 @@ def test_zoom_widens_the_timeline_and_is_limited(qtbot):
     assert timeline.zoom == MAX_ZOOM
     timeline.set_zoom(0.1)
     assert timeline.zoom == 1.0
+
+
+# --- the cached static layer ---------------------------------------------------
+
+
+def _painted(qtbot, n=6):
+    """A shown timeline whose static-layer rebuilds are recorded."""
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+    timeline.resize(900, 84)
+    timeline.set_duration(n * 2000)
+    segs = [
+        CaptionSegment(start_ms=i * 2000, end_ms=i * 2000 + 1800, text=f"Cue {i} words")
+        for i in range(n)
+    ]
+    timeline.set_segments(segs)
+    timeline.show()
+    rebuilds = []
+    render = timeline._render_static
+    timeline._render_static = lambda rect: rebuilds.append(rect) or render(rect)
+    timeline.grab()
+    rebuilds.clear()
+    return timeline, segs, rebuilds
+
+
+def test_the_needle_moving_does_not_rebuild_the_static_layer(qtbot):
+    timeline, _, rebuilds = _painted(qtbot)
+    before = timeline.grab().toImage()
+
+    timeline.set_position(3000)
+    after = timeline.grab().toImage()
+
+    assert rebuilds == []
+    assert after != before
+
+
+def test_scrubbing_does_not_rebuild_the_static_layer(qtbot):
+    timeline, _, rebuilds = _painted(qtbot)
+
+    qtbot.mousePress(
+        timeline, Qt.MouseButton.LeftButton, pos=QPoint(142, 5)
+    )  # in the gap between two cues
+    qtbot.mouseMove(timeline, pos=QPoint(400, 5))
+    timeline.grab()
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 5))
+
+    assert timeline.current_position_ms > 0
+    assert rebuilds == []
+
+
+def test_a_caption_edited_in_place_shows_after_update(qtbot):
+    timeline, segs, rebuilds = _painted(qtbot)
+    before = timeline.grab().toImage()
+
+    segs[1].text = "Something else entirely"
+    timeline.update()
+    timeline.grab()
+
+    assert len(rebuilds) == 1
+    assert timeline.grab().toImage() != before
+
+
+def test_a_caption_retimed_in_place_shows_after_update(qtbot):
+    timeline, segs, rebuilds = _painted(qtbot)
+    before = timeline.grab().toImage()
+
+    segs[1].end_ms = 3000
+    timeline.update()
+    timeline.grab()
+
+    assert len(rebuilds) == 1
+    assert timeline.grab().toImage() != before
+
+
+def test_every_change_to_the_static_layer_rebuilds_it(qtbot):
+    timeline, segs, rebuilds = _painted(qtbot)
+    changes = [
+        lambda: timeline.set_segments(segs[:4]),
+        lambda: timeline.select_segment(segs[1]),
+        lambda: timeline.select_segment(None),
+        lambda: timeline.set_duration(timeline.duration_ms + 4000),
+        lambda: timeline.set_fit_width(1200),
+        lambda: timeline.set_zoom(2.0),
+    ]
+    for i, change in enumerate(changes):
+        rebuilds.clear()
+        change()
+        timeline.grab()
+        assert len(rebuilds) == 1, f"change {i}"
+
+
+def test_the_trim_is_drawn_over_the_layer_without_rebuilding_it(qtbot):
+    timeline, _, rebuilds = _painted(qtbot)
+    before = timeline.grab().toImage()
+
+    timeline.set_trim_range(1000, 8000)
+
+    assert timeline.grab().toImage() != before
+    assert rebuilds == []
+
+
+def test_a_repaint_with_nothing_changed_reuses_the_layer(qtbot):
+    timeline, _, rebuilds = _painted(qtbot)
+
+    timeline.update()
+    timeline.grab()
+    timeline.grab()
+
+    assert rebuilds == []
+
+
+def test_the_cached_paint_matches_a_fresh_one(qtbot):
+    timeline, segs, _ = _painted(qtbot)
+    timeline.select_segment(segs[2])
+    timeline.set_trim_range(1500, 9000)
+    timeline.set_position(4000)
+    cached = timeline.grab().toImage()
+
+    timeline._invalidate_static()
+
+    assert timeline.grab().toImage() == cached
