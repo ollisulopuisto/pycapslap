@@ -8,6 +8,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Changed
+- **Long transcripts stay quick.** Editing a cue no longer re-measures every row of the caption table (2000 cues: seconds down to about 15 ms), the playhead finds its cue without scanning the list, spell-check results are cached per text, and the thumbnail preview scales the frame in two steps. The squiggle under a misspelled word is drawn again.
 - **Frame scoring comes from the shared `framescore` package**, also used by YouThumber. The scoring rules and ranking weights are no longer copied in two places. Python 3.13 is now the minimum, because the package requires it.
 
 ### Added

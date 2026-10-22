@@ -66,3 +66,14 @@ def test_a_word_on_a_wrapped_line_can_be_split_from_the_table(qtbot):
     expected = wrapped.token_index(last.textStart() + 1)
     assert expected is not None and expected > 0
     assert panel._token_under(0, pos) == expected
+
+
+def test_underlines_are_plain_numbers(qtbot):
+    # PySide hands back (x, cursor) from cursorToX; the squiggle needs the x.
+    wrapped = WrappedText("aaaa bbbb cccc dddd", QFont(), 60)
+    marks = wrapped.underlines(0, 9)
+    assert marks
+    for x1, x2, baseline in marks:
+        assert isinstance(x1, float) and isinstance(x2, float)
+        assert x2 > x1
+        assert isinstance(baseline, float)

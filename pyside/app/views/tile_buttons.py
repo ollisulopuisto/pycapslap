@@ -5,6 +5,7 @@ one is lit, the primary action is solid, and a button that cannot act now
 fades back into the panel.
 """
 
+import hashlib
 import tempfile
 from functools import lru_cache, partial
 from pathlib import Path
@@ -69,18 +70,26 @@ def icon(name: str) -> QIcon:
     """The named icon in its normal, active and disabled colours."""
     markup = _ICONS[name]
     out = QIcon()
+    active = _render(markup, ACTIVE)
     out.addPixmap(_render(markup, NORMAL), QIcon.Mode.Normal)
-    out.addPixmap(_render(markup, ACTIVE), QIcon.Mode.Active)
-    out.addPixmap(_render(markup, ACTIVE), QIcon.Mode.Selected)
+    out.addPixmap(active, QIcon.Mode.Active)
+    out.addPixmap(active, QIcon.Mode.Selected)
     out.addPixmap(_render(markup, DISABLED), QIcon.Mode.Disabled)
     return out
 
 
 @lru_cache(maxsize=None)
 def chevron_url() -> str:
-    """A drop-down arrow file for style sheets, which can only point at files."""
-    path = Path(tempfile.gettempdir()) / "pycapslap_chevron.png"
-    _render(_ICONS["chevron"], "#a1a1aa", 16).save(str(path))
+    """A drop-down arrow file for style sheets, which can only point at files.
+
+    The file is named after its markup, so one left by an earlier run is
+    reused as is and a changed arrow gets a file of its own.
+    """
+    svg = _svg(_ICONS["chevron"], "#a1a1aa")
+    digest = hashlib.sha1(svg).hexdigest()[:12]
+    path = Path(tempfile.gettempdir()) / f"pycapslap_chevron_{digest}.png"
+    if not path.is_file():
+        _render(_ICONS["chevron"], "#a1a1aa", 16).save(str(path))
     return path.as_posix()
 
 
@@ -136,10 +145,10 @@ def tile(
     """
     button = QToolButton()
     button.setObjectName("primary" if primary else "tile")
-    button.setStyleSheet(TILE_QSS)
     button.setText(text)
     button.setIcon(icon(icon_name))
     button.setToolTip(tooltip)
+    # One style sheet per button: each one set is parsed and applied again.
     if compact or dense:
         # Less side padding: label widths decide how narrow a column can get,
         # and fonts differ between machines by a pixel or two.
