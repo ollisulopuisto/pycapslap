@@ -410,9 +410,13 @@ class MainWindow(QMainWindow):
         right_col.addWidget(self.thumbnail_panel)
 
         # Internal labels retained for telemetry & unit tests without cluttering UI
-        self.meta_lbl = QLabel("No video loaded\nDrop a file or click Open Video.")
-        self.thumb_lbl = QLabel("No thumbnail generated yet")
-        self.perf_lbl = QLabel("Measuring...")
+        # Parented and hidden: parentless top-level labels get destroyed by the
+        # Python GC at arbitrary times, which segfaulted in the QLabel destructor.
+        self.meta_lbl = QLabel("No video loaded\nDrop a file or click Open Video.", self)
+        self.thumb_lbl = QLabel("No thumbnail generated yet", self)
+        self.perf_lbl = QLabel("Measuring...", self)
+        for lbl in (self.meta_lbl, self.thumb_lbl, self.perf_lbl):
+            lbl.hide()
 
         splitter.addWidget(right_widget)
         # The sidebar gets three parts to the preview column's two: the caption
