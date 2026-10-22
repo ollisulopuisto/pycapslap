@@ -12,6 +12,7 @@ thumbnail is one frame of the whole video, not a frame of one speaker.
 
 from __future__ import annotations
 
+import importlib.util
 import logging
 import sys
 from collections.abc import Callable
@@ -38,18 +39,16 @@ DEFAULT_INTERVAL_SECONDS = 5.0
 DEFAULT_SUGGESTIONS = 12
 SUGGESTION_WIDTH = 320
 
-HAS_VISION = False
-if sys.platform == "darwin":
-    try:
-        import AVFoundation  # noqa: F401
-        import CoreMedia  # noqa: F401
-        import Quartz  # noqa: F401
-        import Vision  # noqa: F401
-        from Foundation import NSURL  # noqa: F401
+_FRAMEWORKS = ("AVFoundation", "CoreMedia", "Foundation", "Quartz", "Vision")
 
-        HAS_VISION = True
-    except ImportError as err:
-        logger.warning("Apple Vision is not available for frame suggestions: %s", err)
+# Only whether the bindings are installed: importing them takes ~300 ms, which
+# the window would pay at every start for a feature used now and then. The
+# functions below import what they use, on the scanning thread.
+HAS_VISION = sys.platform == "darwin" and all(
+    importlib.util.find_spec(name) is not None for name in _FRAMEWORKS
+)
+if sys.platform == "darwin" and not HAS_VISION:
+    logger.warning("Apple Vision is not available for frame suggestions")
 
 
 @dataclass
@@ -258,12 +257,11 @@ def scan_frames(
 ) -> list[SuggestedFrame]:
     """Samples the video and returns the ``top`` best frames, best first, each with a
     small JPEG and its scores. Raises RuntimeError where Vision is not available."""
-    import Quartz
-
     if not HAS_VISION:
         raise RuntimeError("Frame suggestions need macOS with Apple Vision")
 
     import CoreMedia
+    import Quartz
 
     asset, generator = _make_generator(video_path)
     duration = CoreMedia.CMTimeGetSeconds(asset.duration())

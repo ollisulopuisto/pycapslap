@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from collections import deque
 from concurrent.futures import Future
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,9 @@ class CoreClient(QObject):
         self._lock = threading.Lock()
         self._write_lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        # The core's last words on stderr, for the log when it dies.
+        self._stderr_tail: deque[str] = deque(maxlen=20)
         self._running = False
 
         self._start_process()
@@ -143,6 +147,9 @@ class CoreClient(QObject):
         if fonts_dir.is_dir():
             env["CAPSLAP_FONTS_DIR"] = str(fonts_dir)
 
+        # Buffered pipes: unbuffered, readline() reads a byte per system call,
+        # and a frame comes back as a base64 line of hundreds of kilobytes —
+        # that alone took about 250 ms of each extractFrame round trip.
         self.proc = subprocess.Popen(
             [self.binary_path],
             stdin=subprocess.PIPE,
@@ -150,16 +157,37 @@ class CoreClient(QObject):
             stderr=subprocess.PIPE,
             cwd=working_dir,
             env=env,
-            bufsize=0,
+            bufsize=-1,
         )
         self._running = True
         self._reader_thread = threading.Thread(target=self._stdout_reader, daemon=True)
         self._reader_thread.start()
+        self._stderr_thread = threading.Thread(target=self._stderr_reader, daemon=True)
+        self._stderr_thread.start()
+
+    def _stderr_reader(self) -> None:
+        # The pipe has to be read even though nothing in it is needed: ffmpeg's
+        # audio extraction writes its banner there (~3 KB per transcription), and
+        # once 64 KB sit unread the next write blocks — ffmpeg and with it the
+        # transcription hang for good, after about twenty of them.
+        proc = self.proc
+        assert proc and proc.stderr
+        try:
+            for line_bytes in iter(proc.stderr.readline, b""):
+                line = line_bytes.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    self._stderr_tail.append(line)
+                    logger.debug("core stderr: %s", line)
+        except (OSError, ValueError):
+            pass  # closed under us by close()
 
     def _stdout_reader(self) -> None:
         assert self.proc and self.proc.stdout
         while self._running:
-            line_bytes = self.proc.stdout.readline()
+            try:
+                line_bytes = self.proc.stdout.readline()
+            except (OSError, ValueError):
+                break  # closed under us by close()
             if not line_bytes:
                 break
             line = line_bytes.decode("utf-8", errors="replace").strip()
@@ -200,6 +228,12 @@ class CoreClient(QObject):
         exit_code = self.proc.poll() if self.proc else -1
         try:
             if self._running:
+                if self._stderr_tail:
+                    logger.warning(
+                        "Rust core exited (%s); its stderr ended with:\n%s",
+                        exit_code,
+                        "\n".join(self._stderr_tail),
+                    )
                 self.core_exited.emit(exit_code or 0)
         except RuntimeError:
             pass
@@ -244,13 +278,33 @@ class CoreClient(QObject):
         return self.call("cancel", target_id)
 
     def close(self) -> None:
+        """Stop the core and let go of everything that belongs to it. Idempotent."""
         self._running = False
-        if self.proc and self.proc.poll() is None:
+        proc = self.proc
+        if proc is None:
+            return
+        if proc.poll() is None:
             try:
-                self.proc.terminate()
-                self.proc.wait(timeout=1.0)
+                proc.terminate()
+                proc.wait(timeout=1.0)
             except (subprocess.TimeoutExpired, OSError):
                 try:
-                    self.proc.kill()
-                except OSError:
+                    proc.kill()
+                    # Reap it, or it lingers as a zombie until the Popen is collected.
+                    proc.wait(timeout=1.0)
+                except (subprocess.TimeoutExpired, OSError):
                     pass
+        # The readers see EOF once the process is gone; wait for them before
+        # closing the pipes they read from.
+        for thread in (self._reader_thread, self._stderr_thread):
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=1.0)
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                if pipe:
+                    pipe.close()
+            except (OSError, ValueError):
+                pass
+        # Nothing answers from here on; a caller blocked on result() must not
+        # wait forever if the reader did not get to it.
+        self._fail_all_pending(RuntimeError("Rust core was closed"))
