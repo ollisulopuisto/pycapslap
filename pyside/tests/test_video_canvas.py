@@ -485,3 +485,34 @@ def test_the_renderers_answer_drops_the_ghost_even_as_the_same_pixmap(qtbot):
     canvas.set_caption_layer(layer)
     assert canvas._drag_ghost is None
     assert canvas.caption_layer is layer
+
+
+def test_crop_fills_the_export_canvas_and_the_video_overflows_it(qtbot):
+    """Crop mode covers the canvas with the video, centred, and cuts the rest.
+
+    A 16:9 source cropped to 9:16 is as tall as the canvas and wider than it:
+    the edges that the render cuts off are drawn past the canvas, so the
+    editor shows what is kept, not a letterboxed frame.
+    """
+    from PySide6.QtGui import QPixmap
+
+    canvas = VideoCanvasWidget()
+    qtbot.addWidget(canvas)
+    canvas.resize(400, 800)
+    source = QPixmap(1920, 1080)
+    source.fill()
+    canvas.set_fallback_pixmap(source)
+    canvas.set_export_canvas((1080, 1920))
+
+    fit_video = canvas._get_video_rect()
+    assert fit_video.width() < canvas._get_canvas_rect().width() + 1
+
+    canvas.set_crop_fill(True)
+    canvas_rect = canvas._get_canvas_rect()
+    video_rect = canvas._get_video_rect()
+    assert abs(video_rect.height() - canvas_rect.height()) < 1.0
+    assert video_rect.width() > canvas_rect.width()
+    assert abs(video_rect.center().x() - canvas_rect.center().x()) < 1.0
+
+    canvas.set_crop_fill(False)
+    assert canvas._get_video_rect() == fit_video

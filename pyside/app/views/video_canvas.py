@@ -126,6 +126,9 @@ class VideoCanvasWidget(QWidget):
         # padded canvas, not the video — so the editor has to show that canvas
         # or it is previewing a frame the render never produces.
         self.export_canvas_size: tuple[int, int] | None = None
+        # Crop mode: the video covers the canvas and the edges past it are cut,
+        # as the renderer's "fill" does. Off, the video is fitted whole.
+        self.crop_fill = False
         self.active_safe_platforms: set[str] = {"tiktok", "reels", "shorts"}
         # The safe zones only change with the canvas or the platforms, but
         # their dashed, antialiased outlines and labels cost more to paint than
@@ -148,6 +151,11 @@ class VideoCanvasWidget(QWidget):
 
     def set_style(self, style: CaptionStyle) -> None:
         self.style = style
+        self.update()
+
+    def set_crop_fill(self, on: bool) -> None:
+        """Draw the video cropped to the export canvas instead of fitted whole."""
+        self.crop_fill = bool(on)
         self.update()
 
     def set_export_canvas(self, size: tuple[int, int] | None) -> None:
@@ -299,6 +307,24 @@ class VideoCanvasWidget(QWidget):
             h,
         )
 
+    @staticmethod
+    def _cover(outer: QRectF, aspect: float) -> QRectF:
+        """Smallest rectangle of `aspect` centred over `outer`, overhanging it."""
+        if outer.width() <= 0 or outer.height() <= 0 or aspect <= 0:
+            return QRectF(0, 0, 0, 0)
+        if (outer.width() / outer.height()) > aspect:
+            w = outer.width()
+            h = w / aspect
+        else:
+            h = outer.height()
+            w = h * aspect
+        return QRectF(
+            outer.left() + (outer.width() - w) / 2.0,
+            outer.top() + (outer.height() - h) / 2.0,
+            w,
+            h,
+        )
+
     def _get_canvas_rect(self) -> QRectF:
         """Where the exported frame sits on screen."""
         w = float(self.width())
@@ -316,11 +342,14 @@ class VideoCanvasWidget(QWidget):
         """Where the video itself sits, fitted into the export canvas.
 
         Mirrors the renderer's "fit" strategy: the source is scaled to fit
-        whole and the rest of the canvas is padding.
+        whole and the rest of the canvas is padding. In crop mode it covers
+        the canvas instead, and the overhang is cut off when painting.
         """
         canvas = self._get_canvas_rect()
         if self.export_canvas_size is None:
             return canvas
+        if self.crop_fill:
+            return self._cover(canvas, self._source_aspect())
         return self._fit(canvas, self._source_aspect())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -380,10 +409,15 @@ class VideoCanvasWidget(QWidget):
 
         # 2. The export canvas: the video, and the padding around it
         painter.fillRect(canvas_rect, QColor(0, 0, 0))
+        # A cropped video overhangs the canvas: clip it to the frame that is kept.
+        painter.save()
+        if self.crop_fill and self.export_canvas_size is not None:
+            painter.setClipRect(canvas_rect)
         if self._current_frame and self._current_frame.isValid():
             self._current_frame.paint(painter, video_rect, self._paint_opts)
         elif self._fallback_pixmap and not self._fallback_pixmap.isNull():
             painter.drawPixmap(video_rect.toRect(), self._fallback_pixmap)
+        painter.restore()
 
         # 3. Render Platform UI Safe Areas (TikTok, Reels, Shorts)
         if self.active_safe_platforms:

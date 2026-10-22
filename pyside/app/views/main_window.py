@@ -89,6 +89,17 @@ EXPORT_FORMATS: list[tuple[str, str]] = [
     ("Export: 4:5 Vertical", "4:5"),
 ]
 
+# What to do with the part of the source that does not fit an export shape it
+# does not share: letterbox it (fit) or cut its edges off (fill). Offered only
+# when the export's aspect differs from the source's; the choice is kept.
+CROP_MODES: list[tuple[str, str]] = [
+    ("Fit: whole frame, black bars", "fit"),
+    ("Crop: fill the frame, cut the edges", "fill"),
+]
+CROP_MODE_KEY = "render/crop_mode"
+# Shapes closer than this are the same shape: nothing to crop or letterbox.
+ASPECT_TOLERANCE = 0.01
+
 # Proof copy next to the full-size render: label, short side in pixels (0 = none).
 PROOF_COPIES = [
     ("No proof copy", 0),
@@ -308,6 +319,24 @@ class MainWindow(QMainWindow):
         self.format_combo.setFixedHeight(ROW_HEIGHT)
         action_bar.addWidget(self.format_combo, 1, 1)
 
+        # Crop or letterbox, when the export changes the shape of the source.
+        # Hidden otherwise, so the row takes no room.
+        self.crop_combo = QComboBox()
+        for label, value in CROP_MODES:
+            self.crop_combo.addItem(label, value)
+        self.crop_combo.setCurrentIndex(
+            max(0, self.crop_combo.findData(QSettings().value(CROP_MODE_KEY, "fit")))
+        )
+        self.crop_combo.setToolTip(
+            "The export has another shape than the video: fit the whole frame "
+            "with black bars, or fill the shape and cut the edges off"
+        )
+        self.crop_combo.currentIndexChanged.connect(self._on_crop_mode_changed)
+        self.crop_combo.setStyleSheet(combo_style())
+        self.crop_combo.setFixedHeight(ROW_HEIGHT)
+        self.crop_combo.setVisible(False)
+        action_bar.addWidget(self.crop_combo, 3, 0, 1, 3)
+
         # A smaller copy from the same encode: small for clients to proof, the
         # full-size one for publishing.
         self.proof_combo = QComboBox()
@@ -358,7 +387,7 @@ class MainWindow(QMainWindow):
         )
         self.render_btn.clicked.connect(self._on_render_video_requested)
         self.render_btn.setEnabled(False)
-        action_bar.addWidget(self.render_btn, 3, 0, 1, 3)
+        action_bar.addWidget(self.render_btn, 4, 0, 1, 3)
 
         for column in range(3):
             action_bar.setColumnStretch(column, 1)
@@ -579,12 +608,44 @@ class MainWindow(QMainWindow):
         return self._canvas_size or self._preview_frame_size()
 
     def _on_video_size_changed(self, _w: int, _h: int) -> None:
+        self._update_crop_offer()
         self.schedule_preview_layout()
 
     def _on_export_format_changed(self, _index: int) -> None:
         # Another canvas means another layout and other pixels: everything
         # rendered for the previous one is wrong.
+        self._update_crop_offer()
         self.schedule_preview_layout()
+
+    def _crop_offered(self) -> bool:
+        """Whether the export has another shape than the video it comes from."""
+        export = self._export_format()
+        size = self.player.canvas.get_video_size()
+        if export == "source" or not size:
+            return False
+        try:
+            w, h = (float(v) for v in export.split(":"))
+        except ValueError:
+            return False
+        export_ar = w / h
+        source_ar = size[0] / size[1]
+        return abs(source_ar - export_ar) / export_ar > ASPECT_TOLERANCE
+
+    def _crop_mode(self) -> str:
+        """What the render and the placement are asked for: "fill" or "fit"."""
+        if not self._crop_offered():
+            return "fit"
+        return self.crop_combo.currentData() or "fit"
+
+    def _update_crop_offer(self) -> None:
+        offered = self._crop_offered()
+        self.crop_combo.setVisible(offered)
+        # The editor draws the same choice the render makes.
+        self.player.canvas.set_crop_fill(offered and self._crop_mode() == "fill")
+
+    def _on_crop_mode_changed(self, _index: int) -> None:
+        QSettings().setValue(CROP_MODE_KEY, self.crop_combo.currentData())
+        self._update_crop_offer()
 
     def _request_preview_layout(self) -> None:
         if not self.project.segments:
@@ -1457,6 +1518,7 @@ class MainWindow(QMainWindow):
             "trimStartMs": trim_start_ms,
             "trimEndMs": trim_end_ms,
             "exportFormats": [export_fmt],
+            "cropStrategy": self._crop_mode(),
             "proofShortSide": self.proof_combo.currentData() or None,
             "introVideo": self.bumper_path("intro") or None,
             "outroVideo": self.bumper_path("outro") or None,
@@ -1720,6 +1782,7 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "segments": [s.to_dict() for s in self.project.segments],
             "exportFormat": export_fmt,
+            "cropStrategy": self._crop_mode(),
             "karaoke": self.project.style.karaoke,
             "multiline": self.project.style.multiline,
             "justifyLines": self.project.style.justify_lines,

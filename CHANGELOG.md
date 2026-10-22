@@ -7,6 +7,19 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.22.2] - 2026-10-22
+
+### Added
+- **Crop or letterbox when the export has another shape.** Exporting a 9:16 video as 4:5 (or any shape the source does not have) now offers a choice: **Fit** keeps the whole frame with black bars, as before, and **Crop** fills the new shape and cuts the edges off, centred. The editor shows the crop, and the caption placement samples the same frame. The choice is kept between sessions, and it only appears when the shape changes.
+
+## [v26.10.22.1] - 2026-10-22
+
+### Fixed
+- **The spell-check underline no longer crashes the caption table.** Misspelled words are underlined again, and a saved style keeps its own caption position rather than the template's.
+- **The core no longer stalls after about twenty transcriptions.** Its error output is read, so it cannot fill the pipe and hang; the core starts faster, and closing it cleans up its processes.
+- **Telemetry labels are kept alive,** so they are not destroyed while in use.
+- **The development re-launch stays in the virtual environment,** even when a stale link is left in `.venv`.
+
 ## [v26.10.21.2] - 2026-10-21
 
 ### Changed

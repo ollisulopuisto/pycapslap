@@ -1126,3 +1126,81 @@ def test_the_sidebar_takes_three_parts_to_the_preview_columns_two(qtbot):
     # 1.42 on the macOS runner, so the band is wide enough for both.
     assert 1.3 <= right / left <= 1.7
     window.close()
+
+
+def _crop_window(qtbot, calls, export_fmt, source_size=(1920, 1080)):
+    """A window on a video of `source_size`, with a core that records calls."""
+    from concurrent.futures import Future
+
+    from PySide6.QtCore import QObject, QUrl, Signal
+    from PySide6.QtGui import QPixmap
+
+    class MockCore(QObject):
+        progress = Signal(str, str, float)
+        proc = None
+
+        def call(self, method, params):
+            calls.append((method, params))
+            f: Future = Future()
+            if method == "burn":
+                f.set_result([{"captionedVideo": "/out/talk.mp4"}])
+            else:
+                f.set_result({"cues": [], "frameWidth": 1080, "frameHeight": 1920})
+            return f
+
+        def close(self):
+            pass
+
+    window = MainWindow(core_client=MockCore())
+    qtbot.addWidget(window)
+    source = QPixmap(*source_size)
+    source.fill()
+    window.player.canvas.set_fallback_pixmap(source)
+    window.player.media_player.source = lambda: QUrl.fromLocalFile("/clips/talk.mp4")
+    window.set_caption_segments([CaptionSegment(0, 2000, "Ja")])
+    window.format_combo.setCurrentIndex(window.format_combo.findData(export_fmt))
+    return window
+
+
+def test_crop_is_offered_only_when_the_export_changes_the_shape(qtbot):
+    calls: list[tuple[str, dict]] = []
+    window = _crop_window(qtbot, calls, "9:16")
+
+    # A 16:9 source exported as 9:16 changes shape: crop or letterbox.
+    assert not window.crop_combo.isHidden()
+    assert window.crop_combo.currentData() == "fit"
+
+    # The source's own frame, or one of the same shape, has nothing to crop.
+    window.format_combo.setCurrentIndex(window.format_combo.findData("source"))
+    assert window.crop_combo.isHidden()
+    window.format_combo.setCurrentIndex(window.format_combo.findData("16:9"))
+    assert window.crop_combo.isHidden()
+
+    window.format_combo.setCurrentIndex(window.format_combo.findData("4:5"))
+    assert not window.crop_combo.isHidden()
+    window.close()
+
+
+def test_crop_choice_reaches_the_render_and_the_placement(qtbot):
+    calls: list[tuple[str, dict]] = []
+    window = _crop_window(qtbot, calls, "9:16")
+
+    window._on_render_video_requested()
+    assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "fit"
+
+    window.crop_combo.setCurrentIndex(window.crop_combo.findData("fill"))
+    window._on_render_video_requested()
+    assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "fill"
+    assert window.player.canvas.crop_fill is True
+
+    # Placement samples the frames the same way the render cuts them.
+    window._on_auto_place_requested()
+    placed = [p for m, p in calls if m == "autoPlaceCaptions"][-1]
+    assert placed["cropStrategy"] == "fill"
+
+    # Once the shape is the source's, there is nothing to crop: letterbox sent.
+    window.format_combo.setCurrentIndex(window.format_combo.findData("source"))
+    window._on_render_video_requested()
+    assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "fit"
+    assert window.player.canvas.crop_fill is False
+    window.close()
