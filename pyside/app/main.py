@@ -59,11 +59,18 @@ def ensure_macos_app_name() -> bool:
         venv_macos = venv_root / "MacOS"
         venv_macos.mkdir(parents=True, exist_ok=True)
         venv_pycapslap = venv_macos / "PyCapSlap"
-        if not venv_pycapslap.exists():
-            try:
+        try:
+            # A stale link (e.g. left by a test's temp dir) must be replaced, or
+            # the re-exec falls back to a Python outside the venv.
+            if (
+                venv_pycapslap.is_symlink()
+                and os.readlink(venv_pycapslap) != toolchain_bin
+            ):
+                venv_pycapslap.unlink()
+            if not venv_pycapslap.exists():
                 os.symlink(toolchain_bin, str(venv_pycapslap))
-            except OSError:
-                pass
+        except OSError:
+            pass
 
         target_bin = str(venv_pycapslap) if venv_pycapslap.exists() else toolchain_bin
         main_script = str(Path(__file__).resolve())
