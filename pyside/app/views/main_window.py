@@ -72,6 +72,7 @@ from app.models.review import (
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
 from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
+from app.services import vision_frames
 from app.views.thumbnail_panel import ThumbnailPanel
 from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
 from app.views.timeline import TimelineScroll, VisualTimelineWidget
@@ -166,7 +167,9 @@ class MainWindow(QMainWindow):
         # gets the height and the sidebar sits beside it.
         screen = QGuiApplication.primaryScreen()
         height = min(900, screen.availableGeometry().height() - 60) if screen else 900
-        self.resize(760, height)
+        # Wide enough that the sidebar keeps its 3:2 share (the preview column
+        # cannot shrink below about 372 px, see the splitter below).
+        self.resize(1060, height)
         self.setMinimumSize(720, 640)
         self.setAcceptDrops(True)
 
@@ -372,8 +375,8 @@ class MainWindow(QMainWindow):
         # Visual Timeline Widget, with its edit tools and zoom above it
         self.timeline = VisualTimelineWidget(self)
         self.timeline_scroll = TimelineScroll(self.timeline, self)
-        left_col.addLayout(self._build_timeline_toolbar())
         left_col.addWidget(self.timeline_scroll)
+        left_col.addLayout(self._build_timeline_toolbar())
 
         splitter.addWidget(left_widget)
 
@@ -391,6 +394,13 @@ class MainWindow(QMainWindow):
         # Thumbnail: a frame from the playhead, with its own title written over it
         self.thumbnail_panel = ThumbnailPanel(self)
         self.thumbnail_panel.capture_requested.connect(self.trigger_extract_thumbnail)
+        self.thumbnail_panel.changed.connect(self._on_thumbnail_changed)
+        self.thumbnail_panel.suggest_requested.connect(self._suggest_frames)
+        self.thumbnail_panel.suggestion_chosen.connect(
+            lambda seconds: self.trigger_extract_thumbnail(
+                int(round(seconds * 1000)), mark_changed=True
+            )
+        )
         self.thumbnail_panel.save_requested.connect(self._save_thumbnail)
         self.thumbnail_panel.set_style(self.project.style)
         right_col.addWidget(self.thumbnail_panel)
@@ -401,9 +411,11 @@ class MainWindow(QMainWindow):
         self.perf_lbl = QLabel("Measuring...")
 
         splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 0)
-        splitter.setSizes([420, 360])
+        # The sidebar gets three parts to the preview column's two: the caption
+        # list and its controls need the room more than the 9:16 preview does.
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([420, 630])
         root_layout.addWidget(splitter)
 
         # Status Bar
@@ -1945,6 +1957,7 @@ class MainWindow(QMainWindow):
         self._apply_bug()  # this video may have the logo turned off
         # Check if sidecar exists
         if self.project.load_sidecar() and self.project.segments:
+            self._restore_thumbnail()
             self.set_caption_segments(self.project.segments)
             if self.project.style:
                 self.caption_panel.set_style(self.project.style)
@@ -1984,14 +1997,21 @@ class MainWindow(QMainWindow):
             f"Size: {os.path.getsize(file_path) / (1024 * 1024):.1f} MB"
         )
 
-    def trigger_extract_thumbnail(self) -> None:
-        """Take the frame under the playhead into the thumbnail panel."""
+    def trigger_extract_thumbnail(
+        self, time_ms: int | None = None, mark_changed: bool | None = None
+    ) -> None:
+        """Take the frame under the playhead (or at `time_ms`) into the thumbnail."""
         video_path = self.player.media_player.source().toLocalFile()
         if not video_path and self.project.video_path:
             video_path = self.project.video_path
         if not video_path:
             return
-        time_ms = self.player.media_player.position()
+        # A capture at the playhead, or a suggestion picked, is a change to the
+        # project; restoring a saved frame at its saved time is not.
+        if mark_changed is None:
+            mark_changed = time_ms is None
+        if time_ms is None:
+            time_ms = self.player.media_player.position()
         self.status.showMessage("Capturing frame...")
         self.thumb_btn.setEnabled(False)
         fut = self.core.call(
@@ -2015,7 +2035,9 @@ class MainWindow(QMainWindow):
                     if img.isNull():
                         self.status.showMessage("No frame at the playhead", 3000)
                         return
-                    self.thumbnail_panel.set_frame(img)
+                    self.thumbnail_panel.set_frame(img, time_ms)
+                    if mark_changed:
+                        self._on_thumbnail_changed()
                     self.status.showMessage(
                         f"Frame captured at {format_timestamp(time_ms)}", 3000
                     )
@@ -2031,6 +2053,49 @@ class MainWindow(QMainWindow):
                 self._in_gui(reset_err)
 
         fut.add_done_callback(on_done)
+
+    def _suggest_frames(self) -> None:
+        """Scan the video for expressive frames on a worker thread, then show them."""
+        video_path = self.project.video_path
+        if not video_path:
+            self.status.showMessage("Open a video first", 3000)
+            return
+        if not vision_frames.HAS_VISION:
+            self.status.showMessage("Frame suggestions need macOS (Apple Vision)", 4000)
+            return
+        self.thumbnail_panel.set_scanning(True, 0.0)
+
+        def run() -> None:
+            try:
+                frames = vision_frames.scan_frames(
+                    video_path,
+                    progress=lambda fraction: self._in_gui(
+                        lambda f=fraction: self.thumbnail_panel.set_scanning(True, f)
+                    ),
+                )
+            except Exception as err:  # Vision can fail in many ways; show them all
+                message = str(err)
+                self._in_gui(lambda: self._suggest_failed(message))
+                return
+            self._in_gui(lambda: self.thumbnail_panel.show_suggestions(frames))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _suggest_failed(self, message: str) -> None:
+        self.thumbnail_panel.set_scanning(False)
+        QMessageBox.warning(self, "Frame suggestions", message)
+
+    def _on_thumbnail_changed(self) -> None:
+        self.project.thumbnail = self.thumbnail_panel.state()
+        self.project.is_dirty = True
+
+    def _restore_thumbnail(self) -> None:
+        """Show the thumbnail the project was saved with: its headline, and its frame."""
+        self.thumbnail_panel.load_state(self.project.thumbnail)
+        self.project.thumbnail = self.thumbnail_panel.state() or self.project.thumbnail
+        time_ms = self.project.thumbnail.get("timeMs")
+        if time_ms is not None and self.project.video_path:
+            self.trigger_extract_thumbnail(int(time_ms))
 
     def _save_thumbnail(self, image) -> None:
         if image is None or image.isNull():

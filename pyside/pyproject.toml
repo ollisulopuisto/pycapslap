@@ -6,8 +6,11 @@ readme = "README.md"
 authors = [
     { name = "Olli Sulopuisto", email = "1051255+ollisulopuisto@users.noreply.github.com" }
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = [
+    # Frame scoring and ranking, shared with youthumber. Pinned to a commit: the
+    # release tag could not be pushed from the build session.
+    "framescore @ git+https://github.com/ollisulopuisto/podcast@720e323897c4c851d9bef488bd457f1c3e4a445e#subdirectory=packages/framescore",
     "cryptography>=46",
     # Pure-Python ctypes wrapper. Spell checking stays silently off until the
     # native library is installed too (macOS: brew install libvoikko).
@@ -16,6 +19,11 @@ dependencies = [
     "pyside6>=6.11.2",
     "pytest>=9.1.1",
     "pytest-qt>=4.5.0",
+    # Apple Vision, for suggesting thumbnail frames. macOS only.
+    "pyobjc-framework-Vision>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-CoreMedia>=10.0; sys_platform == 'darwin'",
 ]
 
 [project.scripts]

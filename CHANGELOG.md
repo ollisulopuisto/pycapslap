@@ -7,7 +7,15 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.21.2] - 2026-10-21
+
+### Changed
+- **Frame scoring comes from the shared `framescore` package**, also used by YouThumber. The scoring rules and ranking weights are no longer copied in two places. Python 3.13 is now the minimum, because the package requires it.
+
 ### Added
+- **A wider window, with the sidebar taking three parts to the preview column's two.** The window opens at 1060 px, so the caption list and its controls have room beside the 9:16 preview.
+- **Suggested thumbnail frames, from Apple Vision (macOS).** Suggest frames samples the video every few seconds and scores the faces in each frame: Apple's own capture quality, sharpness, the expression (smile, open mouth, raised eyebrows) and the gesture (a raised hand, most of all a pointing one). The best frames appear as pictures under the thumbnail; picking one takes that frame and the time is saved in the sidecar. The scoring is the same as YouThumber's.
+- **The sidecar keeps the thumbnail.** The `.capslap.json` file records which frame is the thumbnail (its time) and the headline. Opening the video takes that frame again and shows the headline.
 - **Caption position is part of the style, and defaults to 75%.** A preset saves where the captions sit. Moving the position with no caption picked moves every caption, and loading a style moves them to its position. The thumbnail title is set in the caption style's font, colours, outline, glow and background box, at the same position.
 - **The scrubber lines up with the timeline.** It spans the width of the timeline below, so both playheads sit in the same place. Play and Stop have icons, and the times show milliseconds, `mm:ss.mmm`, as the caption table does.
 - **Thumbnails from the playhead.** Extract Thumbnail takes the frame under the playhead at full size. The thumbnail panel under the captions shows it with a title field of its own; the preview draws the title as it will be saved, and Save thumbnail… writes a PNG next to the video.

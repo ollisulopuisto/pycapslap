@@ -762,6 +762,8 @@ class CaptionsFile:
     style: CaptionStyle = field(default_factory=CaptionStyle)
     trim_start_ms: int | None = None
     trim_end_ms: int | None = None
+    # The thumbnail: {"timeMs": the frame chosen, "title": the headline}.
+    thumbnail: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -773,6 +775,8 @@ class CaptionsFile:
             data["trimStartMs"] = self.trim_start_ms
         if self.trim_end_ms is not None:
             data["trimEndMs"] = self.trim_end_ms
+        if self.thumbnail:
+            data["thumbnail"] = self.thumbnail
         return data
 
     @classmethod
@@ -793,6 +797,7 @@ class CaptionsFile:
             trim_end_ms=(
                 int(d["trimEndMs"]) if d.get("trimEndMs") is not None else None
             ),
+            thumbnail=dict(d.get("thumbnail") or {}),
         )
 
     @classmethod
@@ -820,6 +825,7 @@ class ProjectState:
     is_dirty: bool = False
     trim_start_ms: int | None = None
     trim_end_ms: int | None = None
+    thumbnail: dict[str, Any] = field(default_factory=dict)
 
     @property
     def video_path(self) -> str | None:
@@ -918,6 +924,7 @@ class ProjectState:
             self.style = cf.style
             self.trim_start_ms = cf.trim_start_ms
             self.trim_end_ms = cf.trim_end_ms
+            self.thumbnail = cf.thumbnail
             self.is_dirty = False
             return True
         except (OSError, json.JSONDecodeError):
@@ -938,6 +945,7 @@ class ProjectState:
                 style=self.style,
                 trim_start_ms=self.trim_start_ms,
                 trim_end_ms=self.trim_end_ms,
+                thumbnail=self.thumbnail,
             )
             target.write_text(cf.to_json_str(), encoding="utf-8")
             self.is_dirty = False
