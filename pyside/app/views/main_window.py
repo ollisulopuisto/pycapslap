@@ -192,6 +192,9 @@ class MainWindow(QMainWindow):
         # anything that feeds the ASS document changes.
         self._layer_cache: dict[int, QPixmap] = {}
         self._layer_pending: set[int] = set()
+        # Renders the core is actually working on, stale epochs included: an
+        # invalidation forgets their keys, not the ffmpeg processes behind them.
+        self._layer_in_flight = 0
         self._layer_epoch = 0
         self._layer_wanted: dict | None = None
         self._layer_queue: list[dict] = []
@@ -659,6 +662,10 @@ class MainWindow(QMainWindow):
 
         key = int(cue.get("startMs", 0))
         cached = self._layer_cache.get(key)
+        if cached is not None:
+            # Most recently used goes last, so eviction drops the cue the
+            # user has been away from longest rather than the oldest render.
+            self._layer_cache[key] = self._layer_cache.pop(key)
         self.overlay.set_caption_layer(cached)
         if cached is None:
             self._layer_wanted = cue
@@ -726,9 +733,11 @@ class MainWindow(QMainWindow):
 
         Each one is two ffmpeg processes; letting a twelve-word block start
         twelve of them at once would fight the video playback for the same
-        cores it is trying to stay ahead of.
+        cores it is trying to stay ahead of. Counted across epochs: a render
+        made stale by an edit still runs to the end, and dragging a caption
+        would otherwise start three more on every pause of the pointer.
         """
-        while self._layer_queue and len(self._layer_pending) < MAX_LAYER_RENDERS:
+        while self._layer_queue and self._layer_in_flight < MAX_LAYER_RENDERS:
             cue = self._layer_queue.pop(0)
             key = int(cue.get("startMs", 0))
             if key in self._layer_cache or key in self._layer_pending:
@@ -780,10 +789,18 @@ class MainWindow(QMainWindow):
             return False
 
         self._layer_pending.add(key)
+        self._layer_in_flight += 1
         epoch = self._layer_epoch
 
+        def finish() -> None:
+            self._layer_in_flight -= 1
+            # A stale render's key may already be pending again in the new
+            # epoch; that request is not this one's to release.
+            if epoch == self._layer_epoch:
+                self._layer_pending.discard(key)
+
         def release() -> None:
-            self._layer_pending.discard(key)
+            finish()
             self._pump_layer_queue()
 
         def on_done(f) -> None:
@@ -804,7 +821,7 @@ class MainWindow(QMainWindow):
                 return
 
             def store(image=image) -> None:
-                self._layer_pending.discard(key)
+                finish()
                 self._pump_layer_queue()
                 if epoch != self._layer_epoch or image.isNull():
                     return

@@ -387,8 +387,9 @@ class VideoPlayerWidget(QWidget):
             if pos_ms > self._range_end_ms:
                 self.seek_to_ms(self._range_end_ms)
                 return
+        # Not drawn, so no repaint: the frame for this position repaints the
+        # canvas when it arrives, and a repaint here would be a second one.
         self.canvas.current_pos_ms = pos_ms
-        self.canvas.update()
         if not self._is_scrubbing:
             self.slider.setValue(pos_ms)
             self.time_lbl.setText(self._format_time(pos_ms))
