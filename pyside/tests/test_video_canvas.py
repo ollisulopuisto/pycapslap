@@ -373,9 +373,7 @@ def _max_channel_diff(a: QImage, b: QImage) -> int:
     a = a.convertToFormat(QImage.Format.Format_ARGB32)
     b = b.convertToFormat(QImage.Format.Format_ARGB32)
     assert a.size() == b.size()
-    return max(
-        abs(x - y) for x, y in zip(bytes(a.constBits()), bytes(b.constBits()))
-    )
+    return max(abs(x - y) for x, y in zip(bytes(a.constBits()), bytes(b.constBits())))
 
 
 def test_the_cached_safe_zones_look_like_the_painted_ones(qtbot):

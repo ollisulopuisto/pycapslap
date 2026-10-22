@@ -478,9 +478,7 @@ class VideoCanvasWidget(QWidget):
         self._layer_scaled = (key, scaled)
         return scaled
 
-    def _safe_area_pixmap(
-        self, canvas_rect: QRectF
-    ) -> tuple[QPoint, QPixmap, QRegion]:
+    def _safe_area_pixmap(self, canvas_rect: QRectF) -> tuple[QPoint, QPixmap, QRegion]:
         """The safe zones for `canvas_rect`, painted once and then reused:
         where the pixmap goes, the pixmap, and the part of it worth drawing."""
         dpr = self.devicePixelRatioF()
@@ -529,9 +527,7 @@ class VideoCanvasWidget(QWidget):
                     # The label badge is a fixed height, taller than a thin zone.
                     max(15.0, canvas_rect.height() * (region.height / 100.0)),
                 )
-                zones += zone.toAlignedRect().adjusted(
-                    -margin, -margin, margin, margin
-                )
+                zones += zone.toAlignedRect().adjusted(-margin, -margin, margin, margin)
 
         origin = QPoint(left, top)
         self._safe_area_cache = (key, pixmap, origin, zones)
