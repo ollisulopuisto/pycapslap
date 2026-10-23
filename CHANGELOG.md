@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Added
+- **Crop position.** When exporting to a shape the source does not share, crop can now be centred ("fill"), from the start (top/left, "start") or from the end (bottom/right, "end"). The editor offers all three in the crop combo, and the choice reaches the render and the caption placement.
+
 ## [v26.10.22.2] - 2026-10-22
 
 ### Added

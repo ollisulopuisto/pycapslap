@@ -486,6 +486,18 @@ pub fn seek_pts_filter(time_sec: f64) -> String {
     format!("setpts={:.3}/TB", time_sec.max(0.0))
 }
 
+// / The ffmpeg crop offset expressions (x, y) for a crop strategy.
+// "start" cuts from the top/left (offset 0), "center" splits the excess evenly,
+// "end" cuts from the bottom/right (offset = full excess). The axis that is not
+// being cropped evaluates to 0 either way.
+fn crop_offsets(crop_strategy: &str) -> (&str, &str) {
+    match crop_strategy {
+        "start" => ("0", "0"),
+        "end" => ("iw-ow", "ih-oh"),
+        _ => ("(iw-ow)/2", "(ih-oh)/2"),
+    }
+}
+
 // / Extended filter builder with crop strategy support
 pub fn build_fitpad_filter_with_options(
     target_w: u32,
@@ -498,17 +510,20 @@ pub fn build_fitpad_filter_with_options(
     let mut filters = Vec::new();
 
     // 1. Scaling Strategy
-    if crop_strategy == "fill" {
-        // "Fill" / "Center Crop" strategy:
-        // Scale input so it COVERS the target area (keeping aspect ratio), then crop the center.
-        // Formula: scale=w=TARGET_W:h=TARGET_H:force_original_aspect_ratio=increase,crop=TARGET_W:TARGET_H
+    let is_crop = matches!(crop_strategy, "fill" | "start" | "end");
+    if is_crop {
+        // "Fill" / crop strategy:
+        // Scale input so it COVERS the target area (keeping aspect ratio), then crop.
+        // Formula: scale=w=TARGET_W:h=TARGET_H:force_original_aspect_ratio=increase,crop=TARGET_W:TARGET_H:X:Y
+        // X/Y: "start" = 0/0 (top-left), "center" = (iw-ow)/2:(ih-oh)/2, "end" = iw-ow:ih-oh (bottom-right)
         filters.push(format!(
             "scale=w={}:h={}:force_original_aspect_ratio=increase",
             target_w, target_h
         ));
+        let (x, y) = crop_offsets(crop_strategy);
         filters.push(format!(
-            "crop={}:{}:(iw-ow)/2:(ih-oh)/2",
-            target_w, target_h
+            "crop={}:{}:{}:{}",
+            target_w, target_h, x, y
         ));
     } else {
         // "Fit" / "Letterbox" strategy (default):
@@ -890,14 +905,15 @@ pub fn build_gpu_fitpad_filter(
     subtitle_path: Option<&str>,
     crop_strategy: &str,
 ) -> String {
-    let fill = crop_strategy == "fill";
-    let (w, h) = gpu_scale_dims(src_w, src_h, target_w, target_h, fill);
+    let is_crop = matches!(crop_strategy, "fill" | "start" | "end");
+    let (w, h) = gpu_scale_dims(src_w, src_h, target_w, target_h, is_crop);
     let mut filters = vec![format!("scale_vt=w={w}:h={h}"), "hwdownload".to_string()];
     // The decoder's own pixel format is NV12 for 8-bit video; anything else
     // fails here at start-up and the next attempt takes over.
     filters.push("format=nv12".to_string());
-    if fill {
-        filters.push(format!("crop={target_w}:{target_h}:(iw-ow)/2:(ih-oh)/2"));
+    if is_crop {
+        let (x, y) = crop_offsets(crop_strategy);
+        filters.push(format!("crop={target_w}:{target_h}:{x}:{y}"));
     } else {
         filters.push(format!(
             "pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:black"
@@ -2386,6 +2402,36 @@ mod tests {
     }
 
     #[test]
+    fn test_build_fitpad_filter_start_strategy_crops_from_top_left() {
+        let filter = build_fitpad_filter_with_options(
+            1080,
+            1920,
+            None,
+            HardwareEncoder::Software,
+            "start",
+            false,
+        );
+        // 16:9 into 9:16: width is cropped, x offset starts at the left edge.
+        assert!(filter.contains("crop=1080:1920:0:0"));
+        assert!(filter.contains("force_original_aspect_ratio=increase"));
+    }
+
+    #[test]
+    fn test_build_fitpad_filter_end_strategy_crops_from_bottom_right() {
+        let filter = build_fitpad_filter_with_options(
+            1080,
+            1920,
+            None,
+            HardwareEncoder::Software,
+            "end",
+            false,
+        );
+        // 16:9 into 9:16: width is cropped, x offset starts at the right edge.
+        assert!(filter.contains("crop=1080:1920:iw-ow:ih-oh"));
+        assert!(filter.contains("force_original_aspect_ratio=increase"));
+    }
+
+    #[test]
     fn test_build_fitpad_filter_fit_strategy() {
         let filter = build_fitpad_filter_with_options(
             1080,
@@ -2499,6 +2545,24 @@ mod tests {
         );
         // No CPU scaler is left in the chain.
         assert!(!fill.contains(",scale=") && !fit.contains(",scale="));
+    }
+
+    #[test]
+    fn gpu_filter_start_strategy_crops_from_top_left() {
+        let start = build_gpu_fitpad_filter(1920, 1080, 1080, 1920, None, "start");
+        assert_eq!(
+            start,
+            "scale_vt=w=3414:h=1920,hwdownload,format=nv12,crop=1080:1920:0:0,format=nv12"
+        );
+    }
+
+    #[test]
+    fn gpu_filter_end_strategy_crops_from_bottom_right() {
+        let end = build_gpu_fitpad_filter(1920, 1080, 1080, 1920, None, "end");
+        assert_eq!(
+            end,
+            "scale_vt=w=3414:h=1920,hwdownload,format=nv12,crop=1080:1920:iw-ow:ih-oh,format=nv12"
+        );
     }
 
     #[test]

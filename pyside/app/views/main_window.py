@@ -90,11 +90,14 @@ EXPORT_FORMATS: list[tuple[str, str]] = [
 ]
 
 # What to do with the part of the source that does not fit an export shape it
-# does not share: letterbox it (fit) or cut its edges off (fill). Offered only
-# when the export's aspect differs from the source's; the choice is kept.
+# does not share: letterbox it (fit), or cut its edges off centred (fill),
+# from the start (top/left) or from the end (bottom/right). Offered only when
+# the export's aspect differs from the source's; the choice is kept.
 CROP_MODES: list[tuple[str, str]] = [
     ("Fit: whole frame, black bars", "fit"),
     ("Crop: fill the frame, cut the edges", "fill"),
+    ("Crop from the start (top/left)", "start"),
+    ("Crop from the end (bottom/right)", "end"),
 ]
 CROP_MODE_KEY = "render/crop_mode"
 # Shapes closer than this are the same shape: nothing to crop or letterbox.
@@ -329,7 +332,8 @@ class MainWindow(QMainWindow):
         )
         self.crop_combo.setToolTip(
             "The export has another shape than the video: fit the whole frame "
-            "with black bars, or fill the shape and cut the edges off"
+            "with black bars, or fill the shape and cut the edges off — centred, "
+            "from the start (top/left) or from the end (bottom/right)"
         )
         self.crop_combo.currentIndexChanged.connect(self._on_crop_mode_changed)
         self.crop_combo.setStyleSheet(combo_style())
@@ -641,7 +645,7 @@ class MainWindow(QMainWindow):
         offered = self._crop_offered()
         self.crop_combo.setVisible(offered)
         # The editor draws the same choice the render makes.
-        self.player.canvas.set_crop_fill(offered and self._crop_mode() == "fill")
+        self.player.canvas.set_crop_fill(offered and self._crop_mode() != "fit")
 
     def _on_crop_mode_changed(self, _index: int) -> None:
         QSettings().setValue(CROP_MODE_KEY, self.crop_combo.currentData())

@@ -1198,6 +1198,21 @@ def test_crop_choice_reaches_the_render_and_the_placement(qtbot):
     placed = [p for m, p in calls if m == "autoPlaceCaptions"][-1]
     assert placed["cropStrategy"] == "fill"
 
+    # Start and end move the crop off-centre: left/right offset reaches the render.
+    window.crop_combo.setCurrentIndex(window.crop_combo.findData("start"))
+    window._on_render_video_requested()
+    assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "start"
+    assert window.player.canvas.crop_fill is True
+
+    window.crop_combo.setCurrentIndex(window.crop_combo.findData("end"))
+    window._on_render_video_requested()
+    assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "end"
+    assert window.player.canvas.crop_fill is True
+
+    window._on_auto_place_requested()
+    placed = [p for m, p in calls if m == "autoPlaceCaptions"][-1]
+    assert placed["cropStrategy"] == "end"
+
     # Once the shape is the source's, there is nothing to crop: letterbox sent.
     window.format_combo.setCurrentIndex(window.format_combo.findData("source"))
     window._on_render_video_requested()
