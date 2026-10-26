@@ -95,7 +95,9 @@ class CoreClient(QObject):
                 Path(frozen_root) / worker_name,
                 Path(sys.executable).resolve().parent / worker_name,
             ]
-            worker_path = next((p for p in worker_candidates if p.is_file()), worker_candidates[0])
+            worker_path = next(
+                (p for p in worker_candidates if p.is_file()), worker_candidates[0]
+            )
             env["CAPSLAP_ORUKEET_WORKER"] = str(worker_path)
         else:
             env["CAPSLAP_PYTHON"] = sys.executable
@@ -105,9 +107,17 @@ class CoreClient(QObject):
         if sys.platform == "darwin":
             cache_dir = Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
         elif os.name == "nt":
-            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PyCapSlap" / "orukeet"
+            cache_dir = (
+                Path(os.environ.get("LOCALAPPDATA", Path.home()))
+                / "PyCapSlap"
+                / "orukeet"
+            )
         else:
-            cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pycapslap" / "orukeet"
+            cache_dir = (
+                Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+                / "pycapslap"
+                / "orukeet"
+            )
         env["CAPSLAP_ORUKEET_CACHE"] = str(cache_dir)
         # Ensure FFMPEG_PATH and rust/bin are in environment
         project_root = Path(self.binary_path).resolve().parents[2]

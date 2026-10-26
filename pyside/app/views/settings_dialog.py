@@ -21,17 +21,21 @@ def get_transcription_params() -> dict:
 
 
 class OrukeetSettingsDialog(QDialog):
-    def __init__(self, core_client: CoreClient | None = None, parent: QWidget | None = None):
+    def __init__(
+        self, core_client: CoreClient | None = None, parent: QWidget | None = None
+    ):
         super().__init__(parent)
         self.setWindowTitle("Orukeet Settings")
         self.setMinimumWidth(420)
         self.core = core_client
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(
-            "Orukeet transcribes audio on this computer. The verified Q8 model and "
-            "native runtime are downloaded once, then transcription works offline."
-        ))
+        layout.addWidget(
+            QLabel(
+                "Orukeet transcribes audio on this computer. The verified Q8 model and "
+                "native runtime are downloaded once, then transcription works offline."
+            )
+        )
         self.status = QLabel("Checking local model…")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
@@ -55,7 +59,11 @@ class OrukeetSettingsDialog(QDialog):
     def _check_done(self, future) -> None:
         try:
             installed = bool(future.result())
-            message = "Orukeet is ready for offline transcription." if installed else "Orukeet has not been downloaded yet."
+            message = (
+                "Orukeet is ready for offline transcription."
+                if installed
+                else "Orukeet has not been downloaded yet."
+            )
         except (RuntimeError, ValueError, OSError) as error:
             message = f"Could not check Orukeet: {error}"
         QTimer.singleShot(0, self, lambda: self.status.setText(message))
@@ -74,7 +82,9 @@ class OrukeetSettingsDialog(QDialog):
             message = "Orukeet is ready for offline transcription."
         except (RuntimeError, ValueError, OSError) as error:
             message = f"Orukeet installation failed: {error}"
+
         def update() -> None:
             self.status.setText(message)
             self.install_button.setEnabled(True)
+
         QTimer.singleShot(0, self, update)

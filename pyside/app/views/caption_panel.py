@@ -224,7 +224,9 @@ class CaptionPanelWidget(QWidget):
         header_layout.addWidget(self.combo_transcription_style, 3, 2)
 
         self.btn_orukeet_settings = tile("Orukeet", "gear", compact=True)
-        self.btn_orukeet_settings.setToolTip("Install and check the local Orukeet model")
+        self.btn_orukeet_settings.setToolTip(
+            "Install and check the local Orukeet model"
+        )
         self.btn_orukeet_settings.clicked.connect(self.orukeet_settings_requested.emit)
         header_layout.addWidget(self.btn_orukeet_settings, 3, 1)
 
