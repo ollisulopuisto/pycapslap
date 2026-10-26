@@ -151,31 +151,16 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                 Err(e) => write_err(&id, format!("Invalid params for generateCaptions: {}", e)),
             }
         }
-        "downloadModel" => {
-            match serde_json::from_value::<core::types::DownloadModelParams>(r.params) {
-                Ok(p) => {
-                    tokio::select! {
-                       res = core::whisper::download_model_rpc(&id, p, &mut emit) => {
-                            match res {
-                               Ok(v) => write_ok(&id, &v),
-                               Err(e) => write_err(&id, e.to_string()),
-                           }
-                       }
-                       _ = rx.recv() => {
-                            write_err(&id, "Cancelled".to_string());
-                       }
-                    }
-                }
-                Err(e) => write_err(&id, format!("Invalid params for downloadModel: {}", e)),
+        "installOrukeet" => {
+            tokio::select! {
+                result = core::transcription::install_orukeet(&id, &mut emit) => match result {
+                    Ok(value) => write_ok(&id, &value),
+                    Err(error) => write_err(&id, error.to_string()),
+                },
+                _ = rx.recv() => write_err(&id, "Cancelled".to_string()),
             }
         }
-        "checkModelExists" => match serde_json::from_value::<String>(r.params) {
-            Ok(model_name) => match core::whisper::check_model_exists(&model_name) {
-                Ok(exists) => write_ok(&id, &exists),
-                Err(e) => write_err(&id, e.to_string()),
-            },
-            Err(e) => write_err(&id, format!("Invalid params for checkModelExists: {}", e)),
-        },
+        "checkOrukeetInstalled" => write_ok(&id, &core::transcription::orukeet_installed()),
         "extractFrame" => {
             match serde_json::from_value::<core::types::ExtractFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_frame_png(&p.video_path, p.time_ms) {
@@ -210,15 +195,9 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                         p.transcribe_end_ms,
                     );
                     tokio::select! {
-                        res = captions::extract_and_transcribe_with_server(
+                        res = captions::extract_and_transcribe_with_range(
                             &id,
                             &p.input_video,
-                            p.split_by_words,
-                            p.model,
-                            p.language,
-                            p.api_key,
-                            p.prompt,
-                            p.whisper_base_url,
                             range,
                             &mut emit
                         ) => {

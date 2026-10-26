@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
+import { app } from 'electron'
 
 type Progress = { event: 'Progress'; id: string; status: string; progress: number }
 
@@ -65,10 +66,19 @@ export class Sidecar {
 
       // Ensure PATH includes our bin dir, and pass FFMPEG_PATH to Rust
       const sep = process.platform === 'win32' ? ';' : ':'
-      const env = {
+      const env: NodeJS.ProcessEnv = {
         ...process.env,
         PATH: `${binDir}${sep}${process.env.PATH || ''}`,
         FFMPEG_PATH: ffmpegPath,
+        CAPSLAP_ORUKEET_WORKER: this.orukeetWorkerPath(__dirname),
+        CAPSLAP_ORUKEET_CACHE: path.join(app.getPath('userData'), 'orukeet'),
+      }
+      if (!app.isPackaged) {
+        const repoRoot = path.resolve(__dirname, '../../../')
+        const venv = process.env.VIRTUAL_ENV
+        env.CAPSLAP_PYTHON = venv
+          ? path.join(venv, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+          : path.join(repoRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
       }
 
       this.proc = spawn(binPath, [], {
@@ -136,23 +146,20 @@ export class Sidecar {
     info('[SIDECAR] Rust sidecar started successfully')
   }
 
+  private orukeetWorkerPath(mainDir: string): string {
+    const exe = process.platform === 'win32' ? 'orukeet-worker.exe' : 'orukeet-worker'
+    if (app.isPackaged) return path.join(process.resourcesPath, exe)
+    return path.resolve(mainDir, '../../../pyside/app/services/orukeet_worker.py')
+  }
+
   private createFriendlyError(errorMessage: string): Error {
     const error = new Error()
 
     // Determine error type and create user-friendly message
-    if (errorMessage.includes('API key not provided') || errorMessage.includes("You didn't provide an API key")) {
-      error.name = 'API_KEY_MISSING'
-      error.message = 'OpenAI API key is not configured. Add it in settings for better transcription quality.'
-    } else if (errorMessage.includes('401 Unauthorized') || errorMessage.includes('Unauthorized')) {
-      error.name = 'API_KEY_INVALID'
-      error.message = 'Invalid OpenAI API key. Please check the key in settings.'
-    } else if (
-      errorMessage.includes('No whisper models found') ||
-      errorMessage.includes('No local whisper models available')
-    ) {
-      error.name = 'NO_LOCAL_MODELS'
-      error.message = 'Local models not found. Using online transcription via OpenAI API.'
-    } else if (errorMessage.includes('whisper.cpp binary not found') || errorMessage.includes('FFmpeg not found')) {
+    if (errorMessage.includes('Orukeet')) {
+      error.name = 'ORUKEET_ERROR'
+      error.message = errorMessage
+    } else if (errorMessage.includes('FFmpeg not found')) {
       error.name = 'BINARY_NOT_FOUND'
       error.message = 'System components not found. Try reinstalling the application.'
     } else if (
@@ -162,12 +169,6 @@ export class Sidecar {
     ) {
       error.name = 'NETWORK_ERROR'
       error.message = 'Internet connection problem. Check your connection and try again.'
-    } else if (errorMessage.includes('rate limit') || errorMessage.includes('Too Many Requests')) {
-      error.name = 'RATE_LIMIT'
-      error.message = 'OpenAI API rate limit exceeded. Try later or check your plan.'
-    } else if (errorMessage.includes('insufficient_quota') || errorMessage.includes('quota')) {
-      error.name = 'QUOTA_EXCEEDED'
-      error.message = 'OpenAI API quota exhausted. Top up your account or use local models.'
     } else if (errorMessage.includes('file not found') || errorMessage.includes('No such file')) {
       error.name = 'FILE_NOT_FOUND'
       error.message = 'File not found. Make sure the video file exists and is accessible.'

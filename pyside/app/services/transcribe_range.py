@@ -1,6 +1,6 @@
 """Transcribing a part of a recording rather than all of it.
 
-Whisper over a 47-minute episode keeps every core busy for a long time, so a
+Transcribing a long episode keeps every core busy for a long time, so a
 long recording is transcribed a part at a time: between the trim marks (I and O),
 and the cues land among the ones already there.
 """
@@ -11,7 +11,7 @@ from typing import Literal
 from app.models.captions import CaptionSegment
 
 # Longer than this and Transcribe asks for a range instead of starting on the
-# whole file. Ten minutes of speech is a few minutes of whisper on a laptop.
+# whole file. Ten minutes is a useful range for focused local transcription.
 LONG_RECORDING_MS = 10 * 60 * 1000
 # The timeline's end mark sits at the exact length until someone moves it; a
 # mark this close to the end has not been moved.

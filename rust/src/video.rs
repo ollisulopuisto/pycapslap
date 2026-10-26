@@ -1,5 +1,5 @@
 use crate::rpc::RpcEvent;
-use crate::whisper::{find_ffmpeg_binary, find_ffprobe_binary};
+use crate::media_tools::{find_ffmpeg_binary, find_ffprobe_binary};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Command;
@@ -10,7 +10,6 @@ use tokio::process::Command as TokioCommand;
 static VIDEOTOOLBOX_AVAIL: OnceLock<bool> = OnceLock::new();
 static NVENC_AVAIL: OnceLock<bool> = OnceLock::new();
 static LIBASS_AVAIL: OnceLock<bool> = OnceLock::new();
-static FFMPEG_WHISPER_AVAIL: OnceLock<bool> = OnceLock::new();
 static FFMPEG_VERSION: OnceLock<Option<String>> = OnceLock::new();
 static BEST_HW_ENCODER: OnceLock<HardwareEncoder> = OnceLock::new();
 
@@ -102,7 +101,7 @@ pub fn get_ffmpeg_path_sync() -> String {
             // can't run on this machine (e.g. x86_64 binary on arm64 without Rosetta),
             // skip it and try the next candidate.
             fn usable(path: &std::path::Path) -> bool {
-                path.exists() && crate::whisper::binary_runnable(path)
+                crate::media_tools::binary_runnable(path)
             }
 
             // Try to use cached path or default to "ffmpeg"
@@ -681,30 +680,6 @@ pub async fn is_nvenc_available() -> bool {
     })
 }
 
-/// Check if FFmpeg has built-in Whisper support (requires FFmpeg 8.0+)
-/// This function tests if ffmpeg supports the whisper audio filter
-pub async fn is_ffmpeg_whisper_available() -> bool {
-    *FFMPEG_WHISPER_AVAIL.get_or_init(|| {
-        let result = Command::new(get_ffmpeg_path_sync())
-            .args(["-hide_banner", "-filters"])
-            .output();
-
-        match result {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                stdout.contains("whisper")
-            }
-            Err(_) => false,
-        }
-    })
-}
-
-/// Check if whisper.cpp CLI is available (preferred method)
-pub async fn is_whisper_cpp_available() -> bool {
-    // Use the new cross-platform whisper binary detection from whisper.rs
-    crate::whisper::find_whisper_binary().await.is_ok()
-}
-
 /// Check if FFmpeg has libass support for subtitles
 pub async fn is_libass_available() -> bool {
     *LIBASS_AVAIL.get_or_init(|| {
@@ -722,7 +697,7 @@ pub async fn is_libass_available() -> bool {
     })
 }
 
-/// Get FFmpeg version to check if it's 8.0+ for Whisper support
+/// Get the installed FFmpeg version.
 pub async fn get_ffmpeg_version() -> Option<String> {
     FFMPEG_VERSION
         .get_or_init(|| {

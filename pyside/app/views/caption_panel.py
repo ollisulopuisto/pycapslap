@@ -153,7 +153,7 @@ class CaptionPanelWidget(QWidget):
     auto_place_requested = Signal()
     save_requested = Signal()
     transcribe_requested = Signal()
-    whisper_settings_requested = Signal()
+    orukeet_settings_requested = Signal()
     add_cue_requested = Signal()
     mark_start_requested = Signal()
     mark_end_requested = Signal()
@@ -209,16 +209,14 @@ class CaptionPanelWidget(QWidget):
         header_layout.addWidget(self.btn_add_cue, 1, 0)
 
         self.btn_transcribe = tile("Transcribe", "mic", compact=True)
-        self.btn_transcribe.setToolTip("Run AI Whisper transcription on video audio")
+        self.btn_transcribe.setToolTip("Transcribe audio locally with Orukeet")
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
         header_layout.addWidget(self.btn_transcribe, 1, 1)
 
-        self.btn_whisper_settings = tile("Whisper", "gear", compact=True)
-        self.btn_whisper_settings.setToolTip(
-            "Choose local (offline) Whisper vs. OpenAI API, and manage models"
-        )
-        self.btn_whisper_settings.clicked.connect(self.whisper_settings_requested.emit)
-        header_layout.addWidget(self.btn_whisper_settings, 3, 1)
+        self.btn_orukeet_settings = tile("Orukeet", "gear", compact=True)
+        self.btn_orukeet_settings.setToolTip("Install and check the local Orukeet model")
+        self.btn_orukeet_settings.clicked.connect(self.orukeet_settings_requested.emit)
+        header_layout.addWidget(self.btn_orukeet_settings, 3, 1)
 
         self.btn_autoplace = tile("Auto Dodge", "wand", compact=True)
         self.btn_autoplace.setToolTip(

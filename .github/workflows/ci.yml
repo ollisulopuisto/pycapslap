@@ -26,7 +26,7 @@ jobs:
         working-directory: rust
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Download bundled ffmpeg/ffprobe/whisper-cli
+      - name: Download bundled ffmpeg/ffprobe
         run: bash scripts/download-binaries.sh
         env:
           TARGET_OS: macOS
@@ -57,7 +57,7 @@ jobs:
         working-directory: rust
         run: cargo build --release
 
-      - name: Download bundled ffmpeg/ffprobe/whisper-cli
+      - name: Download bundled ffmpeg/ffprobe
         run: bash scripts/download-binaries.sh
         env:
           TARGET_OS: macOS

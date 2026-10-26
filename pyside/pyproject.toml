@@ -17,6 +17,7 @@ dependencies = [
     "libvoikko>=4.3",
     "psutil>=7.2.2",
     "pyside6>=6.11.2",
+    "orukeet @ https://github.com/Oruk-AI/orukeet/releases/download/v0.1.1/orukeet-0.1.1-py3-none-any.whl",
     "pytest>=9.1.1",
     "pytest-qt>=4.5.0",
     # Apple Vision, for suggesting thumbnail frames. macOS only.

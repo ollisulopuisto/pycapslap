@@ -13,7 +13,6 @@ import {
   Zap,
   Settings,
   FileVideo,
-  Key,
   Palette,
   ChevronDown,
   Check,
@@ -45,7 +44,6 @@ import {
   DialogClose,
 } from '@/app/components/ui/dialog'
 import { Input } from './components/ui/input'
-import { ModelInfo } from '@/lib/preload'
 
 const getVideoPath = (filename: string) => {
   if (import.meta.env.DEV) {
@@ -60,27 +58,9 @@ const showErrorToast = (error: any, count: number = 1) => {
   const countText = count > 1 ? ` (${count} videos)` : ''
 
   switch (error.name) {
-    case 'API_KEY_MISSING':
-      toast.error('🔑 API Key Not Configured', {
-        description: 'Add OpenAI API key in settings for better transcription quality.',
-        action: {
-          label: 'Settings',
-          onClick: () => {
-            // Will open API key settings
-          },
-        },
-      })
-      break
-
-    case 'API_KEY_INVALID':
-      toast.error('🔑 Invalid API Key', {
-        description: 'Please check your OpenAI API key in settings.',
-      })
-      break
-
-    case 'NO_LOCAL_MODELS':
-      toast.warning('📥 Using Online Transcription', {
-        description: 'Local models not found. Transcription performed via OpenAI API.',
+    case 'ORUKEET_ERROR':
+      toast.error('Orukeet transcription failed', {
+        description: error.message || 'Install or verify Orukeet in Local transcription settings.',
       })
       break
 
@@ -99,18 +79,6 @@ const showErrorToast = (error: any, count: number = 1) => {
     case 'NETWORK_ERROR':
       toast.error('🌐 Internet Connection Problem', {
         description: 'Check your network connection and try again.',
-      })
-      break
-
-    case 'RATE_LIMIT':
-      toast.error('⏰ Rate Limit Exceeded', {
-        description: 'Too many requests to OpenAI API. Try again later.',
-      })
-      break
-
-    case 'QUOTA_EXCEEDED':
-      toast.error('💳 API Quota Exhausted', {
-        description: 'Top up your OpenAI balance or use local models.',
       })
       break
 
@@ -144,37 +112,30 @@ interface Settings {
   selectedTemplate: Template['id']
   exportFormats: string[]
   selectedFont: string
-  selectedModel: ModelInfo['name']
   textColor: string
   highlightWordColor: string
   outlineColor: string
   glowEffect: boolean
   captionStyle: Template['captionStyle']
   captionPosition: 'top' | 'top-quarter' | 'center' | 'bottom-quarter' | 'bottom'
-  selectedLanguage: string
   outputSize?: string
   cropStrategy?: string
   fontSize: number
-  /** Optional base URL of an OpenAI-compatible Whisper server (e.g. whisper.cpp server on the local network) */
-  whisperServerUrl: string
 }
 
 const defaultSettings: Settings = {
   selectedTemplate: 'karaoke',
   exportFormats: ['9:16'],
   selectedFont: 'montserrat-black',
-  selectedModel: 'whisper-1',
   textColor: '#ffffff',
   highlightWordColor: '#ffff00',
   outlineColor: '#000000',
   glowEffect: false,
   captionStyle: 'karaoke',
   captionPosition: 'center',
-  selectedLanguage: 'auto',
   outputSize: 'original',
   cropStrategy: 'fit',
   fontSize: 65,
-  whisperServerUrl: '',
 }
 
 const templates: Template[] = [
@@ -464,156 +425,45 @@ export function TemplatePreviewCard({
 }
 
 function SettingsModal({
-  onSave,
   isOpen,
   onOpenChange,
-  apiKey,
-  whisperServerUrl,
 }: {
-  onSave: (apiKey: string, whisperServerUrl: string) => void
   isOpen: boolean
   onOpenChange: (open: boolean) => void
-  apiKey: string
-  whisperServerUrl: string
 }) {
-  const [apiKeyState, setApiKeyState] = useState(apiKey)
-  const [whisperServerUrlState, setWhisperServerUrlState] = useState(whisperServerUrl)
-
-  useEffect(() => {
-    setApiKeyState(apiKey)
-  }, [apiKey])
-
-  useEffect(() => {
-    setWhisperServerUrlState(whisperServerUrl)
-  }, [whisperServerUrl])
-
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-9 h-9 text-muted-foreground hover:text-foreground bg-card/80 backdrop-blur-sm border border-border/50 hover:bg-card/90 transition-all duration-200 focus:ring-0 focus-visible:ring-0 ring-0"
-        >
-          <Key className="!w-3.5 !h-3.5" />
+        <Button variant="ghost" size="sm" className="w-9 h-9 text-muted-foreground bg-card/80 border border-border/50">
+          <Cog className="!w-3.5 !h-3.5" />
         </Button>
       </DialogTrigger>
-
       <DialogContent className="max-w-[450px]">
         <DialogHeader>
-          <DialogTitle className="text-xl font-medium text-white/90">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-primary/20">
-                <Key className="w-5 h-5 text-primary" />
-              </div>
-              <h2 className="text-xl font-medium text-foreground">API Settings</h2>
-            </div>
-          </DialogTitle>
+          <DialogTitle>Local transcription</DialogTitle>
         </DialogHeader>
-
-        <div className="flex flex-col gap-4 py-4">
-          <div className="grid gap-2">
-            <label htmlFor="name" className="text-sm text-white/40 font-medium">
-              OpenAI Api Key
-            </label>
-            <Input
-              id="key"
-              placeholder="sk-..."
-              className="w-full px-4 py-3 border border-border rounded-lg bg-background/50 focus:outline-none hover:border-primary/50 focus:border-primary/70 ring-0 focus-visible:ring-2 focus-visible:ring-primary/20 focus:ring-2 focus:ring-primary/20 text-foreground transition-all duration-200"
-              value={apiKeyState}
-              onChange={(e) => setApiKeyState(e.target.value)}
-            />
-          </div>
-
-          <div className="grid gap-2">
-            <label htmlFor="whisper-server" className="text-sm text-white/40 font-medium">
-              Whisper Server URL
-            </label>
-            <Input
-              id="whisper-server"
-              placeholder="http://192.168.1.50:8000"
-              className="w-full px-4 py-3 border border-border rounded-lg bg-background/50 focus:outline-none hover:border-primary/50 focus:border-primary/70 ring-0 focus-visible:ring-2 focus-visible:ring-primary/20 focus:ring-2 focus:ring-primary/20 text-foreground transition-all duration-200"
-              value={whisperServerUrlState}
-              onChange={(e) => setWhisperServerUrlState(e.target.value)}
-            />
-            <p className="text-xs text-white/30 leading-relaxed">
-              Optional. Point CapSlap at a whisper.cpp server (or any OpenAI-compatible Whisper API) running on another
-              machine, e.g. your Mac Studio:{' '}
-              <code className="text-white/50">./server -m ggml-base.bin --port 8000</code>. When set, transcription runs
-              on that machine instead of locally.
-            </p>
-          </div>
-        </div>
-
-        <DialogFooter className="gap-4">
-          <DialogClose asChild>
-            <Button variant="outline" className="flex-1 bg-transparent text-foreground">
-              Cancel
-            </Button>
-          </DialogClose>
-          <DialogClose asChild>
-            <Button
-              onClick={() => {
-                onSave(apiKeyState, whisperServerUrlState.trim())
-                onOpenChange(false)
-              }}
-              className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90"
-            >
-              Save Settings
-            </Button>
-          </DialogClose>
+        <p className="text-sm text-muted-foreground py-3">
+          CapSlap uses Orukeet for on-device transcription. Download its verified model and native runtime once; later transcripts run offline.
+        </p>
+        <ModelDownloader />
+        <DialogFooter>
+          <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-export function FileCard({ path, isLoading, onRemove }: { path: string; isLoading?: boolean; onRemove: () => void }) {
-  const fileName = path.split('/').pop() || ''
-
-  return (
-    <div className="group relative bg-gradient-to-br from-card/80 to-card/40 border border-border/30 rounded-xl p-4 hover:border-primary/40 transition-all duration-300 backdrop-blur-sm">
-      <div className="flex items-center gap-4">
-        <div className="relative flex items-center justify-center w-6 h-6">
-          {isLoading ? (
-            <Loader2 className="w-5 h-5 text-primary animate-spin" data-testid="file-loading-spinner" />
-          ) : (
-            <FileVideo className="w-6 h-6 text-white" />
-          )}
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <p className="font-medium text-foreground truncate text-sm">{fileName}</p>
-          {isLoading && (
-            <p className="text-[11px] text-primary/80 flex items-center gap-1 font-medium">Loading preview frame…</p>
-          )}
-        </div>
-
-        <Button
-          variant="ghost"
-          size="sm"
-          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive hover:!bg-destructive/10 transition-all duration-200 rounded-lg"
-          onClick={onRemove}
-        >
-          <Trash className="w-4 h-4" />
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 export default function App() {
   const [selectedVideos, setSelectedVideos] = useState<string[]>([])
   const [videoSettings, setVideoSettings] = useState<Settings>(defaultSettings)
-  const [apiKey, setApiKey] = useState('')
   const [isLoaded, setIsLoaded] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [isLoadingPreviewFrame, setIsLoadingPreviewFrame] = useState(false)
   const [isGeneratingPreviews, setIsGeneratingPreviews] = useState(false)
   const [isDragOver, setIsDragOver] = useState(false)
   const [_, setDragCounter] = useState(0)
-  const [isApiKeySettingsOpen, setIsApiKeySettingsOpen] = useState(false)
-  const [shouldGenerateAfterApiKey, setShouldGenerateAfterApiKey] = useState(false)
+  const [isTranscriptionSettingsOpen, setIsTranscriptionSettingsOpen] = useState(false)
   const [currentRequestId, setCurrentRequestId] = useState<string | null>(null)
   const [exportProgress, setExportProgress] = useState(0)
   const [exportStatus, setExportStatus] = useState('')
@@ -772,12 +622,6 @@ export default function App() {
 
   useEffect(() => {
     const savedSettings = localStorage.getItem('settings-v3')
-    const savedApiKey = localStorage.getItem('api-key-v1')
-
-    if (savedApiKey) {
-      setApiKey(savedApiKey)
-    }
-
     if (savedSettings) {
       try {
         const cachedVideoSettings: Settings = JSON.parse(savedSettings)
@@ -885,24 +729,6 @@ export default function App() {
     }))
   }
 
-  const handleSaveApiKey = (newKey: string, whisperServerUrl: string) => {
-    const key = newKey.trim()
-    setApiKey(key)
-    localStorage.setItem('api-key-v1', key)
-
-    if (whisperServerUrl !== videoSettings.whisperServerUrl) {
-      updateSettings({ whisperServerUrl })
-    }
-
-    // If generation was queued behind the API-key prompt, resume it with the
-    // freshly saved values. We pass them explicitly because React state from
-    // setApiKey isn't visible inside handleGenerate's current closure.
-    if (shouldGenerateAfterApiKey) {
-      setShouldGenerateAfterApiKey(false)
-      handleGenerate(key, whisperServerUrl.trim() || videoSettings.whisperServerUrl.trim())
-    }
-  }
-
   const handleCancel = async () => {
     if (currentRequestId) {
       toast.info('Cancelling generation...')
@@ -975,7 +801,7 @@ export default function App() {
     }
   }
 
-  const handleGenerate = async (apiKeyOverride?: string, whisperServerUrlOverride?: string) => {
+  const handleGenerate = async () => {
     if (!selectedVideos.length) {
       toast.error('Please select a video first')
       return
@@ -985,8 +811,6 @@ export default function App() {
     const requestId = crypto.randomUUID()
     const video = selectedVideos[0]
 
-    const activeApiKey = (apiKeyOverride ?? apiKey).trim() || ''
-    const activeWhisperServerUrl = (whisperServerUrlOverride ?? videoSettings.whisperServerUrl).trim() || ''
 
     setIsGenerating(true)
     setExportProgress(0)
@@ -1015,15 +839,6 @@ export default function App() {
       // Continue to generation if load fails
     }
 
-    // A remote Whisper server doesn't need an OpenAI API key, so only prompt
-    // for the key when using the OpenAI model with no server configured.
-    if (!activeApiKey && videoSettings.selectedModel === 'whisper-1' && !activeWhisperServerUrl) {
-      setIsGenerating(false)
-      setShouldGenerateAfterApiKey(true)
-      setIsApiKeySettingsOpen(true)
-      return
-    }
-
     try {
       setExportProgress(0)
       setExportStatus('Transcribing...')
@@ -1046,10 +861,6 @@ export default function App() {
           karaoke: videoSettings.captionStyle === 'karaoke' || videoSettings.captionStyle === 'karaoke-multiline',
           multiline: videoSettings.captionStyle === 'karaoke-multiline',
           fontName: getFontName(videoSettings.selectedFont),
-          splitByWords: false,
-          model: videoSettings.selectedModel,
-          language: videoSettings.selectedLanguage,
-          prompt: null,
           textColor: videoSettings.textColor,
           highlightWordColor: videoSettings.highlightWordColor,
           outlineColor: videoSettings.outlineColor,
@@ -1057,8 +868,6 @@ export default function App() {
           position: videoSettings.captionPosition,
           outputSize: videoSettings.outputSize,
           cropStrategy: videoSettings.cropStrategy,
-          apiKey: activeApiKey,
-          whisperBaseUrl: activeWhisperServerUrl || undefined,
           fontSize: videoSettings.fontSize,
         },
         requestId
@@ -1195,11 +1004,8 @@ export default function App() {
                 <h1 className="text-2xl font-bold text-primary">CapSlap</h1>
               </div>
               <SettingsModal
-                onSave={handleSaveApiKey}
-                isOpen={isApiKeySettingsOpen}
-                onOpenChange={setIsApiKeySettingsOpen}
-                apiKey={apiKey}
-                whisperServerUrl={videoSettings.whisperServerUrl}
+                isOpen={isTranscriptionSettingsOpen}
+                onOpenChange={setIsTranscriptionSettingsOpen}
               />
             </div>
             <p className="text-sm text-muted-foreground truncate">Lightning-fast AI captions</p>
@@ -1304,36 +1110,6 @@ export default function App() {
                         <SelectItem value="center">Center</SelectItem>
                         <SelectItem value="bottom-quarter">1/4 from Bottom</SelectItem>
                         <SelectItem value="bottom">Bottom</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs text-muted-foreground mb-1 block">Language</label>
-                    <Select
-                      value={videoSettings.selectedLanguage}
-                      onValueChange={(value) => updateSettings({ selectedLanguage: value })}
-                    >
-                      <SelectTrigger className="w-full h-8 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="auto">Detect language</SelectItem>
-                        <SelectItem value="en">English</SelectItem>
-                        <SelectItem value="fi">Suomi (Finnish)</SelectItem>
-                        <SelectItem value="ar">العربية (Arabic)</SelectItem>
-                        <SelectItem value="es">Español (Spanish)</SelectItem>
-                        <SelectItem value="fr">Français (French)</SelectItem>
-                        <SelectItem value="de">Deutsch (German)</SelectItem>
-                        <SelectItem value="ru">Русский (Russian)</SelectItem>
-                        <SelectItem value="zh">中文 (Chinese)</SelectItem>
-                        <SelectItem value="ja">日本語 (Japanese)</SelectItem>
-                        <SelectItem value="ko">한국어 (Korean)</SelectItem>
-                        <SelectItem value="pt">Português (Portuguese)</SelectItem>
-                        <SelectItem value="it">Italiano (Italian)</SelectItem>
-                        <SelectItem value="hi">हिन्दी (Hindi)</SelectItem>
-                        <SelectItem value="tr">Türkçe (Turkish)</SelectItem>
-                        <SelectItem value="nl">Nederlands (Dutch)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1603,12 +1379,7 @@ export default function App() {
 
             {/* Download Models */}
             <div className="p-4 border-b border-border/50">
-              <ModelDownloader
-                selectedModel={videoSettings.selectedModel}
-                onSelectModel={(model: ModelInfo['name']) => updateSettings({ selectedModel: model })}
-                apiKey={apiKey}
-                onOpenApiKeySettings={() => setIsApiKeySettingsOpen(true)}
-              />
+              <ModelDownloader />
             </div>
           </div>
         </div>

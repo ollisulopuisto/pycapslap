@@ -3,23 +3,23 @@
 ## Good first contribution: Windows / Linux packaged builds
 
 `.github/workflows/release.yml` currently only builds and releases a macOS
-(Apple Silicon) `PyCapSlap.app`. Windows and Linux aren't built at all. If
+(Apple Silicon) `PyCapSlap.dmg`. Windows and Linux aren't built at all. If
 you want to take this on:
 
 **What exists already:**
-- `rust/bin-win/whisper-cli.exe` is committed — Windows has a head start on
-  the whisper.cpp binary. Linux has nothing bundled yet.
+- The Orukeet worker is bundled beside the Rust core. Its model and native
+  runtime are installed into the user's cache.
 - `scripts/download-binaries.sh` has `download_windows()`/`download_linux()`
   functions already stubbed in, but unused and untested — the macOS path
   (`download_macos()`) is the one that's actually been exercised.
 - `pyside/pycapslap.spec` (PyInstaller) bundles `rust/target/release/core`,
-  `rust/bin/` (ffmpeg/ffprobe/whisper-cli + their runtime libs) and
+  the Orukeet worker, `rust/bin/` (ffmpeg/ffprobe + runtime libs), and
   `rust/src/fonts/` — the same shape should carry over per platform, but the
   macOS-specific bits (`.icns` icon, `BUNDLE(...)` producing a `.app`) need
   a Windows (`.ico`, plain onedir/onefile `.exe`) and Linux (AppImage or
   plain dir, no bundle icon convention) equivalent.
 - `core_client.py`/`fonts.py` already check `sys.frozen`/`sys._MEIPASS` for
-  a packaged build, and the launcher sets `WHISPER_CLI_PATH`/`FFPROBE_PATH`/
+  a packaged build, and the launcher sets `CAPSLAP_ORUKEET_WORKER`/`FFPROBE_PATH`/
   `CAPSLAP_FONTS_DIR`/`FFMPEG_PATH` explicitly rather than relying on the
   Rust core's own path-guessing — that part should already work cross-platform
   as long as the packaging script points those env vars at the right bundled

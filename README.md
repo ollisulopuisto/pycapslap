@@ -1,8 +1,8 @@
 # PyCapSlap ⚡
 
-**PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It automatically transcribes video audio using local AI models (whisper.cpp), generates synchronized word-level subtitles, allows interactive visual placement and styling, and burns captions into exports across all social aspect ratios.
+**PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
 
-**Offline by default — zero cloud lock-in, zero API fees.** The OpenAI Whisper API is available as an opt-in alternative (e.g. for machines without a local model downloaded) via the transcription settings dialog (⚙) next to the Transcribe button.
+**Local by default.** Orukeet's Q8 model and native runtime are downloaded and verified once. Audio is processed on your computer; transcription works offline after setup.
 
 ---
 
@@ -29,7 +29,7 @@ PyCapSlap represents a total architectural re-engineering from the legacy Electr
 
 ## ✨ Key Features
 
-* 🎙️ **AI Transcription, Local by Default**: Multi-lingual transcription powered by local `whisper.cpp` with Apple Silicon Metal acceleration. Switch to the OpenAI Whisper API instead from the transcription settings dialog (⚙, next to the Transcribe button) — pick a local model size, check/download it, or enter an OpenAI API key to transcribe in the cloud.
+* 🎙️ **Local Orukeet Transcription**: Multilingual offline recognition using Orukeet's verified Q8 model and native runtime, with Metal acceleration on supported Apple Silicon systems. Download it from **Orukeet Settings** beside Transcribe. Orukeet supplies phrase-level timings; caption word timings are not fabricated.
 * 🧩 **Smart Syllable Logic & Word Preservation**:
   * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
   * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.
@@ -92,25 +92,11 @@ uv run pycapslap
 
 ---
 
-## 🧠 Local Whisper Models
+## 🧠 Local Orukeet Model
 
-Whisper models run completely offline. Pick a model size and download it straight from the transcription settings dialog (⚙, next to the Transcribe button — "Check / Download Model"), or download manually:
+Open **Orukeet Settings** beside Transcribe and choose **Download / Repair Orukeet**. The app fetches the Q8 model and platform runtime, verifies their hashes, and saves them in the user's cache. The download requires an internet connection once; subsequent transcription runs locally without network access.
 
-```bash
-mkdir -p rust/models
-
-# Large v3 Turbo ⭐ RECOMMENDED (best balance of speed and accuracy, 809 MB)
-curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin \
-  -o rust/models/ggml-large-v3-turbo.bin
-
-# Small model (faster, 466 MB)
-curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin \
-  -o rust/models/ggml-small.bin
-
-# Base model (ultra lightweight, 142 MB)
-curl -L https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin \
-  -o rust/models/ggml-base.bin
-```
+Orukeet's model and runtime installation details are documented in the [Orukeet repository](https://github.com/Oruk-AI/orukeet).
 
 ---
 

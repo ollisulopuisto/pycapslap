@@ -1,7 +1,7 @@
 # PyInstaller spec for PyCapSlap.
 #
 # Bundles the PySide6 app together with the Rust core binary and its own
-# runtime dependencies (ffmpeg/ffprobe/whisper-cli + libs, bundled fonts) so
+# runtime dependencies (ffmpeg/ffprobe, local Orukeet worker, bundled fonts) so
 # the result runs standalone on a machine with none of this repo, `uv`, or
 # a Rust toolchain installed. core_client.py and fonts.py know to look for
 # these same relative paths (rust/target/release/core, rust/bin/,
@@ -16,6 +16,7 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
@@ -61,6 +62,37 @@ a = Analysis(
     noarchive=False,
     cipher=block_cipher,
 )
+
+# The worker is a standalone PyInstaller executable. The Rust core can use it
+# without requiring a system Python or an unpacked script in release builds.
+orukeet_datas, orukeet_binaries, orukeet_hidden = collect_all("orukeet")
+worker_analysis = Analysis(
+    [str(pyside_dir / "app" / "services" / "orukeet_worker.py")],
+    pathex=[str(pyside_dir)],
+    binaries=orukeet_binaries,
+    datas=orukeet_datas,
+    hiddenimports=orukeet_hidden,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    cipher=block_cipher,
+)
+worker_pyz = PYZ(worker_analysis.pure, worker_analysis.zipped_data, cipher=block_cipher)
+worker_exe = EXE(
+    worker_pyz,
+    worker_analysis.scripts,
+    worker_analysis.binaries,
+    worker_analysis.datas,
+    [],
+    name="orukeet-worker",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,
+)
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
@@ -80,6 +112,7 @@ exe = EXE(
 
 coll = COLLECT(
     exe,
+    worker_exe,
     a.binaries,
     a.zipfiles,
     a.datas,

@@ -1,23 +1,8 @@
 .cursor/
 
-# Whisper models (large binary files)
-rust/models/*.bin
-
 rust/bin/ffmpeg
 rust/bin/ffprobe
-rust/bin/whisper-cli*
 rust/bin/lib/**
-# whisper-cli's @rpath entries need exactly these files at runtime (see
-# `otool -L rust/bin/whisper-cli-macos-arm64`); everything else under
-# rust/bin/lib/ (dirty/coreml/versioned build byproducts) stays ignored.
-!rust/bin/lib/
-!rust/bin/lib/libinternal/
-!rust/bin/lib/libinternal/libwhisper.1.dylib
-!rust/bin/lib/libinternal/libggml.0.dylib
-!rust/bin/lib/libinternal/libggml-cpu.0.dylib
-!rust/bin/lib/libinternal/libggml-blas.0.dylib
-!rust/bin/lib/libinternal/libggml-metal.0.dylib
-!rust/bin/lib/libinternal/libggml-base.0.dylib
 rust/bin-win/
 rust/bin-linux/
 .DS_Store
@@ -32,6 +17,7 @@ rust/bin/*.capslap.json
 *.1.8.2.dylib
 electron/out/
 electron/dist/
+/electron/resources/worker/
 dist/
 # PyInstaller intermediates (pyside/build/pycapslap/*.toc, warn/xref files)
 build/

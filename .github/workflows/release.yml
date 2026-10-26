@@ -1,7 +1,7 @@
 name: Release
 
 # Builds the native PySide6 + Rust app (macOS arm64 only for now — that's
-# the only platform this app currently targets: whisper.cpp and ffmpeg are
+# the only platform this app currently targets: Orukeet and ffmpeg are
 # bundled for macOS arm64, and rendering uses VideoToolbox hardware
 # encoding). Windows/Linux packaging is future work.
 
@@ -32,7 +32,7 @@ jobs:
         working-directory: rust
         run: cargo build --release
 
-      - name: Download bundled ffmpeg/ffprobe/whisper-cli
+      - name: Download bundled ffmpeg/ffprobe
         run: bash scripts/download-binaries.sh
         env:
           TARGET_OS: macOS
@@ -54,15 +54,15 @@ jobs:
           CORE="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/target/release/core"
           echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
 
-      - name: Zip app bundle
+      - name: Create macOS disk image
         working-directory: pyside/dist
-        run: ditto -c -k --sequesterRsrc --keepParent PyCapSlap.app PyCapSlap-macos-arm64.zip
+        run: hdiutil create -volname "PyCapSlap" -srcfolder PyCapSlap.app -ov -format UDZO PyCapSlap-macos-arm64.dmg
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: PyCapSlap-macos-arm64
-          path: pyside/dist/PyCapSlap-macos-arm64.zip
+          path: pyside/dist/PyCapSlap-macos-arm64.dmg
 
   release:
     needs: build

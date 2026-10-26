@@ -21,6 +21,8 @@ extraResources:
 win:
   executableName: CapSlap
   extraResources:
+    - from: "resources/worker/orukeet-worker.exe"
+      to: "orukeet-worker.exe"
     - from: "../rust/bin-win/"
       to: "bin-win"
       filter:
@@ -39,6 +41,8 @@ nsis:
 mac:
   category: public.app-category.productivity
   extraResources:
+    - from: "resources/worker/orukeet-worker"
+      to: "orukeet-worker"
     - from: "../rust/bin/"
       to: "bin"
       filter:
@@ -64,6 +68,8 @@ dmg:
       type: file
 linux:
   extraResources:
+    - from: "resources/worker/orukeet-worker"
+      to: "orukeet-worker"
     - from: "../rust/bin-linux/"
       to: "bin-linux"
       filter:

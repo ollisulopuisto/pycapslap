@@ -6,7 +6,7 @@ use crate::types::{
     WordSpan,
 };
 use crate::video::probe;
-use crate::{audio, whisper};
+use crate::{audio, transcription};
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -54,85 +54,39 @@ fn unique_output_path(path: &str) -> String {
     path.to_string()
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn extract_and_transcribe(
+pub async fn extract_and_transcribe_with_range(
     id: &str,
     input_video: &str,
-    split_by_words: bool,
-    model: Option<String>,
-    language: Option<String>,
-    api_key: Option<String>,
-    prompt: Option<String>,
-    mut emit: impl FnMut(RpcEvent),
-) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
-    extract_and_transcribe_with_server(
-        id,
-        input_video,
-        split_by_words,
-        model,
-        language,
-        api_key,
-        prompt,
-        None,
-        None,
-        &mut emit,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn extract_and_transcribe_with_server(
-    id: &str,
-    input_video: &str,
-    split_by_words: bool,
-    model: Option<String>,
-    language: Option<String>,
-    api_key: Option<String>,
-    prompt: Option<String>,
-    whisper_base_url: Option<String>,
     audio_range: Option<crate::types::AudioRange>,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
-    if let Err(e) = fs::create_dir_all(&temp_dir) {
-        return Err(anyhow!("Failed to create temp directory: {}", e));
-    }
-
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| anyhow!("Failed to create temp directory: {}", e))?;
     let result = async {
         let probe_result = probe(id, input_video, &mut emit).await?;
-
-        let audio_filename = format!("audio_{}.wav", id);
-        let temp_audio_path = temp_dir.join(&audio_filename);
-        let audio_params = ExtractAudioParams {
-            input: input_video.to_string(),
-            codec: Some("pcm_s16le".to_string()),
-            out: Some(temp_audio_path.to_string_lossy().to_string()),
-            range: audio_range,
-        };
-        let audio_result = audio::extract_audio(id, audio_params, &mut emit).await?;
-
-        let transcribe_params = TranscribeSegmentsParams {
-            audio: audio_result.audio.clone(),
-            model,
-            language,
-            split_by_words,
-            api_key,
-            prompt,
-            video_file: Some(input_video.to_string()),
-            whisper_base_url,
-        };
-        let transcription = whisper::transcribe_segments_with_temp(
+        let audio_path = temp_dir.join(format!("audio_{}.wav", id));
+        let audio_result = audio::extract_audio(
             id,
-            transcribe_params,
+            ExtractAudioParams {
+                input: input_video.to_string(),
+                codec: Some("pcm_s16le".to_string()),
+                out: Some(audio_path.to_string_lossy().to_string()),
+                range: audio_range,
+            },
+            &mut emit,
+        ).await?;
+        let transcription = transcription::transcribe_segments_with_temp(
+            id,
+            TranscribeSegmentsParams {
+                audio: audio_result.audio.clone(),
+                video_file: Some(input_video.to_string()),
+            },
             Some(&temp_dir),
             &mut emit,
-        )
-        .await?;
-
+        ).await?;
         Ok::<_, anyhow::Error>((probe_result, audio_result.audio, transcription))
-    }
-    .await;
-
+    }.await;
     cleanup_temp_dir(&temp_dir);
     result
 }
@@ -263,19 +217,8 @@ pub async fn generate_captions_single_pass(
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
 
     let result = async {
-        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_server(
-            id,
-            &params.input_video,
-            params.split_by_words,
-            params.model,
-            params.language,
-            params.api_key,
-            params.prompt,
-            params.whisper_base_url,
-            // The one-pass burn captions the whole file; the segments' times
-            // would be off by the start of any part.
-            None,
-            &mut emit,
+        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_range(
+            id, &params.input_video, None, &mut emit,
         )
         .await?;
 
@@ -910,7 +853,7 @@ mod tests_persistence {
 
     #[test]
     fn a_word_split_across_a_segment_boundary_is_put_back_together() {
-        // Exactly what whisper does with long Finnish words: it emits "korke"
+        // Subword ASR output can split long Finnish words (for example, "korke")
         // and "alla" as separate pieces and breaks the segment between them.
         let segments = vec![
             CaptionSegment {
@@ -1470,7 +1413,7 @@ async fn try_encode_with_encoder(
     let gop_size_str = gop_size.to_string();
 
     // Resolve FFmpeg path using unified async detector (bundled > project > system)
-    let ffmpeg_path = crate::whisper::find_ffmpeg_binary()
+    let ffmpeg_path = crate::media_tools::find_ffmpeg_binary()
         .await
         .map_err(|e| anyhow!("FFmpeg not found: {}", e))?;
 

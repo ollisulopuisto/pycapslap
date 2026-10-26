@@ -1,10 +1,10 @@
 from app.core_client import CoreClient
 
 
-def test_core_client_check_model_exists(qapp):
+def test_core_client_check_orukeet_installed(qapp):
     client = CoreClient()
     try:
-        fut = client.call("checkModelExists", "tiny")
+        fut = client.call("checkOrukeetInstalled", {})
         result = fut.result(timeout=5.0)
         assert isinstance(result, bool)
     finally:

@@ -70,7 +70,7 @@ from app.models.review import (
     unlock_file,
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
-from app.views.settings_dialog import WhisperSettingsDialog, get_transcription_params
+from app.views.settings_dialog import OrukeetSettingsDialog, get_transcription_params
 from app.services import vision_frames
 from app.views.thumbnail_panel import ThumbnailPanel
 from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
@@ -531,8 +531,8 @@ class MainWindow(QMainWindow):
         self.caption_panel.mark_end_requested.connect(self._set_caption_end_here)
         self.caption_panel.auto_place_requested.connect(self._on_auto_place_requested)
         self.caption_panel.transcribe_requested.connect(self._on_transcribe_requested)
-        self.caption_panel.whisper_settings_requested.connect(
-            self._on_whisper_settings_requested
+        self.caption_panel.orukeet_settings_requested.connect(
+            self._on_orukeet_settings_requested
         )
         self.caption_panel.add_cue_requested.connect(self._on_add_cue_requested)
         self.caption_panel.safe_platforms_changed.connect(
@@ -1676,9 +1676,9 @@ class MainWindow(QMainWindow):
         caption_menu.addSeparator()
         add(
             caption_menu,
-            "Whisper Settings…",
+            "Orukeet Settings…",
             QKeySequence.StandardKey.Preferences,
-            press(panel.btn_whisper_settings),
+            press(panel.btn_orukeet_settings),
             QAction.MenuRole.PreferencesRole,
         )
 
@@ -1831,8 +1831,8 @@ class MainWindow(QMainWindow):
 
         fut.add_done_callback(on_done)
 
-    def _on_whisper_settings_requested(self) -> None:
-        dlg = WhisperSettingsDialog(self.core, self)
+    def _on_orukeet_settings_requested(self) -> None:
+        dlg = OrukeetSettingsDialog(self.core, self)
         dlg.exec()
 
     def _on_transcribe_requested(self) -> None:
@@ -1854,9 +1854,7 @@ class MainWindow(QMainWindow):
             return
 
         provider_params = get_transcription_params()
-        provider_label = (
-            "OpenAI API" if provider_params["model"] == "whisper-1" else "local Whisper"
-        )
+        provider_label = "local Orukeet"
         part = (
             f", {transcribe_range.clock(plan.start_ms)}"
             f"–{transcribe_range.clock(plan.end_ms)}"
@@ -1873,12 +1871,8 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "exportFormats": [self._export_format()],
             "karaoke": self.project.style.karaoke,
-            # Never one cue per word: whisper's own phrase segments carry
-            # per-word timings in `words`, which is what karaoke highlights
-            # from. Splitting the transcript into words instead put a single
-            # word on screen at a time, since the burner shows the cues as
-            # they are authored.
-            "splitByWords": False,
+            # Orukeet returns phrase timing; retain those phrase segments as
+            # the caption cues rather than inventing word-level timestamps.
             **provider_params,
         }
         if plan.kind == "range":
@@ -1896,7 +1890,7 @@ class MainWindow(QMainWindow):
                 new_segs = combine_separated_syllables(new_segs)
                 new_segs = apply_orphan_rules(new_segs)
                 count = len(new_segs)
-                # Whisper counted from the start of the part it was given.
+                # Orukeet counted from the start of the part it was given.
                 part = (
                     transcribe_range.shifted(new_segs, plan.start_ms)
                     if plan.kind == "range"

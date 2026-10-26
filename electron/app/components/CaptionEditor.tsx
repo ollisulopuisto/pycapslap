@@ -24,7 +24,6 @@ interface Settings {
   selectedTemplate: Template['id']
   exportFormats: string[]
   selectedFont: string
-  // selectedModel: ModelInfo['name'] // Skipping types not needed for display
   textColor: string
   highlightWordColor: string
   outlineColor: string

@@ -32,16 +32,16 @@ const rust = {
       return null
     }
   },
-  downloadModel: (model: string) => {
+  installOrukeet: () => {
     return ipcRenderer.invoke('core:call', {
-      method: 'downloadModel',
-      params: { model },
+      method: 'installOrukeet',
+      params: {},
     })
   },
-  checkModelExists: (model: string) => {
+  checkOrukeetInstalled: () => {
     return ipcRenderer.invoke('core:call', {
-      method: 'checkModelExists',
-      params: model,
+      method: 'checkOrukeetInstalled',
+      params: {},
     })
   },
 }

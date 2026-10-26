@@ -10,6 +10,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ### Added
 - **Crop position.** When exporting to a shape the source does not share, crop can now be centred ("fill"), from the start (top/left, "start") or from the end (bottom/right, "end"). The editor offers all three in the crop combo, and the choice reaches the render and the caption placement.
 
+## [v26.10.26.1] - 2026-10-26
+
+### Changed
+- **Local transcription now uses Orukeet.** The Whisper/OpenAI providers, model picker, inference code, build downloads, and bundled Whisper binaries are removed. Install Orukeet's verified Q8 model and native runtime from the settings dialog; one worker keeps the model loaded and processes transcripts locally. Captions keep Orukeet's phrase-level timestamps.
+
 ## [v26.10.22.2] - 2026-10-22
 
 ### Added

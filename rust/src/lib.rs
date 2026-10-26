@@ -26,9 +26,10 @@ macro_rules! debug_log {
 pub mod audio;
 pub mod captions;
 pub mod justify;
+pub mod media_tools;
 pub mod placement;
 pub mod rpc;
 pub mod text_metrics;
 pub mod types;
 pub mod video;
-pub mod whisper;
+pub mod transcription;

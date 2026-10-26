@@ -16,6 +16,7 @@
     "dev:debug": "CAPSLAP_DEBUG=1 npm run dev",
     "build:rust": "cd ../rust && cargo build --release",
     "build:rust:dev": "cd ../rust && cargo build",
+    "build:orukeet-worker": "bash ../scripts/build-orukeet-worker.sh",
     "lint": "eslint . --fix",
     "lint:rust": "cd ../rust && cargo clippy",
     "format": "prettier --write .",
@@ -29,11 +30,11 @@
     "electron:build:mac": "electron-builder --mac",
     "electron:build:linux": "electron-builder --linux",
     "electron:build:dir": "electron-builder --dir",
-    "build:unpack": "run-s vite:build:app electron:build:dir",
-    "build:win": "run-s vite:build:app electron:build:win",
-    "build:mac": "run-s vite:build:app electron:build:mac fix-production",
+    "build:unpack": "run-s vite:build:app build:orukeet-worker electron:build:dir",
+    "build:win": "run-s vite:build:app build:orukeet-worker electron:build:win",
+    "build:mac": "run-s vite:build:app build:orukeet-worker electron:build:mac fix-production",
     "fix-production": "./fix-production-build.sh",
-    "build:linux": "run-s vite:build:app electron:build:linux"
+    "build:linux": "run-s vite:build:app build:orukeet-worker electron:build:linux"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -58,7 +59,6 @@
     "clsx": "^2.1.1",
     "electron-store": "^10.1.0",
     "lucide-react": "^0.511.0",
-    "openai": "^5.12.2",
     "react-window": "^1.8.11",
     "react-window-infinite-loader": "^1.0.10",
     "sonner": "^2.0.7",

@@ -88,6 +88,27 @@ class CoreClient(QObject):
         working_dir = os.path.dirname(self.binary_path)
 
         env = dict(os.environ)
+        frozen_root = getattr(sys, "_MEIPASS", None)
+        if frozen_root:
+            worker_name = "orukeet-worker.exe" if os.name == "nt" else "orukeet-worker"
+            worker_candidates = [
+                Path(frozen_root) / worker_name,
+                Path(sys.executable).resolve().parent / worker_name,
+            ]
+            worker_path = next((p for p in worker_candidates if p.is_file()), worker_candidates[0])
+            env["CAPSLAP_ORUKEET_WORKER"] = str(worker_path)
+        else:
+            env["CAPSLAP_PYTHON"] = sys.executable
+            env["CAPSLAP_ORUKEET_WORKER"] = str(
+                Path(__file__).resolve().parent / "services" / "orukeet_worker.py"
+            )
+        if sys.platform == "darwin":
+            cache_dir = Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
+        elif os.name == "nt":
+            cache_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PyCapSlap" / "orukeet"
+        else:
+            cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pycapslap" / "orukeet"
+        env["CAPSLAP_ORUKEET_CACHE"] = str(cache_dir)
         # Ensure FFMPEG_PATH and rust/bin are in environment
         project_root = Path(self.binary_path).resolve().parents[2]
         if os.name == "nt":
@@ -119,7 +140,7 @@ class CoreClient(QObject):
                 f"{os.path.dirname(ffmpeg_path)}{os.pathsep}{env.get('PATH', '')}"
             )
 
-        # Point the core straight at rust/bin's ffprobe/whisper-cli and
+        # Point the core straight at rust/bin's ffprobe and
         # rust/src/fonts explicitly, rather than relying on its own
         # exe-relative guessing — which assumes a specific bundle layout
         # (core and a sibling bin/) that a packaged build may not match.
@@ -127,21 +148,6 @@ class CoreClient(QObject):
         ffprobe_candidate = rust_bin / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
         if ffprobe_candidate.exists() and os.access(ffprobe_candidate, os.X_OK):
             env["FFPROBE_PATH"] = str(ffprobe_candidate)
-
-        if os.name == "nt":
-            whisper_candidates = [rust_bin / "whisper-cli.exe"]
-        else:
-            import platform
-
-            arch = "arm64" if platform.machine() == "arm64" else "x64"
-            whisper_candidates = [
-                rust_bin / f"whisper-cli-macos-{arch}",
-                rust_bin / "whisper-cli",
-            ]
-        for candidate in whisper_candidates:
-            if candidate.exists() and os.access(candidate, os.X_OK):
-                env["WHISPER_CLI_PATH"] = str(candidate)
-                break
 
         fonts_dir = rust_bin.parent / "src" / "fonts"
         if fonts_dir.is_dir():

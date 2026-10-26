@@ -1040,7 +1040,7 @@ def test_transcribing_a_long_recording_without_marks_asks_for_a_range(
 ):
     window, sent, _ = _transcribing_window(qtbot, monkeypatch, tmp_path, 47 * 60_000)
     window._on_transcribe_requested()
-    assert sent == []  # nothing is sent to whisper
+    assert sent == []  # no transcription request is sent without a range
     kind, text = no_modal_message_boxes[-1]
     assert kind == "information" and "47:00" in text and "press I" in text
     window.close()
@@ -1084,7 +1084,7 @@ def test_a_transcribed_range_lands_in_place_among_the_existing_cues(
         ]
     )
     window._on_transcribe_requested()
-    # whisper counts from the start of the part it was given
+    # Orukeet counts from the start of the part it was given.
     pending.set_result(
         {
             "transcription": {
