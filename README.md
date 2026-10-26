@@ -18,7 +18,7 @@ PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core 
 
 ## ✨ Key Features
 
-* 🎙️ **Local Orukeet Transcription**: Multilingual offline recognition using Orukeet's verified Q8 model and native runtime, with Metal acceleration on supported Apple Silicon systems. Download it from **Orukeet Settings** beside Transcribe. Orukeet supplies phrase-level timings; caption word timings are not fabricated.
+* 🎙️ **Local Orukeet Transcription**: Multilingual offline recognition using Orukeet's verified Q8 model and native runtime, with Metal acceleration on supported Apple Silicon systems. Choose **Verbatim** to keep filler words and repetitions, or **Edited** for a cleaner transcript. Download Orukeet from **Orukeet Settings** beside Transcribe. Orukeet supplies phrase-level timings; caption word timings are not fabricated.
 * 🧩 **Smart Syllable Logic & Word Preservation**:
   * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
   * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.

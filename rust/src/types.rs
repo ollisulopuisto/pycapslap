@@ -43,6 +43,7 @@ pub struct PositionOverride {
 pub struct TranscribeSegmentsParams {
     pub audio: String,              // Path to audio file to transcribe
     pub video_file: Option<String>,
+    pub keep_fillers: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -102,6 +103,9 @@ pub struct ExtractAudioResult {
 #[serde(rename_all = "camelCase")]
 pub struct GenerateCaptionsParams {
     pub input_video: String, // Path to input video file
+    /// Keep filler words and repetitions in the Orukeet transcript.
+    #[serde(default = "default_keep_fillers")]
+    pub keep_fillers: bool,
     /// Transcribe only from here (ms); with `transcribe_end_ms`. A long episode
     /// is transcribed a part at a time rather than all of it at once.
     #[serde(default)]
@@ -145,6 +149,10 @@ pub struct GenerateCaptionsParams {
     /// the user placed them by hand.
     #[serde(default)]
     pub blocked_bands: Vec<(f32, f32)>,
+}
+
+fn default_keep_fillers() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -142,7 +142,12 @@ pub async fn transcribe_segments_with_temp(
         *worker = OrukeetWorker::start().await?;
     }
     let output = worker
-        .request(serde_json::json!({"id": id, "action": "transcribe", "audio": params.audio}))
+        .request(serde_json::json!({
+            "id": id,
+            "action": "transcribe",
+            "audio": params.audio,
+            "keepFillers": params.keep_fillers,
+        }))
         .await?;
     let full_text = output.get("text").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
     let mut segments = Vec::new();

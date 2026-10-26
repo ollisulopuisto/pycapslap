@@ -58,6 +58,7 @@ pub async fn extract_and_transcribe_with_range(
     id: &str,
     input_video: &str,
     audio_range: Option<crate::types::AudioRange>,
+    keep_fillers: bool,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
@@ -81,6 +82,7 @@ pub async fn extract_and_transcribe_with_range(
             TranscribeSegmentsParams {
                 audio: audio_result.audio.clone(),
                 video_file: Some(input_video.to_string()),
+                keep_fillers,
             },
             Some(&temp_dir),
             &mut emit,
@@ -218,7 +220,7 @@ pub async fn generate_captions_single_pass(
 
     let result = async {
         let (probe_result, audio_file, transcription) = extract_and_transcribe_with_range(
-            id, &params.input_video, None, &mut emit,
+            id, &params.input_video, None, params.keep_fillers, &mut emit,
         )
         .await?;
 

@@ -199,6 +199,7 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             &id,
                             &p.input_video,
                             range,
+                            p.keep_fillers,
                             &mut emit
                         ) => {
                             match res {

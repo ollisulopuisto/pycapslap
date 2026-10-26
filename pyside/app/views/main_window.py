@@ -1871,6 +1871,9 @@ class MainWindow(QMainWindow):
             "inputVideo": str(Path(source_file).resolve()),
             "exportFormats": [self._export_format()],
             "karaoke": self.project.style.karaoke,
+            "keepFillers": bool(
+                self.caption_panel.combo_transcription_style.currentData()
+            ),
             # Orukeet returns phrase timing; retain those phrase segments as
             # the caption cues rather than inventing word-level timestamps.
             **provider_params,

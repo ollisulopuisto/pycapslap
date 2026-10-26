@@ -2,14 +2,41 @@
 
 from __future__ import annotations
 
+import array
+import hashlib
 import json
 import os
 import sys
 import traceback
 from pathlib import Path
 
-from orukeet import Orukeet
+import numpy as np
+from orukeet.audio import windows
 from orukeet.install import fetch, install_runtime, resolve_device
+from orukeet.nvidia import NvidiaRecognizer
+
+
+class _LocalRecognizer(NvidiaRecognizer):
+    """Expose Orukeet's verbatim switch and retain source timestamps."""
+
+    def _options(self, language):
+        options = super()._options(language)
+        options.verbatim_transcripts = self._keep_fillers
+        return options
+
+    def transcribe_file(self, audio: str | Path, keep_fillers: bool = True) -> dict:
+        self._keep_fillers = keep_fillers
+        texts, segments = [], []
+        for offset, samples in windows(str(audio)):
+            if not samples.size or np.max(np.abs(samples)) <= .00025:
+                continue
+            result = self.transcribe(array.array("f", samples), None)
+            texts.append(result["text"])
+            segments.extend(
+                dict(segment, start=offset + segment["start"], end=offset + segment["end"])
+                for segment in result["segments"]
+            )
+        return {"text": " ".join(texts).strip(), "segments": segments, "language": None}
 
 
 def _cache_dir() -> Path:
@@ -23,7 +50,7 @@ def _cache_dir() -> Path:
     return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pycapslap" / "orukeet"
 
 
-def _load_model() -> Orukeet:
+def _load_model() -> _LocalRecognizer:
     cache = _cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
     receipt = cache / "installation.json"
@@ -36,7 +63,13 @@ def _load_model() -> Orukeet:
             encoding="utf-8",
         )
     config = json.loads(receipt.read_text(encoding="utf-8-sig"))
-    return Orukeet(config["model"], config["runtime"], device=config["device"])
+    artifacts_path = Path(__file__).with_name("artifacts.json")
+    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    with Path(config["model"]).open("rb") as model_file:
+        digest = hashlib.file_digest(model_file, "sha256").hexdigest()
+    if digest != artifacts["files"]["q8"]["sha256"]:
+        raise ValueError("Model SHA-256 differs from the requested artifact")
+    return _LocalRecognizer(config["runtime"], config["model"], config["device"])
 
 
 def main() -> int:
@@ -53,7 +86,9 @@ def main() -> int:
                 if request.get("action") == "install":
                     result = {"ready": True}
                 else:
-                    result = model.transcribe(request["audio"])
+                    result = model.transcribe_file(
+                        request["audio"], keep_fillers=request.get("keepFillers", True)
+                    )
                 response = {"id": request_id, "result": result}
             except Exception as exc:  # return failures without killing the worker
                 traceback.print_exc(file=sys.stderr)

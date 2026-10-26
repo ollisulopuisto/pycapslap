@@ -213,6 +213,16 @@ class CaptionPanelWidget(QWidget):
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
         header_layout.addWidget(self.btn_transcribe, 1, 1)
 
+        self.combo_transcription_style = QComboBox()
+        self.combo_transcription_style.addItem("Verbatim", True)
+        self.combo_transcription_style.addItem("Edited", False)
+        self.combo_transcription_style.setToolTip(
+            "Verbatim keeps filler words and repetitions. Edited asks Orukeet "
+            "for a cleaner transcript."
+        )
+        self.combo_transcription_style.setAccessibleName("Transcription style")
+        header_layout.addWidget(self.combo_transcription_style, 3, 2)
+
         self.btn_orukeet_settings = tile("Orukeet", "gear", compact=True)
         self.btn_orukeet_settings.setToolTip("Install and check the local Orukeet model")
         self.btn_orukeet_settings.clicked.connect(self.orukeet_settings_requested.emit)

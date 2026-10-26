@@ -7,10 +7,13 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.26.3] - 2026-10-26
+
 ### Fixed
 - **Orukeet installation status follows its cache location.** The settings dialog now finds the installation receipt where the worker stores it on each platform.
 
 ### Added
+- **Verbatim or edited transcription.** Choose whether Orukeet keeps filler words and repetitions or produces a cleaner transcript. Verbatim is selected by default.
 - **Crop position.** When exporting to a shape the source does not share, crop can now be centred ("fill"), from the start (top/left, "start") or from the end (bottom/right, "end"). The editor offers all three in the crop combo, and the choice reaches the render and the caption placement.
 
 ## [v26.10.26.1] - 2026-10-26
