@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.26.4] - 2026-10-26
+
+### Fixed
+- **Orukeet model verification works in the packaged worker.** The worker now reads the artifact manifest from the installed Orukeet package.
+
 ## [v26.10.26.3] - 2026-10-26
 
 ### Fixed

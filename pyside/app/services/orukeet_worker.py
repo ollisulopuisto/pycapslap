@@ -11,6 +11,7 @@ import traceback
 from pathlib import Path
 
 import numpy as np
+import orukeet
 from orukeet.audio import windows
 from orukeet.install import fetch, install_runtime, resolve_device
 from orukeet.nvidia import NvidiaRecognizer
@@ -63,7 +64,7 @@ def _load_model() -> _LocalRecognizer:
             encoding="utf-8",
         )
     config = json.loads(receipt.read_text(encoding="utf-8-sig"))
-    artifacts_path = Path(__file__).with_name("artifacts.json")
+    artifacts_path = Path(orukeet.__file__).with_name("artifacts.json")
     artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
     with Path(config["model"]).open("rb") as model_file:
         digest = hashlib.file_digest(model_file, "sha256").hexdigest()
