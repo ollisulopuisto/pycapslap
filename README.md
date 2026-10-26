@@ -6,21 +6,10 @@
 
 ---
 
-## ⚡ The Native Performance Refactor
+## 🛠️ Architecture
 
-PyCapSlap represents a total architectural re-engineering from the legacy Electron/React stack into a **native PySide6 (Qt 6) desktop application** powered by a **multi-core Rust core engine**.
+PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core engine.
 
-### 📊 Benchmark Highlights
-
-| Metric | Legacy Electron Stack | Native PyCapSlap (Qt 6 + Rust) | Improvement |
-| :--- | :--- | :--- | :--- |
-| **Idle Memory Usage** | ~850 MB – 1.2 GB | **~220 MB** | **-74% lower footprint** |
-| **Video Scrubbing Latency** | 120 – 350 ms (IPC frame serialization) | **< 16 ms (60 fps hardware sink)** | **Instant / sub-millisecond** |
-| **Cold Startup Time** | 3.5 – 5.2 s (Chromium launch) | **< 0.45 s** | **> 8× faster startup** |
-| **Video Export Pipeline** | Node child process piping | **Direct native Rust + FFmpeg VideoToolbox** | **Hardware-accelerated zero-copy** |
-| **Process Overhead** | 6+ helper processes | **Single native UI process + async Rust daemon** | **Clean architecture** |
-
-### 🛠️ Architecture Highlights
 * **Unified Hardware Canvas**: Native `QVideoSink` surface renders video frames and active caption overlays in a single hardware-accelerated pass.
 * **Non-blocking IPC**: Bi-directional asynchronous JSON-RPC streaming between Python and the Rust binary prevents UI stuttering under heavy transcription or encoding workloads.
 * **Direct Project Root Execution**: Managed seamlessly with [`uv`](https://github.com/astral-sh/uv) workspace orchestration.

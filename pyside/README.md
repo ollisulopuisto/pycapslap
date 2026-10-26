@@ -45,21 +45,6 @@ uv run pycapslap ../rust/bin/test_input.mp4
 
 ---
 
-## 📊 Measured Benchmark: PyCapSlap vs. Electron
-
-Tested on macOS Apple Silicon (Darwin arm64) using a 1080p sample video:
-
-| Metric | Electron (Legacy) | PyCapSlap | Delta |
-| :--- | :--- | :--- | :--- |
-| **Processes Spawned** | 7 processes | **1 process** | **-85% process overhead** |
-| **Startup Time** | 3.01 s | **1.38 s** | **2.18× faster** |
-| **Idle Memory (GUI)** | 597.5 MB | **154.8 MB** | **-74.1% memory** |
-| **Total Memory (inc. Rust)** | 602.2 MB | **158.8 MB** | **-73.6% memory** |
-| **Playback CPU Load** | 15% – 35% | **4.7%** | **~3× to 7× lower CPU** |
-| **Seek Latency** | ~120 – 250 ms | **0.3 ms** | **Near-instantaneous** |
-
----
-
 ## 🧪 Testing & Linting
 
 ```bash

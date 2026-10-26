@@ -15,14 +15,10 @@ rust/bin/*.capslap.json
 *.dirty.dylib
 *.coreml.dylib
 *.1.8.2.dylib
-electron/out/
-electron/dist/
-/electron/resources/worker/
 dist/
 # PyInstaller intermediates (pyside/build/pycapslap/*.toc, warn/xref files)
 build/
 node_modules/
-electron/package-lock.json
 *.tsbuildinfo
 rust/check_output.txt
 *.bak

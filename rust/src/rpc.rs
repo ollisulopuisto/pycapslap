@@ -11,7 +11,7 @@ pub struct RpcRequest {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RpcResponse<T> {
-    pub id: String, // Same ID as the request, so Electron knows which request this responds to
+    pub id: String, // Same ID as the request, so the desktop client can match responses
     pub result: T,  // The actual result data (varies by operation)
 }
 

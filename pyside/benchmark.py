@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -142,114 +141,20 @@ def measure_pyside(video_path: str):
     }
 
 
-def measure_electron():
-    print("\n" + "=" * 60)
-    print("MEASURING ELECTRON PROCESS TREE BASELINE")
-    print("=" * 60)
-
-    t0 = time.perf_counter()
-    p = subprocess.Popen(
-        ["./node_modules/.bin/electron", "out/main/main.js"],
-        cwd="../electron",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    time.sleep(3.0)  # Wait for window to show and sidecar to spawn
-    startup_sec = time.perf_counter() - t0
-
-    # Inspect process tree
-    out = (
-        subprocess.check_output(["ps", "-A", "-o", "pid,ppid,rss,command"])
-        .decode()
-        .splitlines()
-    )
-    procs = []
-    total_rss = 0.0
-    gui_rss = 0.0
-    core_rss = 0.0
-
-    for line in out[1:]:
-        parts = line.strip().split(None, 3)
-        if len(parts) >= 4:
-            pid, _ppid, rss, cmd = int(parts[0]), int(parts[1]), int(parts[2]), parts[3]
-            if "capslap" in cmd.lower() or "electron" in cmd.lower() or pid == p.pid:
-                if (
-                    "discord" in cmd.lower()
-                    or "slack" in cmd.lower()
-                    or "beeper" in cmd.lower()
-                ):
-                    continue
-                rss_mb = rss / 1024
-                procs.append((pid, rss_mb, cmd))
-                total_rss += rss_mb
-                if "target/release/core" in cmd or "target/debug/core" in cmd:
-                    core_rss += rss_mb
-                else:
-                    gui_rss += rss_mb
-
-    p.terminate()
-    p.wait()
-
-    print(f"[Electron] Cold Startup Time     : {startup_sec:.3f} s")
-    print(f"[Electron] Total Processes Spawnd: {len(procs)}")
-    print(f"[Electron] Total GUI RSS         : {gui_rss:.2f} MB")
-    print(f"[Electron] Rust Core Subprocess  : {core_rss:.2f} MB")
-    print(f"[Electron] Total RSS             : {total_rss:.2f} MB")
-
-    return {
-        "startup_sec": startup_sec,
-        "procs_count": len(procs),
-        "gui_rss": gui_rss,
-        "core_rss": core_rss,
-        "total_rss": total_rss,
-    }
-
-
 def main():
     video_path = str(Path("../rust/bin/test_input.mp4").resolve())
     if not os.path.exists(video_path):
         print(f"Error: test video not found at {video_path}")
         return
 
-    pyside_metrics = measure_pyside(video_path)
-    electron_metrics = measure_electron()
-
-    print("\n" + "=" * 65)
-    print("FINAL FEASIBILITY SPIKE COMPARISON: ELECTRON vs. PYSIDE6")
-    print("=" * 65)
-    print(f"{'Metric':<30} | {'Electron (Current)':<16} | {'PySide6 (Spike)':<14}")
-    print("-" * 65)
-    print(
-        f"{'Process Architecture':<30} | {'Multi-Process (5)':<16} | {'Single Process':<14}"
-    )
-    print(
-        f"{'Cold Startup Time':<30} | {electron_metrics['startup_sec']:<14.2f} s | {pyside_metrics['startup_sec']:<12.2f} s"
-    )
-    print(
-        f"{'GUI Idle RSS':<30} | {electron_metrics['gui_rss']:<13.1f} MB | {pyside_metrics['idle_gui_rss']:<11.1f} MB"
-    )
-    print(
-        f"{'Total Idle RSS (inc. Rust)':<30} | {electron_metrics['total_rss']:<13.1f} MB | {pyside_metrics['idle_total_rss']:<11.1f} MB"
-    )
-    print(
-        f"{'1080p Video Loaded RSS':<30} | {'~485 MB':<16} | {pyside_metrics['video_loaded_rss']:<11.1f} MB"
-    )
-    print(
-        f"{'Active Playback RSS':<30} | {'~520 MB':<16} | {pyside_metrics['playback_rss']:<11.1f} MB"
-    )
-    print(
-        f"{'Seek Latency (Average)':<30} | {'~120 - 250 ms':<16} | {pyside_metrics['avg_seek_ms']:<11.1f} ms"
-    )
-    print(
-        f"{'Seek Latency (Min)':<30} | {'~90 ms':<16} | {pyside_metrics['min_seek_ms']:<11.1f} ms"
-    )
-    print(
-        f"{'Seek Latency (Max)':<30} | {'~350 ms':<16} | {pyside_metrics['max_seek_ms']:<11.1f} ms"
-    )
-    print(
-        f"{'Active Playback CPU':<30} | {'~15 - 35 %':<16} | {pyside_metrics['playback_cpu']:<11.1f} %"
-    )
-    print("=" * 65)
+    metrics = measure_pyside(video_path)
+    print("\nPyCapSlap benchmark results")
+    print(f"GUI startup: {metrics['startup_sec']:.3f} s")
+    print(f"Idle GUI memory: {metrics['idle_gui_rss']:.1f} MB")
+    print(f"Idle total memory (including Rust): {metrics['idle_total_rss']:.1f} MB")
+    print(f"Video loaded memory (including Rust): {metrics['video_loaded_rss']:.1f} MB")
+    print(f"Average seek latency: {metrics['avg_seek_ms']:.1f} ms")
+    print(f"Playback CPU: {metrics['playback_cpu']:.1f}%")
 
 
 if __name__ == "__main__":

@@ -120,7 +120,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [v26.09.13.1] - 2026-09-13
 
 ### Changed
-- Native rewrite: PyCapSlap is now a PySide6 (Qt) desktop app backed by the same Rust processing core, replacing the Electron/React frontend — see README for the performance comparison (memory, startup, scrub latency).
+- Native rewrite: PyCapSlap is now a PySide6 (Qt) desktop app backed by the Rust processing core.
 
 ### Added
 - Transcription settings dialog (⚙, next to Transcribe): choose local whisper.cpp vs. the OpenAI API, pick a local model size, and check/download it, all from the GUI. Local is preferred by default; OpenAI only used when explicitly selected with a key.
@@ -141,7 +141,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 - The on-video caption preview used a font-name lookup that kept only the first word (e.g. "Montserrat Black" → "Montserrat", "THE BOLD FONT" → "THE"), so nearly every multi-word bundled font previewed as something else entirely — while the actual burned render always used the full, correct name.
 - The style panel's outline-width setting was saved and displayed but never actually sent to the renderer, which always used a hardcoded 4px stroke regardless.
 - Removed the blocking "Export Complete" dialog after rendering — it required a click to dismiss on every single export, which is pure friction when rendering several clips in a row; the status bar's completion message (with the output path) is enough.
-- The CI/CD pipeline (`ci.yml`, `release.yml`) only ever built and released the old Electron app, never updated after the rewrite to this native PySide6 + Rust app — a tagged release would have shipped the wrong thing entirely. Rewritten to lint/test the actual current code and package a real standalone macOS build.
+- The CI/CD pipeline (`ci.yml`, `release.yml`) had not been updated after the rewrite to the native PySide6 + Rust app. Rewritten to lint/test the current code and package a standalone macOS build.
 
 ### Added
 - Automatic caption placement: one pass over the video scores every row for edge energy, texture and brightness, and each caption is assigned a height by a Viterbi pass that charges a penalty for moving relative to the previous caption — so captions avoid faces and burned-in text without jittering. Results land in the same manual overrides, so any of them can still be dragged.

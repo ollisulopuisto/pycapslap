@@ -2453,7 +2453,7 @@ mod tests {
 
     #[test]
     fn test_extract_first_frame_jpeg_and_cache() {
-        let sample = "../electron/app/assets/oneliner.mp4";
+        let sample = "bin/test_input.mp4";
         if !std::path::Path::new(sample).exists() {
             return;
         }

@@ -466,9 +466,6 @@ def main():
     pyside_res_dir = repo_root / "pyside" / "app" / "resources"
     pyside_res_dir.mkdir(parents=True, exist_ok=True)
 
-    electron_res_dir = repo_root / "electron" / "resources" / "build"
-    electron_res_dir.mkdir(parents=True, exist_ok=True)
-
     print("🎨 Rendering master 1024x1024 icon with PySide6 QPainter...")
     master_img = create_master_icon(1024)
 
@@ -477,7 +474,6 @@ def main():
     master_img.save(str(master_png_path), "PNG")
     master_img.save(str(resources_icons_dir / "icon.png"), "PNG")
     master_img.save(str(pyside_res_dir / "icon.png"), "PNG")
-    master_img.save(str(electron_res_dir / "icon.png"), "PNG")
     print(f"  ✓ Saved {master_png_path}")
 
     # Standard sizes: 16, 24, 32, 48, 64, 128, 256, 512, 1024
@@ -541,7 +537,6 @@ def main():
                 ],
                 check=True,
             )
-            shutil.copy2(icns_path, electron_res_dir / "icon.icns")
             shutil.copy2(icns_path, pyside_res_dir / "icon.icns")
             print(f"  ✓ Built native {icns_path}")
         except subprocess.CalledProcessError as e:
@@ -550,14 +545,12 @@ def main():
     ico_path = resources_icons_dir / "icon.ico"
     print("🪟 Building Windows icon.ico...")
     write_ico_file(ico_png_data, ico_path)
-    shutil.copy2(ico_path, electron_res_dir / "icon.ico")
     shutil.copy2(ico_path, pyside_res_dir / "icon.ico")
     print(f"  ✓ Built {ico_path}")
 
     svg_content = generate_svg()
     svg_path = resources_icons_dir / "icon.svg"
     svg_path.write_text(svg_content, encoding="utf-8")
-    shutil.copy2(svg_path, electron_res_dir / "icon.svg")
     shutil.copy2(svg_path, pyside_res_dir / "icon.svg")
     print(f"  ✓ Built {svg_path}")
 

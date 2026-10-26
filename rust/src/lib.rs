@@ -1,7 +1,6 @@
 /// Whether verbose tracing is on, read once from `CAPSLAP_DEBUG`.
 ///
-/// The same switch the Electron side uses, so one variable makes the whole
-/// stack talkative instead of two.
+/// A shared switch for verbose diagnostics across the desktop app and core.
 pub fn debug_enabled() -> bool {
     use std::sync::OnceLock;
     static ENABLED: OnceLock<bool> = OnceLock::new();
