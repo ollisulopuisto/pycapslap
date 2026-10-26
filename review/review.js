@@ -256,8 +256,13 @@ async function loadFromQuery() {
     $('download').textContent = t('downloadSecondary')
   }
   if (back && sameSite(back)) {
-    $('back').href = back
-    $('back').hidden = false
+    // Only navigate to ordinary http(s) links: a "javascript:" URL assigned to
+    // the back link's href would execute when the link is clicked (XSS).
+    const url = new URL(back, location.href)
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      $('back').href = back
+      $('back').hidden = false
+    }
   }
   try {
     if (captionsUrl) {
@@ -268,11 +273,19 @@ async function loadFromQuery() {
     $('load-error').textContent = `${t('notCaptions')} ${err.message}`
   }
   if (videoUrl) {
-    state.videoName = decodeURIComponent(videoUrl.split('/').pop().split('?')[0])
-    state.videoFromLink = true
-    $('video-status').textContent = state.videoName
-    video.src = videoUrl
-    maybeStart()
+    try {
+      const url = new URL(videoUrl, location.href)
+      // Only play http(s) links: a "javascript:" video source is an XSS sink.
+      if (url.protocol === 'http:' || url.protocol === 'https:') {
+        state.videoName = decodeURIComponent(videoUrl.split('/').pop().split('?')[0])
+        state.videoFromLink = true
+        $('video-status').textContent = state.videoName
+        video.src = url.href
+        maybeStart()
+      }
+    } catch {
+      // Ignore an unparseable or unsafe video link.
+    }
   }
 }
 
