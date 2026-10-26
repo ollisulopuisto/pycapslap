@@ -29,12 +29,16 @@ class _LocalRecognizer(NvidiaRecognizer):
         self._keep_fillers = keep_fillers
         texts, segments = [], []
         for offset, samples in windows(str(audio)):
-            if not samples.size or np.max(np.abs(samples)) <= .00025:
+            if not samples.size or np.max(np.abs(samples)) <= 0.00025:
                 continue
             result = self.transcribe(array.array("f", samples), None)
             texts.append(result["text"])
             segments.extend(
-                dict(segment, start=offset + segment["start"], end=offset + segment["end"])
+                dict(
+                    segment,
+                    start=offset + segment["start"],
+                    end=offset + segment["end"],
+                )
                 for segment in result["segments"]
             )
         return {"text": " ".join(texts).strip(), "segments": segments, "language": None}
@@ -47,8 +51,14 @@ def _cache_dir() -> Path:
     if sys.platform == "darwin":
         return Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
     if os.name == "nt":
-        return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PyCapSlap" / "orukeet"
-    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "pycapslap" / "orukeet"
+        return (
+            Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PyCapSlap" / "orukeet"
+        )
+    return (
+        Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+        / "pycapslap"
+        / "orukeet"
+    )
 
 
 def _load_model() -> _LocalRecognizer:
@@ -60,7 +70,13 @@ def _load_model() -> _LocalRecognizer:
         runtime = install_runtime(device, cache / "runtime-cache")
         model = fetch("q8", cache / "model-cache")
         receipt.write_text(
-            json.dumps({"model": str(model.resolve()), "runtime": str(runtime.resolve()), "device": device}),
+            json.dumps(
+                {
+                    "model": str(model.resolve()),
+                    "runtime": str(runtime.resolve()),
+                    "device": device,
+                }
+            ),
             encoding="utf-8",
         )
     config = json.loads(receipt.read_text(encoding="utf-8-sig"))
