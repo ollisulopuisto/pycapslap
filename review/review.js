@@ -260,7 +260,9 @@ async function loadFromQuery() {
     // the back link's href would execute when the link is clicked (XSS).
     const url = new URL(back, location.href)
     if (url.protocol === 'http:' || url.protocol === 'https:') {
-      $('back').href = back
+      // Assign the parsed URL, not the raw query string, so no unsanitized
+      // user input reaches the link's href (client-side XSS sink).
+      $('back').href = url.href
       $('back').hidden = false
     }
   }
