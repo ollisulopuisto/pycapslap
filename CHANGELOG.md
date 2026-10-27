@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.27.1] - 2026-10-27
+
+### Fixed
+- **Client-side XSS in the review page.** Assign the parsed, http(s)-validated URL to the `?back=` link's `href` instead of the raw query string, so untrusted input can no longer reach the link sink.
+
 ## [v26.10.26.4] - 2026-10-26
 
 ### Fixed
