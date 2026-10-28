@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.models.captions import CaptionSegment
+from app.models.project import VideoMetadata
 from PySide6.QtWidgets import QSplitter
 
 from app.views.main_window import MainWindow
@@ -959,8 +960,14 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     monkeypatch.setattr(
         mw.broll_pipeline,
         "build",
-        lambda audio, picks, out, sidecar=None, transition=None: built.update(
-            audio=audio, out=out, n=len(picks.accepted()), transition=transition
+        lambda audio, picks, out, sidecar=None, transition=None, cancel=None: (
+            built.update(
+                audio=audio,
+                out=out,
+                n=len(picks.accepted()),
+                transition=transition,
+                cancel=cancel,
+            )
         ),
     )
     window = MainWindow()
@@ -975,6 +982,10 @@ def test_broll_flow_searches_asks_and_builds(qtbot, tmp_path, monkeypatch):
     assert built["n"] == 1
     assert built["out"].name == "ep.reel.mp4"
     assert built["transition"] == "whip"  # the dialog's choice reaches the build
+    from threading import Event
+
+    assert isinstance(built["cancel"], Event)
+    assert not built["cancel"].is_set()
     window.close()
 
 
@@ -1021,6 +1032,8 @@ def _transcribing_window(qtbot, monkeypatch, tmp_path, duration_ms, marks=None):
         "source",
         lambda self: mw.QUrl.fromLocalFile(str(audio)),
     )
+    # A loaded source belongs to both the player and the project.
+    window.project.video = VideoMetadata(str(audio))
     window.timeline.set_duration(duration_ms)
     if marks:
         window.timeline.set_trim_range(*marks)
@@ -1218,4 +1231,41 @@ def test_crop_choice_reaches_the_render_and_the_placement(qtbot):
     window._on_render_video_requested()
     assert [p for m, p in calls if m == "burn"][-1]["cropStrategy"] == "fit"
     assert window.player.canvas.crop_fill is False
+    window.close()
+
+
+def test_transcription_from_previous_source_cannot_replace_current_cues(
+    qtbot, monkeypatch, tmp_path
+):
+    from app.models.project import VideoMetadata
+
+    window, _, pending = _transcribing_window(qtbot, monkeypatch, tmp_path, 180_000)
+    window.set_caption_segments([CaptionSegment(0, 1000, "original")])
+    window._on_transcribe_requested()
+    # Model the source-switch boundary without starting another media/core job.
+    window.project.video = VideoMetadata(str(tmp_path / "another.wav"))
+    window.set_caption_segments([CaptionSegment(0, 1000, "current source")])
+    applied = []
+    original_set = window.set_caption_segments
+
+    def record(segments):
+        applied.append(segments)
+        original_set(segments)
+
+    monkeypatch.setattr(window, "set_caption_segments", record)
+    pending.set_result(
+        {
+            "transcription": {
+                "segments": [
+                    {"startMs": 0, "endMs": 1000, "text": "stale", "words": []}
+                ]
+            }
+        }
+    )
+    # A second queued callback proves the earlier result callback was processed.
+    drained = []
+    window._in_gui(lambda: drained.append(True))
+    qtbot.waitUntil(lambda: bool(drained), timeout=3000)
+    assert not applied
+    assert [s.text for s in window.caption_panel.segments] == ["current source"]
     window.close()
