@@ -404,7 +404,9 @@ def test_downloading_resolves_first_and_names_the_file_from_the_real_url(
     )
     real = a("t", url="https://files/PIA1~large.jpg")
     monkeypatch.setattr(download.sources, "resolve", lambda asset: real)
-    monkeypatch.setattr(download.net, "get", lambda url, params=None: b"jpegdata")
+    monkeypatch.setattr(
+        download.net, "download", lambda url, path, **kw: path.write_bytes(b"jpegdata")
+    )
     path = download.fetch(pending, tmp_path)
     assert path.suffix == ".jpg" and path.read_bytes() == b"jpegdata"
 

@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app.services import media
-from app.services.broll import credits, looks
+from app.services.broll import credits, looks, control
 from app.services.broll.looks import FPS
 from app.services.broll.picks import Choice
 
@@ -233,7 +233,10 @@ def vt_available() -> bool:
     if sys.platform != "darwin":
         return False
     r = subprocess.run(
-        [ffmpeg_path(), "-hide_banner", "-encoders"], capture_output=True, text=True
+        [ffmpeg_path(), "-hide_banner", "-encoders"],
+        capture_output=True,
+        text=True,
+        timeout=15,
     )
     return "h264_videotoolbox" in r.stdout
 
@@ -278,6 +281,7 @@ def probe_duration(path: Path) -> float:
         ],
         capture_output=True,
         text=True,
+        timeout=15,
     )
     try:
         return float(json.loads(r.stdout)["format"]["duration"])
@@ -305,7 +309,9 @@ def _end_card(lines: list[str], size: tuple[int, int]) -> tuple[str, int]:
         fs -= 1
 
 
-def _prepare_part(part: Part, region: tuple[int, int], layout: str, work: Path) -> Part:
+def _prepare_part(
+    part: Part, region: tuple[int, int], layout: str, work: Path, cancel=None
+) -> Part:
     """A still made no bigger than its place in the frame can use, once.
 
     Every frame of a looped still is decoded from the file again, so a 12
@@ -332,20 +338,23 @@ def _prepare_part(part: Part, region: tuple[int, int], layout: str, work: Path) 
         cmd = [ffmpeg_path(), "-y", "-v", "error", "-i", str(Path(part.path).resolve())]
         cmd += ["-vf", f"scale={nw}:{nh}:flags=lanczos"]
         cmd += ["-frames:v", "1"] + ([] if alpha else ["-q:v", "2"]) + [str(out)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = control.run(cmd, cancel=cancel)
         if r.returncode != 0:
             raise ReelError(r.stderr.strip()[-400:] or "could not shrink a picture")
     return replace(part, path=out, alpha=alpha)
 
 
-def prepare_stills(shots_: list[Shot], size: tuple[int, int], work: Path) -> list[Shot]:
+def prepare_stills(
+    shots_: list[Shot], size: tuple[int, int], work: Path, cancel=None
+) -> list[Shot]:
     """Every still of the reel shrunk to what the frame can use (see above)."""
     w, h = size
     out = []
     for s in shots_:
+        control.check(cancel)
         region = (w, h // 2) if s.layout == "stack" else (w, h)
         layout = "blur" if s.layout == "blur" else "fill"
-        parts = [_prepare_part(p, region, layout, work) for p in s.parts]
+        parts = [_prepare_part(p, region, layout, work, cancel) for p in s.parts]
         first = parts[0]
         out.append(
             replace(
@@ -533,18 +542,29 @@ def render(
     end_card_s: float = 5.0,
     duration_s: float | None = None,
     hw: bool | None = None,
+    cancel=None,
 ) -> Path:
     duration = duration_s if duration_s is not None else probe_duration(audio)
     if hw is None:
         hw = vt_available()
     work.mkdir(parents=True, exist_ok=True)
-    shots_ = prepare_stills(shots_, size, work)
+    control.check(cancel)
+    shots_ = prepare_stills(shots_, size, work, cancel)
     # The GPU run may refuse a clip (10-bit, an odd codec) or lack a filter; it
     # fails at start-up, and the software run takes over.
     for use_hw in (True, False) if hw else (False,):
-        cmd = command(audio, shots_, out, duration, work, size, end_card_s, hw=use_hw)
-        r = subprocess.run(cmd, cwd=work, capture_output=True, text=True)
-        if r.returncode == 0:
-            return Path(out)
+        control.check(cancel)
+        temporary = out.with_name(f".{out.stem}.part{out.suffix}")
+        cmd = command(
+            audio, shots_, temporary, duration, work, size, end_card_s, hw=use_hw
+        )
+        try:
+            r = control.run(cmd, cwd=work, cancel=cancel)
+            control.check(cancel)
+            if r.returncode == 0:
+                temporary.replace(out)
+                return Path(out)
+        finally:
+            temporary.unlink(missing_ok=True)
         error = r.stderr.strip()[-800:] or f"ffmpeg exited {r.returncode}"
     raise ReelError(error)
