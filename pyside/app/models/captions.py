@@ -1,4 +1,6 @@
 import json
+import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -947,7 +949,25 @@ class ProjectState:
                 trim_end_ms=self.trim_end_ms,
                 thumbnail=self.thumbnail,
             )
-            target.write_text(cf.to_json_str(), encoding="utf-8")
+            # A failed write must leave the last good sidecar untouched.
+            temporary = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=target.parent,
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as stream:
+                    temporary = Path(stream.name)
+                    stream.write(cf.to_json_str())
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, target)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
             self.is_dirty = False
             return True
         except OSError:

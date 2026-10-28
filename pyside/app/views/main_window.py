@@ -21,7 +21,6 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QComboBox,
     QGridLayout,
     QDialog,
@@ -43,6 +42,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.models.history import History
+from app.models.captions import CaptionsFile
 from app.core_client import CoreClient
 from app.models.captions import (
     CaptionSegment,
@@ -191,6 +192,10 @@ class MainWindow(QMainWindow):
         self._closed = False
         self._gui_call.connect(self._run_gui_call, Qt.ConnectionType.QueuedConnection)
         self.project = ProjectState()
+        self._histories: dict[str, History] = {}
+        self._history_loading = True
+        self._history_restoring = False
+        self._broll_cancel = None
 
         self._seek_latencies: deque[float] = deque(maxlen=10)
 
@@ -235,6 +240,114 @@ class MainWindow(QMainWindow):
         self._setup_dark_theme()
         self._setup_perf_timer()
         self._apply_bug()
+        self._history_loading = False
+        self._record_history()
+
+    def _snapshot(self) -> dict:
+        snapshot = CaptionsFile(
+            segments=self.project.segments,
+            position_overrides=self.project.position_overrides,
+            style=self.project.style,
+            trim_start_ms=self.timeline.trim_start_ms,
+            trim_end_ms=self.timeline.trim_end_ms,
+            thumbnail=self.project.thumbnail,
+        ).to_dict()
+        # Loading legacy/plain cues synthesizes word spans. Canonicalize both
+        # sides so restoring a node cannot create a spurious new branch.
+        normalized = CaptionsFile.from_dict(snapshot)
+        for segment in normalized.segments:
+            if not segment.words and segment.text:
+                segment.update_text(segment.text)
+        return normalized.to_dict()
+
+    def _history_key(self) -> str:
+        return self.project.video_path or ""
+
+    def _record_history(self) -> None:
+        if self._history_loading or self._history_restoring:
+            return
+        value = self._snapshot()
+        key = self._history_key()
+        if key not in self._histories:
+            self._histories[key] = History(value)
+        else:
+            self._histories[key].record(value)
+
+    def _restore_history(self, value: dict | None) -> None:
+        if value is None:
+            return
+        self._history_restoring = True
+        try:
+            saved = CaptionsFile.from_dict(value)
+            self.project.segments = saved.segments
+            self.project.position_overrides = saved.position_overrides
+            self.project.style = saved.style
+            self.project.thumbnail = saved.thumbnail
+            self.project.trim_start_ms = saved.trim_start_ms
+            self.project.trim_end_ms = saved.trim_end_ms
+            self.set_caption_segments(saved.segments)
+            self.caption_panel.set_style(saved.style)
+            self.player.canvas.set_style(saved.style)
+            self.timeline.set_trim_range(saved.trim_start_ms, saved.trim_end_ms)
+            self._restore_thumbnail()
+            self.project.is_dirty = True
+            self.schedule_preview_layout()
+            self._on_position_changed(self.player.media_player.position())
+        finally:
+            self._history_restoring = False
+
+    def _undo_project(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self._record_history()
+        self._restore_history(self._histories[self._history_key()].undo())
+
+    def _redo_project(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self._record_history()
+        self._restore_history(self._histories[self._history_key()].redo())
+
+    def _show_history_branches(self) -> None:
+        self.caption_panel.commit_active_editor()
+        self._record_history()
+        history = self._histories[self._history_key()]
+        tips = history.tips()
+        labels = [f"Branch ending at edit {i}" for i in tips]
+        label, accepted = QInputDialog.getItem(
+            self,
+            "Session branches",
+            "Restore a branch tip:",
+            labels,
+            0,
+            False,
+        )
+        if accepted and label in labels:
+            self._restore_history(history.select(tips[labels.index(label)]))
+
+    def _confirm_unsaved(self) -> bool:
+        self.caption_panel.commit_active_editor()
+        self._save_trim_points_to_project()
+        if not self.project.is_dirty:
+            return True
+        choice = QMessageBox.question(
+            self,
+            "Unsaved captions",
+            "Save this project's changes before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if choice == QMessageBox.StandardButton.Discard:
+            return True
+        if choice == QMessageBox.StandardButton.Save:
+            return self._on_save_requested()
+        return False
+
+    def _on_trim_changed(self, *_args) -> None:
+        if not self._history_loading and not self._history_restoring:
+            self._save_trim_points_to_project()
+            self.project.is_dirty = True
+            self._record_history()
 
     def _setup_ui(self) -> None:
         central = QWidget(self)
@@ -488,6 +601,10 @@ class MainWindow(QMainWindow):
         """)
         self.progress_bar.setVisible(False)
         self.status.addPermanentWidget(self.progress_bar)
+        self.broll_cancel_btn = QPushButton("Cancel B-roll")
+        self.broll_cancel_btn.hide()
+        self.broll_cancel_btn.clicked.connect(self._cancel_broll)
+        self.status.addPermanentWidget(self.broll_cancel_btn)
 
         self.status.showMessage("Ready. Drop a 1080p video or click Open Video.")
 
@@ -504,6 +621,7 @@ class MainWindow(QMainWindow):
         # Timeline signals
         self.timeline.seek_requested.connect(self.player.seek_to_ms)
         self.timeline.trim_range_changed.connect(self.player.set_play_range)
+        self.timeline.trim_range_changed.connect(self._on_trim_changed)
         self.player.mark_in_requested.connect(self._set_trim_start_here)
         self.player.mark_out_requested.connect(self._set_trim_end_here)
         self.timeline.segment_selected.connect(self._on_segment_selected)
@@ -545,6 +663,10 @@ class MainWindow(QMainWindow):
     def _setup_dark_theme(self) -> None:
         self.setStyleSheet("""
             QMainWindow { background-color: #0f0f11; color: #f4f4f5; }
+            QDialog, QMessageBox { background-color: #18181b; color: #f4f4f5; }
+            QDialog QLabel, QMessageBox QLabel { color: #f4f4f5; background: transparent; }
+            QDialog QComboBox, QDialog QLineEdit { background-color: #27272a; color: #f4f4f5; border: 1px solid #52525b; padding: 4px; }
+            QDialog QAbstractItemView { background-color: #27272a; color: #f4f4f5; selection-background-color: #4f46e5; }
             QWidget { color: #f4f4f5; }
             QGroupBox { font-weight: bold; border: 1px solid #27272a; border-radius: 6px; margin-top: 10px; padding-top: 10px; }
             QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; color: #a1a1aa; }
@@ -583,6 +705,7 @@ class MainWindow(QMainWindow):
     def schedule_preview_layout(self) -> None:
         """Ask the renderer for a fresh layout once the edits settle."""
         self.project.ensure_position()
+        self._record_history()
         self._invalidate_caption_layers()
         self._layout_timer.start()
 
@@ -1004,15 +1127,15 @@ class MainWindow(QMainWindow):
         self._on_segment_selected(new_cue)
         self.status.showMessage("Added new caption cue.", 2500)
 
-    def _on_save_requested(self) -> None:
+    def _on_save_requested(self) -> bool:
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
         self._save_trim_points_to_project()
         if not self.project.video_path:
-            return
+            return False
         sidecar_path = self.project.get_default_sidecar_path()
         if not sidecar_path:
-            return
+            return False
 
         success = self.project.save_sidecar(sidecar_path)
         if success:
@@ -1021,6 +1144,12 @@ class MainWindow(QMainWindow):
             )
         else:
             self.status.showMessage("Failed to save captions sidecar.", 3000)
+            QMessageBox.warning(
+                self,
+                "Save failed",
+                "The project was not saved. Your edits are still open.",
+            )
+        return success
 
     def _in_gui(self, fn) -> None:
         """Run `fn` on the GUI thread, after the current event. Safe from any thread.
@@ -1040,6 +1169,8 @@ class MainWindow(QMainWindow):
             fn()
 
     def _on_broll(self) -> None:
+        if self._broll_cancel is not None:
+            return
         self.caption_panel.commit_active_editor()
         self.project.segments = list(self.caption_panel.segments)
         if not self.project.video_path or not self.project.segments:
@@ -1048,6 +1179,7 @@ class MainWindow(QMainWindow):
             )
             return
         segments = list(self.project.segments)
+        source = self.project.video_path
         self.status.showMessage("Searching Wikimedia Commons…")
 
         def work() -> None:
@@ -1057,7 +1189,13 @@ class MainWindow(QMainWindow):
                 message = str(err)
                 self._in_gui(lambda: self._broll_failed(message))
                 return
-            self._in_gui(lambda: self._broll_choose(found))
+            self._in_gui(
+                lambda: (
+                    self._broll_choose(found)
+                    if self.project.video_path == source
+                    else None
+                )
+            )
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1070,8 +1208,13 @@ class MainWindow(QMainWindow):
         transition = dialog.transition
         audio = Path(self.project.video_path)
         out = audio.with_name(f"{audio.stem}.reel.mp4")
-        self.project.save_sidecar()
+        if not self._on_save_requested():
+            return
         sidecar = self.project.sidecar_path
+        self._broll_cancel = threading.Event()
+        cancel = self._broll_cancel
+        self.broll_cancel_btn.show()
+        self.broll_btn.setEnabled(False)
         self.progress_bar.setRange(0, 0)
         self.progress_bar.setVisible(True)
         self.status.showMessage("Building the reel…")
@@ -1084,8 +1227,14 @@ class MainWindow(QMainWindow):
                     out,
                     sidecar=Path(sidecar) if sidecar else None,
                     transition=transition,
+                    cancel=cancel,
                 )
-            except (OSError, ValueError, broll_reel.ReelError) as err:
+            except (
+                OSError,
+                ValueError,
+                broll_reel.ReelError,
+                subprocess.SubprocessError,
+            ) as err:
                 message = str(err)
                 self._in_gui(lambda: self._broll_failed(message))
                 return
@@ -1093,11 +1242,23 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _cancel_broll(self) -> None:
+        if self._broll_cancel is not None:
+            self._broll_cancel.set()
+            self.status.showMessage("Cancelling B-roll…")
+
+    def _finish_broll(self) -> None:
+        self._broll_cancel = None
+        self.broll_cancel_btn.hide()
+        self.broll_btn.setEnabled(bool(self.project.video_path))
+
     def _broll_done(self, out: Path) -> None:
+        self._finish_broll()
         self.progress_bar.setVisible(False)
         self.status.showMessage(f"Reel ready: {out}", 15000)
 
     def _broll_failed(self, message: str) -> None:
+        self._finish_broll()
         self.progress_bar.setVisible(False)
         self.status.clearMessage()
         QMessageBox.warning(self, "B-roll", message)
@@ -1481,7 +1642,8 @@ class MainWindow(QMainWindow):
         self._save_trim_points_to_project()
         # Keep sidecar file on disk synchronized so output and sidecar never diverge
         if self.project.get_default_sidecar_path():
-            self.project.save_sidecar()
+            if not self._on_save_requested():
+                return
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
             QMessageBox.information(self, "Render Video", "Please load a video first.")
@@ -1640,11 +1802,24 @@ class MainWindow(QMainWindow):
             file_menu,
             "Quit PyCapSlap",
             QKeySequence.StandardKey.Quit,
-            QApplication.quit,
+            self.close,
             QAction.MenuRole.QuitRole,
         )
 
         edit_menu = bar.addMenu("Edit")
+        add(
+            edit_menu,
+            "Undo Project Edit",
+            QKeySequence.StandardKey.Undo,
+            self._undo_project,
+        )
+        add(
+            edit_menu,
+            "Redo Project Edit",
+            QKeySequence.StandardKey.Redo,
+            self._redo_project,
+        )
+        add(edit_menu, "Session Branches…", None, self._show_history_branches)
         add(edit_menu, "Add Caption", "Ctrl+Shift+N", press(panel.btn_add_cue))
 
         video_menu = bar.addMenu("Video")
@@ -1809,17 +1984,23 @@ class MainWindow(QMainWindow):
                 moved = res.get("moved", 0)
                 from app.models.captions import PositionOverride
 
-                self.project.position_overrides = [
-                    PositionOverride.from_dict(o) for o in overrides_data
-                ]
-                self.project.is_dirty = True
+                def apply_placement():
+                    if self.project.video_path != source_file:
+                        return
+                    self.project.position_overrides = [
+                        PositionOverride.from_dict(o) for o in overrides_data
+                    ]
+                    self.project.is_dirty = True
+                    self.schedule_preview_layout()
+
+                self._in_gui(apply_placement)
                 self._in_gui(lambda: self.progress_bar.setVisible(False))
                 self._in_gui(
                     lambda: self.status.showMessage(
                         f"Auto Dodge complete: moved {moved} captions.", 4000
                     ),
                 )
-                self._in_gui(self.overlay.update)
+                self._in_gui(self.schedule_preview_layout)
             except (RuntimeError, ValueError, OSError) as err:
                 err_msg = str(err)
                 self._in_gui(lambda: self.progress_bar.setVisible(False))
@@ -1901,8 +2082,10 @@ class MainWindow(QMainWindow):
                 )
 
                 def apply() -> None:
-                    # The cues already there are read on the GUI thread, where
-                    # they are edited.
+                    # A result for an older source must not replace this project.
+                    if self.project.video_path != source_file:
+                        return
+                    # The cues already there are read on the GUI thread.
                     result = part
                     if plan.kind == "range":
                         result = transcribe_range.merged(
@@ -1913,6 +2096,7 @@ class MainWindow(QMainWindow):
                         )
                     self.progress_bar.setVisible(False)
                     self.set_caption_segments(result)
+                    self.project.is_dirty = True
                     self.status.showMessage(
                         f"Transcription finished: {count} segments.", 4000
                     )
@@ -2027,6 +2211,21 @@ class MainWindow(QMainWindow):
             self.load_video(file_path)
 
     def load_video(self, file_path: str) -> None:
+        if self._broll_cancel is not None:
+            QMessageBox.information(
+                self,
+                "B-roll",
+                "Cancel the current B-roll build before opening another source.",
+            )
+            return
+        if not self._confirm_unsaved():
+            return
+        if not Path(file_path).is_file():
+            QMessageBox.warning(
+                self, "Open source", "The selected source no longer exists."
+            )
+            return
+        self._history_loading = True
         self.status.showMessage(f"Loading video: {os.path.basename(file_path)}...")
         self.timeline.reset_trim_range()
         self._sync_play_range()
@@ -2063,6 +2262,8 @@ class MainWindow(QMainWindow):
         self.render_btn.setEnabled(True)
 
         self.project.load_video(file_path, {})
+        self.project.position_overrides = []
+        self.project.thumbnail = {}
         self._apply_bug()  # this video may have the logo turned off
         # Check if sidecar exists
         if self.project.load_sidecar() and self.project.segments:
@@ -2098,6 +2299,12 @@ class MainWindow(QMainWindow):
         # Trigger initial position sync
         self._on_position_changed(0)
         self.trigger_extract_thumbnail()
+
+        self._history_loading = False
+        # Opening a source loads its saved state, even after Discard. Older
+        # branches stay reachable, but must not silently replace that state.
+        self.project.is_dirty = False
+        self._record_history()
 
         self.setWindowTitle(f"PyCapSlap — {os.path.basename(file_path)}")
         self.meta_lbl.setText(
@@ -2197,6 +2404,7 @@ class MainWindow(QMainWindow):
     def _on_thumbnail_changed(self) -> None:
         self.project.thumbnail = self.thumbnail_panel.state()
         self.project.is_dirty = True
+        self._record_history()
 
     def _restore_thumbnail(self) -> None:
         """Show the thumbnail the project was saved with: its headline, and its frame."""
@@ -2228,7 +2436,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Thumbnail", f"Could not write {path}")
 
     def closeEvent(self, event) -> None:
+        if not self._confirm_unsaved():
+            event.ignore()
+            return
         # Nothing of this window should fire after it is gone.
+        self._cancel_broll()
         self._closed = True
         self.perf_timer.stop()
         self._layout_timer.stop()

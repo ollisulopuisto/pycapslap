@@ -41,6 +41,13 @@ def no_modal_message_boxes(monkeypatch):
 
         return staticmethod(box)
 
+    # Existing UI tests close dirty fixture windows during teardown. Dedicated
+    # save-guard tests override this and exercise Save/Cancel/Discard explicitly.
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        staticmethod(lambda *_args, **_kwargs: QMessageBox.StandardButton.Discard),
+    )
     for kind in ("warning", "critical", "information"):
         monkeypatch.setattr(QMessageBox, kind, record(kind))
     return shown
