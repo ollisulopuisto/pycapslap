@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.28.1] - 2026-10-28
+
+### Changed
+- **Rebuilt the macOS DMG from the latest released source.** This reissue contains the review-page URL validation shipped in v26.10.27.1.
+
 ## [v26.10.27.1] - 2026-10-27
 
 ### Fixed
