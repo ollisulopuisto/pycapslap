@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Fixed
+- macOS app bundle version fields now follow the release tag instead of the PyInstaller default `0.0.0`. Local builds use the latest version in this changelog.
+
 ## [v26.10.29.1] - 2026-10-29
 
 ### Fixed
