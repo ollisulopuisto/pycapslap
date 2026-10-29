@@ -56,7 +56,11 @@ jobs:
 
       - name: Create macOS disk image
         working-directory: pyside/dist
-        run: hdiutil create -volname "PyCapSlap" -srcfolder PyCapSlap.app -ov -format UDZO PyCapSlap-macos-arm64.dmg
+        run: |
+          mkdir installer
+          ditto PyCapSlap.app installer/PyCapSlap.app
+          ln -s /Applications installer/Applications
+          hdiutil create -volname "PyCapSlap" -srcfolder installer -ov -format UDZO PyCapSlap-macos-arm64.dmg
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

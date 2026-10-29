@@ -7,8 +7,13 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.29.1] - 2026-10-29
+
 ### Fixed
 - **Exports without a known duration show activity instead of 0%.** FFmpeg progress remains indeterminate until a percentage can be calculated.
+
+### Changed
+- **The macOS installer DMG includes an Applications shortcut** beside PyCapSlap.app for drag-and-drop installation.
 
 ## [v26.10.28.1] - 2026-10-28
 
