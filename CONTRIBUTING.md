@@ -93,3 +93,19 @@ CHANGELOG, Unreleased). If a caption needs to look different, change it
 in `captions.rs` — both sides follow from there. The one thing the canvas
 still decides for itself is a stand-in layout for before the core
 answers, and it mirrors the renderer's own font-size formula.
+
+## macOS bundle version (2026-10-29 packaging follow-through)
+
+The release workflow builds tags named `vYY.MM.DD.N` (the calendar version
+format documented in CHANGELOG.md). `scripts/bundle_version.py` uses that
+exact tag for both `CFBundleShortVersionString` and `CFBundleVersion` in
+`pyside/pycapslap.spec`; non-tag builds use the first released changelog
+heading. Invalid release tags fail before packaging instead of silently
+shipping `0.0.0`. The Python package's `0.1.0` is not the release identifier.
+
+The downloaded v26.10.29.1 DMG had `0.0.0` and no build version. This source
+fix is for the next human-approved release: it does not change that asset,
+create a tag or dispatch a build. Regression tests execute the real spec
+with inert build objects and check both fields, tag precedence, local
+fallback and malformed input. Native packaging/launch acceptance remains
+open; no native runtime claim follows from these source tests.

@@ -14,6 +14,7 @@
 # Output: dist/PyCapSlap.app (macOS) — a plain onedir bundle is used
 # (not --onefile) so startup doesn't pay a self-extraction cost every launch.
 
+import runpy
 import sys
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
@@ -23,6 +24,9 @@ block_cipher = None
 repo_root = Path(SPECPATH).resolve().parent
 pyside_dir = repo_root / "pyside"
 rust_dir = repo_root / "rust"
+bundle_version = runpy.run_path(str(repo_root / "scripts" / "bundle_version.py"))[
+    "bundle_version"
+](repo_root)
 
 # (source, destination-relative-to-bundle-root) pairs. Destinations mirror
 # the dev checkout's own layout so nothing in core_client.py/fonts.py needs
@@ -37,7 +41,10 @@ binaries = [
 bin_dir = rust_dir / "bin"
 if bin_dir.exists():
     for entry in bin_dir.iterdir():
-        if entry.name.endswith((".bak", ".capslap.json")) or entry.name == "test_input.mp4":
+        if (
+            entry.name.endswith((".bak", ".capslap.json"))
+            or entry.name == "test_input.mp4"
+        ):
             continue  # build leftovers / fixtures, not runtime dependencies
         dest = f"rust/bin/{entry.relative_to(bin_dir)}"
         if entry.is_dir():
@@ -127,9 +134,12 @@ if sys.platform == "darwin":
         name="PyCapSlap.app",
         icon=str(pyside_dir / "app" / "resources" / "icon.icns"),
         bundle_identifier="com.pycapslap.app",
+        version=bundle_version,
         info_plist={
             "CFBundleName": "PyCapSlap",
             "CFBundleDisplayName": "PyCapSlap",
+            "CFBundleShortVersionString": bundle_version,
+            "CFBundleVersion": bundle_version,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "12.0",
         },
