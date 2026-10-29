@@ -24,7 +24,8 @@ pub struct RpcError {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "event", rename_all = "camelCase")] // JSON will have an "event" field indicating the type
 pub enum RpcEvent {
-    // Progress updates for long operations (0.0 to 1.0 completion)
+    // Progress updates for long operations (0.0 to 1.0 completion; -1.0 when
+    // the operation is active but has no known total for a percentage).
     Progress {
         id: String,     // ID of the operation being tracked
         status: String, // Human-readable status message ("Extracting audio...")

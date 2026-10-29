@@ -9,5 +9,8 @@
 ## Done (verified)
 - Crop position. Crop can be centred ("fill"), from the start (top/left, "start") or from the end (bottom/right, "end"). The Rust side implements all three in `build_fitpad_filter_with_options`/`build_gpu_fitpad_filter`, and the editor offers them in the crop combo; the choice reaches the render and the caption placement.
 
+## Done
+- Export progress stays visibly active when the input duration is unknown. FFmpeg's elapsed output time cannot form a percentage without a total duration, so the progress bar uses its indeterminate state until it can report a percentage.
+
 ## Open
 - None.

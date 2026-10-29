@@ -1421,15 +1421,21 @@ pub async fn export_video(
                         if total > 0 {
                             (us as f64 / total as f64).min(0.99) as f32
                         } else {
-                            0.0
+                            -1.0
                         }
                     } else {
-                        0.0 // Todo: maybe fake progress or indeterminate state?
+                        // A duration-less source can still report elapsed output time,
+                        // but there is no meaningful percentage to calculate.
+                        -1.0
                     };
 
                     emit(RpcEvent::Progress {
                         id: id.to_string(),
-                        status: format!("Exporting... ({:.0}%)", progress * 100.0),
+                        status: if progress >= 0.0 {
+                            format!("Exporting... ({:.0}%)", progress * 100.0)
+                        } else {
+                            "Exporting...".to_string()
+                        },
                         progress,
                     });
                 }
@@ -1524,15 +1530,19 @@ pub async fn export_video(
                             if total > 0 {
                                 (us as f64 / total as f64).min(0.99) as f32
                             } else {
-                                0.0
+                                -1.0
                             }
                         } else {
-                            0.0
+                            -1.0
                         };
 
                         emit(RpcEvent::Progress {
                             id: id.to_string(),
-                            status: format!("Exporting (software)... ({:.0}%)", progress * 100.0),
+                            status: if progress >= 0.0 {
+                                format!("Exporting (software)... ({:.0}%)", progress * 100.0)
+                            } else {
+                                "Exporting (software)...".to_string()
+                            },
                             progress,
                         });
                     }

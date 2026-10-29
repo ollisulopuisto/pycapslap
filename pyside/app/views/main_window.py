@@ -2119,13 +2119,18 @@ class MainWindow(QMainWindow):
 
         try:
             val = float(progress)
-            if 0.0 < val <= 1.0:
-                val = val * 100.0
-            pct_val = max(0, min(100, int(round(val))))
-            pct_str = f"{pct_val}%"
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(pct_val)
-            self.progress_bar.setVisible(True)
+            if val < 0.0:
+                self.progress_bar.setRange(0, 0)
+                self.progress_bar.setVisible(True)
+                pct_str = ""
+            else:
+                if 0.0 < val <= 1.0:
+                    val = val * 100.0
+                pct_val = max(0, min(100, int(round(val))))
+                pct_str = f"{pct_val}%"
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(pct_val)
+                self.progress_bar.setVisible(True)
         except (ValueError, TypeError):
             pct_str = ""
 

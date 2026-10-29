@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Fixed
+- **Exports without a known duration show activity instead of 0%.** FFmpeg progress remains indeterminate until a percentage can be calculated.
+
 ## [v26.10.28.1] - 2026-10-28
 
 ### Changed
