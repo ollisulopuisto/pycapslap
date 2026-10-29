@@ -28,7 +28,7 @@ def test_standard_mac_shortcuts_are_in_the_menus(qtbot):
         "Quit PyCapSlap": QKeySequence.StandardKey.Quit,
         "Zoom In": QKeySequence.StandardKey.ZoomIn,
         "Zoom Out": QKeySequence.StandardKey.ZoomOut,
-        "Orukeet Settings…": QKeySequence.StandardKey.Preferences,
+        "Transcription Settings…": QKeySequence.StandardKey.Preferences,
     }
     for text, key in expected.items():
         assert _find(window, text).shortcut().toString(

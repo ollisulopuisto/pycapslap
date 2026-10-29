@@ -41,7 +41,7 @@ pub struct PositionOverride {
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscribeSegmentsParams {
-    pub audio: String,              // Path to audio file to transcribe
+    pub audio: String, // Path to audio file to transcribe
     pub video_file: Option<String>,
     pub keep_fillers: bool,
 }
@@ -53,6 +53,12 @@ pub struct TranscribeSegmentsResult {
     pub full_text: String,             // Complete transcription text
     pub duration: Option<f64>,         // Total audio duration
     pub json_file: String,             // Path to saved JSON captions file
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadWhisperModelParams {
+    pub model: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -103,6 +109,13 @@ pub struct ExtractAudioResult {
 #[serde(rename_all = "camelCase")]
 pub struct GenerateCaptionsParams {
     pub input_video: String, // Path to input video file
+    /// `orukeet` (default) or `whisper` (local whisper.cpp).
+    #[serde(default = "default_transcription_backend")]
+    pub transcription_backend: String,
+    #[serde(default)]
+    pub whisper_model: Option<String>,
+    #[serde(default)]
+    pub transcription_language: Option<String>,
     /// Keep filler words and repetitions in the Orukeet transcript.
     #[serde(default = "default_keep_fillers")]
     pub keep_fillers: bool,
@@ -153,6 +166,10 @@ pub struct GenerateCaptionsParams {
 
 fn default_keep_fillers() -> bool {
     true
+}
+
+fn default_transcription_backend() -> String {
+    "orukeet".into()
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -7,13 +7,26 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
-## [v26.10.29.2] - 2026-10-29
+## [v26.10.30.2] - 2026-10-30
 
 ### Fixed
 - macOS app bundle version fields now follow the release tag instead of the PyInstaller default `0.0.0`. Local builds use the latest version in this changelog.
 
 ### Packaging
-- Prepare a fresh Apple Silicon DMG containing the merged metadata fix (PR #31). The published 26.10.29.1 asset is unchanged; a new tag build, download inspection and native acceptance remain separate steps.
+- Fresh Apple Silicon release build includes the selectable local Whisper backend and corrected bundle version metadata.
+
+## [v26.10.30.1] - 2026-10-30
+
+### Added
+- **Local Whisper as an alternative transcription backend.** Choose Orukeet or whisper.cpp in the caption panel; Orukeet remains the default. Whisper models can be downloaded from Transcription Settings.
+- **Verbatim and edited caption styles.** Both styles remain available when Orukeet is selected; Whisper uses its native transcript output.
+
+### Fixed
+- **One-shot caption generation keeps its temporary files through rendering.** The extracted audio and timed transcript are now retained until caption render files have been written.
+- **Whisper downloads and release packaging are more reliable.** Concurrent downloads use separate partial files, cancelled downloads clean up automatically, and CI refuses an incomplete Whisper runtime.
+
+### Changed
+- **Minimum macOS version is 15.0.** This matches the deployment target of the bundled whisper.cpp runtime.
 
 ## [v26.10.29.1] - 2026-10-29
 
@@ -83,7 +96,7 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 - **The caption buttons are compact.** Add, Transcribe, Save, Auto Dodge and the others in the caption header are short buttons with a small icon beside the label, so the caption table gets the height.
 - **The window opens tall, for vertical video.** Most footage is 9:16, so the window now opens 760 px wide and up to 900 px high, with the preview taking the height and the caption sidebar beside it. The top bar and the buttons are square tiles with icons, in three columns, and their colours show the state: lit when a mode is on, solid for Render, faded when an action is unavailable.
 - **Long captions wrap in the sidebar.** A caption's text now wraps across lines in the table instead of running off the column, so the whole text is visible, and a word on a later line can be split off like any other.
-- **Menus and standard shortcuts.** File, Edit, Video, View and Captions menus, with the usual Mac keys: Cmd+O opens a video, Cmd+S saves, Cmd+W closes, Cmd+Q quits, Cmd+, opens the Whisper settings, Cmd+= / Cmd+- zoom the timeline and Cmd+0 fits it. Cmd+R renders, Cmd+T transcribes. Each item presses its button, so it does nothing while that button is disabled.
+- **Menus and standard shortcuts.** File, Edit, Video, View and Captions menus, with the usual Mac keys: Cmd+O opens a video, Cmd+S saves, Cmd+W closes, Cmd+Q quits, Cmd+, opens the transcription settings, Cmd+= / Cmd+- zoom the timeline and Cmd+0 fits it. Cmd+R renders, Cmd+T transcribes. Each item presses its button, so it does nothing while that button is disabled.
 - **The buttons line up.** The top bar and the caption header are grids now, so each button sits in the same column as the one above it instead of wrapping where the window happens to end. The export and proof menus are dark like the buttons.
 - **The timeline zooms, and has two edit tools.** Ctrl + scroll, or the + / − buttons, zoom in on the timeline, so a splice between two captions can be placed to the frame; Fit shows the whole video again. **Regular edit** (the default) moves only the caption whose edge is dragged. **Rolling edit** moves the splice between two touching captions: one grows as the other shrinks, and both stay in place otherwise.
 - **A comma that ends a caption line is not shown.** Whisper's commas stay in the captions, so a later transcript merge brings them back, but the video shows a line without the comma when it ends the line or the caption. Periods are shown as before.

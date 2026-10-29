@@ -11,7 +11,7 @@ for Apple Silicon macOS. Pushing a `v*` tag starts
    under a dated version heading and leaving an empty `Unreleased` section.
 2. Check the change set and the app's static build checks. The release job
    builds the Rust core, installs the locked Python dependencies, packages
-   the PySide app and Orukeet worker, and smoke-tests the packaged Rust core.
+   the PySide app, Orukeet worker, Whisper CLI and runtime libraries, and smoke-tests the packaged Rust core.
 3. Commit the release changes and push the branch.
 4. Create and push the next calendar tag, for example:
 
@@ -24,7 +24,8 @@ for Apple Silicon macOS. Pushing a `v*` tag starts
    compressed DMG from `PyCapSlap.app` and attaches it to the tag's GitHub
    release.
 
-The app is unsigned and not notarized. On first launch, users may need to
+The bundled Whisper runtime requires macOS 15 or later, and the app's minimum
+system version is set to match. The app is unsigned and not notarized. On first launch, users may need to
 right-click the app and choose **Open**, or allow it in System Settings under
 **Privacy & Security**.
 
@@ -35,6 +36,9 @@ image with:
 
 ```sh
 cd pyside/dist
-hdiutil create -volname "PyCapSlap" -srcfolder PyCapSlap.app \
+mkdir -p installer
+ditto PyCapSlap.app installer/PyCapSlap.app
+ln -sfn /Applications installer/Applications
+hdiutil create -volname "PyCapSlap" -srcfolder installer \
   -ov -format UDZO PyCapSlap-macos-arm64.dmg
 ```

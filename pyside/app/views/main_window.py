@@ -71,7 +71,7 @@ from app.models.review import (
     unlock_file,
 )
 from app.views.caption_panel import CaptionPanelWidget, format_timestamp
-from app.views.settings_dialog import OrukeetSettingsDialog, get_transcription_params
+from app.views.settings_dialog import OrukeetSettingsDialog
 from app.services import vision_frames
 from app.views.thumbnail_panel import ThumbnailPanel
 from app.views.tile_buttons import ROW_HEIGHT, chevron_url, chip, dense_tile
@@ -538,6 +538,15 @@ class MainWindow(QMainWindow):
 
         # Caption Editor & Inspector Panel
         self.caption_panel = CaptionPanelWidget(self)
+        backend = str(QSettings().value("transcription/backend", "orukeet", type=str))
+        index = self.caption_panel.combo_transcription_backend.findData(backend)
+        self.caption_panel.combo_transcription_backend.setCurrentIndex(max(0, index))
+        self.caption_panel.transcription_backend_changed.connect(
+            self._on_transcription_backend_changed
+        )
+        self._on_transcription_backend_changed(
+            str(self.caption_panel.combo_transcription_backend.currentData())
+        )
         self._build_menus()
         right_col.addWidget(self.caption_panel, stretch=1)
 
@@ -1851,7 +1860,7 @@ class MainWindow(QMainWindow):
         caption_menu.addSeparator()
         add(
             caption_menu,
-            "Orukeet Settings…",
+            "Transcription Settings…",
             QKeySequence.StandardKey.Preferences,
             press(panel.btn_orukeet_settings),
             QAction.MenuRole.PreferencesRole,
@@ -2016,6 +2025,23 @@ class MainWindow(QMainWindow):
         dlg = OrukeetSettingsDialog(self.core, self)
         dlg.exec()
 
+    def _on_transcription_backend_changed(self, backend: str) -> None:
+        QSettings().setValue("transcription/backend", backend)
+        is_orukeet = backend == "orukeet"
+        self.caption_panel.combo_transcription_style.setEnabled(is_orukeet)
+        self.caption_panel.combo_transcription_style.setToolTip(
+            "Verbatim keeps filler words and repetitions. Edited asks Orukeet "
+            "for a cleaner transcript."
+            if is_orukeet
+            else "Whisper uses its standard transcription; filler editing is an Orukeet option."
+        )
+        self.caption_panel.btn_orukeet_settings.setText(
+            "Orukeet" if is_orukeet else "Whisper"
+        )
+        self.caption_panel.btn_transcribe.setToolTip(
+            f"Transcribe audio locally with {'Orukeet' if is_orukeet else 'Whisper'}"
+        )
+
     def _on_transcribe_requested(self) -> None:
         source_file = self.player.media_player.source().toLocalFile()
         if not source_file:
@@ -2034,8 +2060,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        provider_params = get_transcription_params()
-        provider_label = "local Orukeet"
+        backend = str(self.caption_panel.combo_transcription_backend.currentData())
+        provider_label = f"local {backend.title()}"
         part = (
             f", {transcribe_range.clock(plan.start_ms)}"
             f"–{transcribe_range.clock(plan.end_ms)}"
@@ -2050,15 +2076,19 @@ class MainWindow(QMainWindow):
 
         params = {
             "inputVideo": str(Path(source_file).resolve()),
+            "transcriptionBackend": backend,
+            "whisperModel": str(
+                QSettings().value("transcription/whisper_model", "tiny", type=str)
+            ),
             "exportFormats": [self._export_format()],
             "karaoke": self.project.style.karaoke,
-            "keepFillers": bool(
-                self.caption_panel.combo_transcription_style.currentData()
-            ),
             # Orukeet returns phrase timing; retain those phrase segments as
             # the caption cues rather than inventing word-level timestamps.
-            **provider_params,
         }
+        if backend == "orukeet":
+            params["keepFillers"] = bool(
+                self.caption_panel.combo_transcription_style.currentData()
+            )
         if plan.kind == "range":
             params["transcribeStartMs"] = plan.start_ms
             params["transcribeEndMs"] = plan.end_ms

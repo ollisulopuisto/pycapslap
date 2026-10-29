@@ -25,6 +25,11 @@ rust/check_output.txt
 *~
 *.backup
 *.swp
+
+# The local whisper.cpp CLI and its runtime are required by packaged builds.
+!rust/bin/lib/
+!rust/bin/lib/libinternal/
+!rust/bin/lib/libinternal/*.dylib
 .venv/
 __pycache__/
 *.pyc

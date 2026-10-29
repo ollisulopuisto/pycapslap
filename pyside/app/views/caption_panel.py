@@ -153,6 +153,7 @@ class CaptionPanelWidget(QWidget):
     auto_place_requested = Signal()
     save_requested = Signal()
     transcribe_requested = Signal()
+    transcription_backend_changed = Signal(str)
     orukeet_settings_requested = Signal()
     add_cue_requested = Signal()
     mark_start_requested = Signal()
@@ -213,6 +214,20 @@ class CaptionPanelWidget(QWidget):
         self.btn_transcribe.clicked.connect(self.transcribe_requested.emit)
         header_layout.addWidget(self.btn_transcribe, 1, 1)
 
+        self.combo_transcription_backend = QComboBox()
+        self.combo_transcription_backend.addItem("Orukeet", "orukeet")
+        self.combo_transcription_backend.addItem("Whisper", "whisper")
+        self.combo_transcription_backend.setAccessibleName("Transcription backend")
+        self.combo_transcription_backend.setToolTip(
+            "Choose local Orukeet or local whisper.cpp transcription"
+        )
+        self.combo_transcription_backend.currentIndexChanged.connect(
+            lambda _index: self.transcription_backend_changed.emit(
+                str(self.combo_transcription_backend.currentData())
+            )
+        )
+        header_layout.addWidget(self.combo_transcription_backend, 3, 0)
+
         self.combo_transcription_style = QComboBox()
         self.combo_transcription_style.addItem("Verbatim", True)
         self.combo_transcription_style.addItem("Edited", False)
@@ -225,7 +240,7 @@ class CaptionPanelWidget(QWidget):
 
         self.btn_orukeet_settings = tile("Orukeet", "gear", compact=True)
         self.btn_orukeet_settings.setToolTip(
-            "Install and check the local Orukeet model"
+            "Install Orukeet or download the selected Whisper model"
         )
         self.btn_orukeet_settings.clicked.connect(self.orukeet_settings_requested.emit)
         header_layout.addWidget(self.btn_orukeet_settings, 3, 1)
@@ -258,7 +273,7 @@ class CaptionPanelWidget(QWidget):
             "Prevent trailing conjunctions ('tai', 'ja') and lone words after commas"
         )
         self.btn_fix_orphans.clicked.connect(self._on_fix_orphans_clicked)
-        header_layout.addWidget(self.btn_fix_orphans, 3, 0)
+        header_layout.addWidget(self.btn_fix_orphans, 4, 0)
 
         self.btn_save = tile("Save", "save", compact=True)
         self.btn_save.setToolTip("Save captions to sidecar file (.capslap.json)")

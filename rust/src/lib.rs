@@ -29,6 +29,7 @@ pub mod media_tools;
 pub mod placement;
 pub mod rpc;
 pub mod text_metrics;
+pub mod transcription;
 pub mod types;
 pub mod video;
-pub mod transcription;
+pub mod whisper;

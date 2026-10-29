@@ -6,7 +6,7 @@ use crate::types::{
     WordSpan,
 };
 use crate::video::probe;
-use crate::{audio, transcription};
+use crate::{audio, transcription, whisper};
 use anyhow::{anyhow, Result};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
@@ -59,11 +59,41 @@ pub async fn extract_and_transcribe_with_range(
     input_video: &str,
     audio_range: Option<crate::types::AudioRange>,
     keep_fillers: bool,
+    backend: &str,
+    whisper_model: Option<&str>,
+    language: Option<&str>,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
+    extract_and_transcribe_with_range_internal(
+        id,
+        input_video,
+        audio_range,
+        keep_fillers,
+        backend,
+        whisper_model,
+        language,
+        true,
+        &mut emit,
+    )
+    .await
+}
+
+async fn extract_and_transcribe_with_range_internal(
+    id: &str,
+    input_video: &str,
+    audio_range: Option<crate::types::AudioRange>,
+    keep_fillers: bool,
+    backend: &str,
+    whisper_model: Option<&str>,
+    language: Option<&str>,
+    cleanup_after: bool,
+    mut emit: impl FnMut(RpcEvent),
+) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
+    if backend != "orukeet" && backend != "whisper" {
+        return Err(anyhow!("Unknown transcription backend '{backend}'"));
+    }
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| anyhow!("Failed to create temp directory: {}", e))?;
+    fs::create_dir_all(&temp_dir).map_err(|e| anyhow!("Failed to create temp directory: {}", e))?;
     let result = async {
         let probe_result = probe(id, input_video, &mut emit).await?;
         let audio_path = temp_dir.join(format!("audio_{}.wav", id));
@@ -76,20 +106,37 @@ pub async fn extract_and_transcribe_with_range(
                 range: audio_range,
             },
             &mut emit,
-        ).await?;
-        let transcription = transcription::transcribe_segments_with_temp(
-            id,
-            TranscribeSegmentsParams {
-                audio: audio_result.audio.clone(),
-                video_file: Some(input_video.to_string()),
-                keep_fillers,
-            },
-            Some(&temp_dir),
-            &mut emit,
-        ).await?;
+        )
+        .await?;
+        let transcription = if backend == "whisper" {
+            whisper::transcribe(
+                id,
+                &audio_result.audio,
+                whisper_model.unwrap_or("tiny"),
+                language,
+                &temp_dir,
+                &mut emit,
+            )
+            .await?
+        } else {
+            transcription::transcribe_segments_with_temp(
+                id,
+                TranscribeSegmentsParams {
+                    audio: audio_result.audio.clone(),
+                    video_file: Some(input_video.to_string()),
+                    keep_fillers,
+                },
+                Some(&temp_dir),
+                &mut emit,
+            )
+            .await?
+        };
         Ok::<_, anyhow::Error>((probe_result, audio_result.audio, transcription))
-    }.await;
-    cleanup_temp_dir(&temp_dir);
+    }
+    .await;
+    if cleanup_after {
+        cleanup_temp_dir(&temp_dir);
+    }
     result
 }
 
@@ -219,8 +266,16 @@ pub async fn generate_captions_single_pass(
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
 
     let result = async {
-        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_range(
-            id, &params.input_video, None, params.keep_fillers, &mut emit,
+        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_range_internal(
+            id,
+            &params.input_video,
+            None,
+            params.keep_fillers,
+            &params.transcription_backend,
+            params.whisper_model.as_deref(),
+            params.transcription_language.as_deref(),
+            false,
+            &mut emit,
         )
         .await?;
 

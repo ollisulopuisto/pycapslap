@@ -1,8 +1,10 @@
 # PyCapSlap ⚡
 
-**PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
+**PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet or whisper.cpp, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
 
-**Local by default.** Orukeet's Q8 model and native runtime are downloaded and verified once. Audio is processed on your computer; transcription works offline after setup.
+**Local by default.** Orukeet's Q8 model and native runtime are downloaded and verified once. Whisper models can also be downloaded from Transcription Settings. Audio is processed on your computer; transcription works offline after setup.
+
+The bundled macOS app currently requires macOS 15 or later.
 
 ---
 
@@ -18,7 +20,7 @@ PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core 
 
 ## ✨ Key Features
 
-* 🎙️ **Local Orukeet Transcription**: Multilingual offline recognition using Orukeet's verified Q8 model and native runtime, with Metal acceleration on supported Apple Silicon systems. Choose **Verbatim** to keep filler words and repetitions, or **Edited** for a cleaner transcript. Download Orukeet from **Orukeet Settings** beside Transcribe. Orukeet supplies phrase-level timings; caption word timings are not fabricated.
+* 🎙️ **Local transcription with Orukeet or Whisper**: Choose either Orukeet's verified Q8 model and native runtime or whisper.cpp from the caption panel. Orukeet is selected by default and offers **Verbatim** to keep filler words and repetitions or **Edited** for a cleaner transcript. Whisper uses its standard output and selectable local models; download a model from **Transcription Settings**. Both backends run offline after setup.
 * 🧩 **Smart Syllable Logic & Word Preservation**:
   * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
   * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.
@@ -83,7 +85,7 @@ uv run pycapslap
 
 ## 🧠 Local Orukeet Model
 
-Open **Orukeet Settings** beside Transcribe and choose **Download / Repair Orukeet**. The app fetches the Q8 model and platform runtime, verifies their hashes, and saves them in the user's cache. The download requires an internet connection once; subsequent transcription runs locally without network access.
+Open **Transcription Settings** beside Transcribe. Install or verify Orukeet's Q8 model and runtime, or choose a whisper.cpp model to download. Whisper models are stored in the user's application-support directory. Downloads require an internet connection; subsequent transcription runs locally.
 
 Orukeet's model and runtime installation details are documented in the [Orukeet repository](https://github.com/Oruk-AI/orukeet).
 

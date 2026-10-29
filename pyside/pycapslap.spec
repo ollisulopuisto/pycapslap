@@ -39,6 +39,17 @@ binaries = [
 ]
 
 bin_dir = rust_dir / "bin"
+whisper_cli = bin_dir / "whisper-cli-macos-arm64"
+whisper_lib_dir = bin_dir / "lib" / "libinternal"
+if sys.platform == "darwin":
+    whisper_libraries = list(whisper_lib_dir.glob("*.dylib"))
+    if not whisper_cli.is_file() or not whisper_libraries or any(
+        not library.is_file() for library in whisper_libraries
+    ):
+        raise SystemExit(
+            "Whisper runtime is incomplete: expected rust/bin/whisper-cli-macos-arm64 "
+            "and rust/bin/lib/libinternal/*.dylib"
+        )
 if bin_dir.exists():
     for entry in bin_dir.iterdir():
         if (
@@ -49,6 +60,8 @@ if bin_dir.exists():
         dest = f"rust/bin/{entry.relative_to(bin_dir)}"
         if entry.is_dir():
             datas.append((str(entry), dest))
+        elif entry.suffix.lower() in {".txt", ".md"}:
+            datas.append((str(entry), "rust/bin"))
         else:
             # ffmpeg/ffprobe are sometimes a symlink into a local Homebrew
             # install on the machine that builds this — resolve to the real
@@ -141,6 +154,6 @@ if sys.platform == "darwin":
             "CFBundleShortVersionString": bundle_version,
             "CFBundleVersion": bundle_version,
             "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "12.0",
+            "LSMinimumSystemVersion": "15.0",
         },
     )

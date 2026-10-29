@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14 # Apple Silicon runner
+    runs-on: macos-15 # Apple Silicon runner; Whisper runtime targets macOS 15+
 
     steps:
       - uses: actions/checkout@v4
@@ -53,6 +53,12 @@ jobs:
         run: |
           CORE="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/target/release/core"
           echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
+
+      - name: Smoke-test the bundled Whisper CLI
+        run: |
+          CLI="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
+          LIBS="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/lib/libinternal"
+          DYLD_LIBRARY_PATH="$LIBS" "$CLI" --help >/dev/null
 
       - name: Create macOS disk image
         working-directory: pyside/dist

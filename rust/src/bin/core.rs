@@ -161,13 +161,36 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             }
         }
         "checkOrukeetInstalled" => write_ok(&id, &core::transcription::orukeet_installed()),
+        "checkWhisperModel" => match serde_json::from_value::<String>(r.params) {
+            Ok(model) => match core::whisper::model_exists(&model) {
+                Ok(exists) => write_ok(&id, &exists),
+                Err(error) => write_err(&id, error.to_string()),
+            },
+            Err(error) => write_err(&id, format!("Invalid model name: {error}")),
+        },
+        "downloadWhisperModel" => {
+            match serde_json::from_value::<core::types::DownloadWhisperModelParams>(r.params) {
+                Ok(params) => {
+                    tokio::select! {
+                        result = core::whisper::download_model(&id, &params.model, &mut emit) => match result {
+                            Ok(value) => write_ok(&id, &value),
+                            Err(error) => write_err(&id, error.to_string()),
+                        },
+                        _ = rx.recv() => write_err(&id, "Cancelled".to_string()),
+                    }
+                }
+                Err(error) => write_err(
+                    &id,
+                    format!("Invalid params for downloadWhisperModel: {error}"),
+                ),
+            }
+        }
         "extractFrame" => {
             match serde_json::from_value::<core::types::ExtractFrameParams>(r.params) {
                 Ok(p) => match core::video::extract_frame_png(&p.video_path, p.time_ms) {
-                    Ok(image_data) => write_ok(
-                        &id,
-                        &core::types::ExtractFrameResult { image_data },
-                    ),
+                    Ok(image_data) => {
+                        write_ok(&id, &core::types::ExtractFrameResult { image_data })
+                    }
                     Err(e) => write_err(&id, e.to_string()),
                 },
                 Err(e) => write_err(&id, format!("Invalid params for extractFrame: {}", e)),
@@ -200,6 +223,9 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                             &p.input_video,
                             range,
                             p.keep_fillers,
+                            &p.transcription_backend,
+                            p.whisper_model.as_deref(),
+                            p.transcription_language.as_deref(),
                             &mut emit
                         ) => {
                             match res {
