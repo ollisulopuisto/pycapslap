@@ -39,5 +39,6 @@
 - `hdiutil verify` checksum valid; mounted contents include `PyCapSlap.app` and `Applications -> /Applications`; cleanly detached.
 - SHA-256: `e7e3a913d5072f12634b4ea73bf6df71558caeeff8a24430a7b0882a978de207`.
 - Tag `v26.10.30.1` was a pre-rebase attempt, its queued workflow was cancelled, and the stale tag was removed. `v26.10.30.2` includes the newer remote bundle-version fix.
-- Integrated `main` and tag `v26.10.30.2` are pushed. GitHub has queued the tagged release workflow; its result and downloadable release asset are the last outstanding confirmation.
+- Integrated `main` and tag `v26.10.30.2` are pushed. The hosted tagged workflow stayed queued, so it was cancelled and the locally built, verified DMG was published directly to the GitHub release.
+- Release: <https://github.com/ollisulopuisto/pycapslap/releases/tag/v26.10.30.2>. Uploaded asset `PyCapSlap-macos-arm64.dmg` is 136,914,002 bytes; GitHub's SHA-256 `e7e3a913d5072f12634b4ea73bf6df71558caeeff8a24430a7b0882a978de207` matches the local file.
 - No end-to-end audio transcription was run because no Whisper model was installed; CI currently smoke-checks the bundled CLI, not model inference.
