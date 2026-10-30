@@ -39,5 +39,5 @@
 - `hdiutil verify` checksum valid; mounted contents include `PyCapSlap.app` and `Applications -> /Applications`; cleanly detached.
 - SHA-256: `e7e3a913d5072f12634b4ea73bf6df71558caeeff8a24430a7b0882a978de207`.
 - Tag `v26.10.30.1` was a pre-rebase attempt, its queued workflow was cancelled, and the stale tag was removed. `v26.10.30.2` includes the newer remote bundle-version fix.
-- Final push of `main` and `v26.10.30.2` and the GitHub release workflow are pending.
+- Integrated `main` and tag `v26.10.30.2` are pushed. GitHub has queued the tagged release workflow; its result and downloadable release asset are the last outstanding confirmation.
 - No end-to-end audio transcription was run because no Whisper model was installed; CI currently smoke-checks the bundled CLI, not model inference.
