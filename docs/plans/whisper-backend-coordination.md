@@ -1,6 +1,6 @@
 # Whisper Backend Coordination
 
-**Goal:** Finish the selectable local Whisper backend and deliver a verified macOS DMG by 08:00 Helsinki time on 2026-10-30.
+**Goal:** Finish the selectable local Whisper backend and deliver a verified macOS DMG by 08:00 Helsinki time on 2026-10-30. The local artifact was completed and verified ahead of that deadline; hosted release follow-through is being finalized.
 
 **Working tree:** Shared checkout at `/Users/dst/Documents/koodi/pycapslap`, branch `main`. Reviews were read-only; integrator changes below include their verified findings and fixes.
 
@@ -35,6 +35,9 @@
 - Bundled Whisper CLI `--help` with packaged dylib path: passed.
 - App metadata and Whisper CLI deployment target both report macOS 15.0.
 - PyInstaller arm64 app bundle: built successfully; includes CLI, all 13 dylibs, and the Whisper MIT license.
-- DMG created at `pyside/dist/PyCapSlap-macos-arm64.dmg`; `hdiutil verify` checksum valid; mounted contents include `PyCapSlap.app` and `Applications -> /Applications`; cleanly detached.
-- SHA-256: `faec6f48b059573251b04530e2db639496f697e8f4dea821cab66ffd553dd1dc`.
+- Final DMG created at `pyside/dist/PyCapSlap-macos-arm64.dmg` for tag `v26.10.30.2`; app metadata inside the mounted image reports version `26.10.30.2` and minimum macOS `15.0`.
+- `hdiutil verify` checksum valid; mounted contents include `PyCapSlap.app` and `Applications -> /Applications`; cleanly detached.
+- SHA-256: `e7e3a913d5072f12634b4ea73bf6df71558caeeff8a24430a7b0882a978de207`.
+- Tag `v26.10.30.1` was a pre-rebase attempt, its queued workflow was cancelled, and the stale tag was removed. `v26.10.30.2` includes the newer remote bundle-version fix.
+- Final push of `main` and `v26.10.30.2` and the GitHub release workflow are pending.
 - No end-to-end audio transcription was run because no Whisper model was installed; CI currently smoke-checks the bundled CLI, not model inference.
