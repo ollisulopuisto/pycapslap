@@ -44,12 +44,17 @@ class AppNapGuard:
     and ``end`` from the reader thread that completes the call's Future.
     """
 
-    def __init__(self, process_info: Any = None):
+    _AUTO: Any = object()  # sentinel: no injection, detect the platform
+
+    def __init__(self, process_info: Any = _AUTO):
         self._lock = threading.Lock()
         self._active = 0
         self._activity: Any = None
-        self._process_info = process_info
-        if self._process_info is None and sys.platform == "darwin":
+        self._process_info: Any = None
+        if process_info is not self._AUTO:
+            # Explicit injection - including None, which forces the no-op path.
+            self._process_info = process_info
+        elif sys.platform == "darwin":
             try:
                 from Foundation import NSProcessInfo
 
