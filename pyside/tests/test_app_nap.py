@@ -4,7 +4,10 @@ import io
 
 import pytest
 
-from app.services.app_nap import NS_ACTIVITY_BACKGROUND, AppNapGuard
+from app.services.app_nap import (
+    NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP,
+    AppNapGuard,
+)
 
 pytest.importorskip("PySide6")
 
@@ -29,10 +32,11 @@ class FakeProcessInfo:
         self.ended.append(activity)
 
 
-def test_background_option_is_nap_only():
-    # 1 << 40 is IdleDisplaySleepDisabled; Background must not include it.
-    assert NS_ACTIVITY_BACKGROUND & (1 << 40) == 0
-    assert NS_ACTIVITY_BACKGROUND == 0xFF
+def test_user_initiated_option_allows_idle_system_and_display_sleep():
+    # NSActivityUserInitiatedAllowingIdleSystemSleep, from NSProcessInfo.h.
+    assert NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP == 0xEFFFFF
+    assert NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP & (1 << 20) == 0
+    assert NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP & (1 << 40) == 0
 
 
 def test_assertion_held_until_last_job_ends():
@@ -41,7 +45,10 @@ def test_assertion_held_until_last_job_ends():
     first = guard.begin("core:transcribe")
     second = guard.begin("core:export")
     assert len(pi.begun) == 1  # overlapping jobs share one assertion
-    assert pi.begun[0][0] == NS_ACTIVITY_BACKGROUND
+    assert (
+        pi.begun[0][0]
+        == NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP
+    )
     assert guard.held
     guard.end(first)
     assert guard.held and not pi.ended

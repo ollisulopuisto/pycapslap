@@ -31,10 +31,12 @@ from typing import Any
 
 logger = logging.getLogger("capslap.app_nap")
 
-# NSActivityBackground from NSProcessInfo.h: makes the app ineligible for
-# App Nap only — no display-sleep or system-sleep effect. (The
-# UserInitiated options include IdleDisplaySleepDisabled = 1 << 40.)
-NS_ACTIVITY_BACKGROUND = 0x00000000000000FF
+# NSActivityUserInitiatedAllowingIdleSystemSleep from NSProcessInfo.h.
+# UserInitiated marks this as important, user-requested work so macOS does not
+# defer it or put the app in App Nap. Clearing IdleSystemSleepDisabled lets
+# the Mac sleep on its normal schedule; this option does not disable display
+# sleep.
+NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP = 0x0000000000EFFFFF
 
 
 class AppNapGuard:
@@ -79,7 +81,8 @@ class AppNapGuard:
                 try:
                     self._activity = (
                         self._process_info.beginActivityWithOptions_reason_(
-                            NS_ACTIVITY_BACKGROUND, reason
+                            NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP,
+                            reason,
                         )
                     )
                 except Exception as exc:

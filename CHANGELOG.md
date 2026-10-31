@@ -7,8 +7,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
-### Added
-- **App Nap awareness on macOS.** The editor holds a background-power assertion while a core call (transcription, render, export) is in flight, so hiding the window no longer lets App Nap throttle the editor's progress handling or starve the Rust core's pipe readers. Idle and paused states stay nappable; display and system sleep are unaffected.
+### Fixed
+- **Long-running local jobs stay out of App Nap.** Active core calls are marked user-initiated while still allowing normal idle system and display sleep.
 
 ## [v26.10.31.1] - 2026-10-31
 
