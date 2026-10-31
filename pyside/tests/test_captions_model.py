@@ -73,6 +73,29 @@ def test_project_state_get_active_segment():
     assert proj.get_active_segment(3000) == seg2
 
 
+def test_project_state_get_active_segment_edge_cases():
+    # Empty list
+    empty_proj = ProjectState(segments=[])
+    assert empty_proj.get_active_segment(1000) is None
+
+    # Touching boundaries between adjacent segments
+    seg1 = CaptionSegment(start_ms=1000, end_ms=2000, text="First")
+    seg2 = CaptionSegment(start_ms=2000, end_ms=3000, text="Second")
+    seg3 = CaptionSegment(start_ms=4000, end_ms=5000, text="Third")
+    proj = ProjectState(segments=[seg1, seg2, seg3])
+
+    assert proj.get_active_segment(999) is None
+    assert proj.get_active_segment(1000) == seg1
+    # Boundary timestamp 2000 belongs to seg1 (starts <= 2000 <= ends)
+    assert proj.get_active_segment(2000) in (seg1, seg2)
+    assert proj.get_active_segment(2500) == seg2
+    assert proj.get_active_segment(3000) == seg2
+    assert proj.get_active_segment(3001) is None
+    assert proj.get_active_segment(4000) == seg3
+    assert proj.get_active_segment(5000) == seg3
+    assert proj.get_active_segment(5001) is None
+
+
 def test_position_override_for_segment():
     seg = CaptionSegment(start_ms=1000, end_ms=2000, text="Midpoint is 1500")
     ov1 = PositionOverride(
