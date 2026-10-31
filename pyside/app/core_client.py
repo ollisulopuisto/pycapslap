@@ -12,6 +12,8 @@ from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 
+from app.services.app_nap import AppNapGuard
+
 logger = logging.getLogger("capslap.core_client")
 
 
@@ -28,9 +30,15 @@ class CoreClient(QObject):
     # Signal: (exit_code: int)
     core_exited = Signal(int)
 
-    def __init__(self, binary_path: str | None = None, parent: QObject | None = None):
+    def __init__(
+        self,
+        binary_path: str | None = None,
+        parent: QObject | None = None,
+        nap_guard: AppNapGuard | None = None,
+    ):
         super().__init__(parent)
         self.binary_path = binary_path or self._resolve_binary_path()
+        self._nap_guard = nap_guard if nap_guard is not None else AppNapGuard()
         self.proc: subprocess.Popen | None = None
         self._pending: dict[str, Future] = {}
         self._lock = threading.Lock()
@@ -275,6 +283,11 @@ class CoreClient(QObject):
         payload = json.dumps({"id": req_id, "method": method, "params": params}) + "\n"
 
         fut = Future()
+        # Keep the editor out of App Nap for the life of the call: its
+        # reader threads must keep draining the core's pipes, and a hidden,
+        # napped editor should not slow a transcription or export.
+        nap_token = self._nap_guard.begin(f"core:{method}")
+        fut.add_done_callback(lambda _f, t=nap_token: self._nap_guard.end(t))
         with self._lock:
             self._pending[req_id] = fut
 
