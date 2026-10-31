@@ -40,7 +40,9 @@ class OrukeetSettingsDialog(QDialog):
         layout.addWidget(self.install_button)
         layout.addWidget(QLabel("Whisper model (local whisper.cpp):"))
         self.whisper_model = QComboBox()
-        self.whisper_model.addItems(["tiny", "base", "small", "medium", "large", "turbo"])
+        self.whisper_model.addItems(
+            ["tiny", "base", "small", "medium", "large", "turbo"]
+        )
         self.whisper_model.setCurrentText(
             str(QSettings().value("transcription/whisper_model", "tiny", type=str))
         )

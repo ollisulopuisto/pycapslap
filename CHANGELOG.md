@@ -7,6 +7,9 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Fixed
+- **CI lint checks pass for the Whisper transcription route.** Group transcription options into a request struct and format the Whisper settings list according to Ruff.
+
 ## [v26.10.30.2] - 2026-10-30
 
 ### Fixed

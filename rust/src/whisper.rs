@@ -1,9 +1,9 @@
 use crate::rpc::RpcEvent;
 use crate::types::{CaptionSegment, TranscribeSegmentsResult};
 use anyhow::{anyhow, Context, Result};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::collections::VecDeque;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 
@@ -211,7 +211,9 @@ pub async fn transcribe(
     let status = child.wait().await?;
     if !status.success() {
         let details = stderr_tail.into_iter().collect::<Vec<_>>().join("\n");
-        return Err(anyhow!("whisper.cpp failed with exit status {status}: {details}"));
+        return Err(anyhow!(
+            "whisper.cpp failed with exit status {status}: {details}"
+        ));
     }
     let json_path = prefix.with_extension("json");
     let json: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&json_path).await?)

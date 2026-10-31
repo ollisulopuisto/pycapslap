@@ -54,77 +54,67 @@ fn unique_output_path(path: &str) -> String {
     path.to_string()
 }
 
+pub struct ExtractAndTranscribeParams<'a> {
+    pub id: &'a str,
+    pub input_video: &'a str,
+    pub audio_range: Option<crate::types::AudioRange>,
+    pub keep_fillers: bool,
+    pub backend: &'a str,
+    pub whisper_model: Option<&'a str>,
+    pub language: Option<&'a str>,
+}
+
 pub async fn extract_and_transcribe_with_range(
-    id: &str,
-    input_video: &str,
-    audio_range: Option<crate::types::AudioRange>,
-    keep_fillers: bool,
-    backend: &str,
-    whisper_model: Option<&str>,
-    language: Option<&str>,
+    params: ExtractAndTranscribeParams<'_>,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
-    extract_and_transcribe_with_range_internal(
-        id,
-        input_video,
-        audio_range,
-        keep_fillers,
-        backend,
-        whisper_model,
-        language,
-        true,
-        &mut emit,
-    )
-    .await
+    extract_and_transcribe_with_range_internal(&params, true, &mut emit).await
 }
 
 async fn extract_and_transcribe_with_range_internal(
-    id: &str,
-    input_video: &str,
-    audio_range: Option<crate::types::AudioRange>,
-    keep_fillers: bool,
-    backend: &str,
-    whisper_model: Option<&str>,
-    language: Option<&str>,
+    params: &ExtractAndTranscribeParams<'_>,
     cleanup_after: bool,
     mut emit: impl FnMut(RpcEvent),
 ) -> Result<(crate::video::ProbeResult, String, TranscribeSegmentsResult)> {
-    if backend != "orukeet" && backend != "whisper" {
-        return Err(anyhow!("Unknown transcription backend '{backend}'"));
+    if params.backend != "orukeet" && params.backend != "whisper" {
+        return Err(anyhow!(
+            "Unknown transcription backend '{}'",
+            params.backend
+        ));
     }
-    let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", params.id));
     fs::create_dir_all(&temp_dir).map_err(|e| anyhow!("Failed to create temp directory: {}", e))?;
     let result = async {
-        let probe_result = probe(id, input_video, &mut emit).await?;
-        let audio_path = temp_dir.join(format!("audio_{}.wav", id));
+        let probe_result = probe(params.id, params.input_video, &mut emit).await?;
+        let audio_path = temp_dir.join(format!("audio_{}.wav", params.id));
         let audio_result = audio::extract_audio(
-            id,
+            params.id,
             ExtractAudioParams {
-                input: input_video.to_string(),
+                input: params.input_video.to_string(),
                 codec: Some("pcm_s16le".to_string()),
                 out: Some(audio_path.to_string_lossy().to_string()),
-                range: audio_range,
+                range: params.audio_range,
             },
             &mut emit,
         )
         .await?;
-        let transcription = if backend == "whisper" {
+        let transcription = if params.backend == "whisper" {
             whisper::transcribe(
-                id,
+                params.id,
                 &audio_result.audio,
-                whisper_model.unwrap_or("tiny"),
-                language,
+                params.whisper_model.unwrap_or("tiny"),
+                params.language,
                 &temp_dir,
                 &mut emit,
             )
             .await?
         } else {
             transcription::transcribe_segments_with_temp(
-                id,
+                params.id,
                 TranscribeSegmentsParams {
                     audio: audio_result.audio.clone(),
-                    video_file: Some(input_video.to_string()),
-                    keep_fillers,
+                    video_file: Some(params.input_video.to_string()),
+                    keep_fillers: params.keep_fillers,
                 },
                 Some(&temp_dir),
                 &mut emit,
@@ -266,18 +256,18 @@ pub async fn generate_captions_single_pass(
     let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{}", id));
 
     let result = async {
-        let (probe_result, audio_file, transcription) = extract_and_transcribe_with_range_internal(
+        let transcription_params = ExtractAndTranscribeParams {
             id,
-            &params.input_video,
-            None,
-            params.keep_fillers,
-            &params.transcription_backend,
-            params.whisper_model.as_deref(),
-            params.transcription_language.as_deref(),
-            false,
-            &mut emit,
-        )
-        .await?;
+            input_video: &params.input_video,
+            audio_range: None,
+            keep_fillers: params.keep_fillers,
+            backend: &params.transcription_backend,
+            whisper_model: params.whisper_model.as_deref(),
+            language: params.transcription_language.as_deref(),
+        };
+        let (probe_result, audio_file, transcription) =
+            extract_and_transcribe_with_range_internal(&transcription_params, false, &mut emit)
+                .await?;
 
         let captioned_videos = optimized_multi_format_encode(
             id,

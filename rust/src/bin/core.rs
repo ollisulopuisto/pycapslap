@@ -219,13 +219,15 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
                     );
                     tokio::select! {
                         res = captions::extract_and_transcribe_with_range(
-                            &id,
-                            &p.input_video,
-                            range,
-                            p.keep_fillers,
-                            &p.transcription_backend,
-                            p.whisper_model.as_deref(),
-                            p.transcription_language.as_deref(),
+                            captions::ExtractAndTranscribeParams {
+                                id: &id,
+                                input_video: &p.input_video,
+                                audio_range: range,
+                                keep_fillers: p.keep_fillers,
+                                backend: &p.transcription_backend,
+                                whisper_model: p.whisper_model.as_deref(),
+                                language: p.transcription_language.as_deref(),
+                            },
                             &mut emit
                         ) => {
                             match res {

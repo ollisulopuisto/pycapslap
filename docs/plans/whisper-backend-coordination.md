@@ -42,3 +42,10 @@
 - Integrated `main` and tag `v26.10.30.2` are pushed. The hosted tagged workflow stayed queued, so it was cancelled and the locally built, verified DMG was published directly to the GitHub release.
 - Release: <https://github.com/ollisulopuisto/pycapslap/releases/tag/v26.10.30.2>. Uploaded asset `PyCapSlap-macos-arm64.dmg` is 136,914,002 bytes; GitHub's SHA-256 `e7e3a913d5072f12634b4ea73bf6df71558caeeff8a24430a7b0882a978de207` matches the local file.
 - No end-to-end audio transcription was run because no Whisper model was installed; CI currently smoke-checks the bundled CLI, not model inference.
+
+## CI lint follow-up
+
+- GitHub CI on 2026-10-30 found Ruff formatting drift in `settings_dialog.py` and Clippy `too_many_arguments` warnings on the new range-transcription functions.
+- Reproduced both failures locally. Fixed Python formatting and grouped transcription inputs in `ExtractAndTranscribeParams`.
+- Local `ruff check .`, `ruff format --check .`, and `cargo clippy --all-targets -- -D warnings` all pass after the fixes.
+- Commit and remote CI rerun are pending.
