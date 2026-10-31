@@ -48,4 +48,5 @@
 - GitHub CI on 2026-10-30 found Ruff formatting drift in `settings_dialog.py` and Clippy `too_many_arguments` warnings on the new range-transcription functions.
 - Reproduced both failures locally. Fixed Python formatting and grouped transcription inputs in `ExtractAndTranscribeParams`.
 - Local `ruff check .`, `ruff format --check .`, and `cargo clippy --all-targets -- -D warnings` all pass after the fixes.
-- Commit and remote CI rerun are pending.
+- Commit `99b8453` is pushed. GitHub CI run <https://github.com/ollisulopuisto/pycapslap/actions/runs/41189090098> passed all jobs, including Rust, PySide/Ruff, review, and portal.
+- As of 2026-10-31 there are no open PRs or branches besides `main`; this release is cut from the latest green `main`.
