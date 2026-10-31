@@ -33,6 +33,9 @@ bundle_version = runpy.run_path(str(repo_root / "scripts" / "bundle_version.py")
 # a frozen-specific path beyond checking sys._MEIPASS / sys.executable.
 datas = [
     (str(rust_dir / "src" / "fonts"), "rust/src/fonts"),
+    # CHANGELOG.md at the bundle's pyside/ path, matching the dev-checkout
+    # location changelog_path() falls back to, so What's New works bundled.
+    (str(repo_root / "CHANGELOG.md"), "pyside"),
 ]
 binaries = [
     (str(rust_dir / "target" / "release" / "core"), "rust/target/release"),

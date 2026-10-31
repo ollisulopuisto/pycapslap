@@ -8,6 +8,8 @@ import threading
 from collections import deque
 from pathlib import Path
 
+from html import escape
+
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
@@ -53,7 +55,7 @@ from app.models.captions import (
     combine_separated_syllables,
 )
 from app.portal_client import Portal, PortalError
-from app.services import media, transcribe_range
+from app.services import media, transcribe_range, whatsnew
 from app.services.broll import pipeline as broll_pipeline
 from app.services.broll import reel as broll_reel
 from app.services.broll import suggest as broll_suggest
@@ -548,6 +550,7 @@ class MainWindow(QMainWindow):
             str(self.caption_panel.combo_transcription_backend.currentData())
         )
         self._build_menus()
+        QTimer.singleShot(0, self._maybe_show_whats_new)
         right_col.addWidget(self.caption_panel, stretch=1)
 
         # Thumbnail: a frame from the playhead, with its own title written over it
@@ -1865,6 +1868,56 @@ class MainWindow(QMainWindow):
             press(panel.btn_orukeet_settings),
             QAction.MenuRole.PreferencesRole,
         )
+
+        help_menu = bar.addMenu("Help")
+        add(help_menu, "What's New…", None, self.show_whats_new)
+
+    def _whats_new_entries(self) -> list:
+        path = whatsnew.changelog_path()
+        if path is None:
+            return []
+        return whatsnew.parse_changelog(path.read_text(encoding="utf-8"))
+
+    def _whats_new_html(self, entries: list) -> str:
+        parts = []
+        for version, items in entries:
+            if not items:
+                continue
+            bullets = "".join(f"<li>{escape(item)}</li>" for item in items)
+            parts.append(f"<h3>{version}</h3><ul>{bullets}</ul>")
+        return "".join(parts)
+
+    def show_whats_new(self) -> None:
+        """Help -> What's New: the full changelog, always reachable."""
+        entries = self._whats_new_entries()
+        current = whatsnew.current_version(entries)
+        if current is None:
+            QMessageBox.information(
+                self, "What's New", "No changelog is bundled with this build."
+            )
+            return
+        QMessageBox.information(
+            self, f"What's New in PyCapSlap {current}", self._whats_new_html(entries)
+        )
+        QSettings().setValue(whatsnew.QSETTINGS_KEY, current)
+
+    def _maybe_show_whats_new(self) -> None:
+        """On startup, show only versions the user has not been shown yet."""
+        entries = self._whats_new_entries()
+        current = whatsnew.current_version(entries)
+        if current is None:
+            return
+        last_seen = str(QSettings().value(whatsnew.QSETTINGS_KEY, "", type=str))
+        # First run of this feature (or a fresh install): show only the
+        # current version's notes, not the whole history - everything else
+        # is from before the user ever ran the app.
+        unseen = entries[:1] if not last_seen else whatsnew.unseen_entries(entries, last_seen)
+        if not unseen:
+            return
+        QMessageBox.information(
+            self, f"What's New in PyCapSlap {current}", self._whats_new_html(unseen)
+        )
+        QSettings().setValue(whatsnew.QSETTINGS_KEY, current)
 
     def _build_timeline_toolbar(self) -> QHBoxLayout:
         row = QHBoxLayout()
