@@ -6,8 +6,74 @@ on:
   pull_request:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      pyside: ${{ steps.filter.outputs.pyside }}
+      review: ${{ steps.filter.outputs.review }}
+      portal: ${{ steps.filter.outputs.portal }}
+      python_lint: ${{ steps.filter.outputs.python_lint }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # For pushes to main/master, compare with the previous commit on that
+          # branch. Pull requests are compared with their base by the action.
+          base: ${{ github.ref_name }}
+          filters: |
+            rust:
+              - 'rust/**'
+              - 'scripts/download-binaries.sh'
+              - '.github/workflows/**'
+            pyside:
+              - 'pyside/app/**'
+              - 'pyside/src/**'
+              - 'pyside/tests/**'
+              - 'pyside/pycapslap.spec'
+              - 'pyside/pyproject.toml'
+              - 'pyside/uv.lock'
+              - 'rust/**'
+              - 'review/testdata/**'
+              - 'scripts/download-binaries.sh'
+              - 'scripts/bundle_version.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - '.github/workflows/**'
+            review:
+              - 'review/**'
+              - 'portal/capslap_portal/static/*.js'
+              - '.github/workflows/**'
+            portal:
+              - 'portal/**'
+              - 'review/**'
+              - '.github/workflows/**'
+            python_lint:
+              - 'pyside/**/*.py'
+              - 'portal/**/*.py'
+              - 'scripts/**/*.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'pyside/pyproject.toml'
+              - 'pyside/uv.lock'
+              - 'portal/pyproject.toml'
+              - 'portal/uv.lock'
+              - '.github/workflows/**'
+
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +102,8 @@ jobs:
         run: cargo test --release
 
   pyside:
+    needs: changes
+    if: needs.changes.outputs.pyside == 'true'
     runs-on: macos-latest
     # Backstop for the pytest step. The old hangs were modal message boxes
     # (see CONTRIBUTING.md), now stubbed in tests/conftest.py; a blocked Qt
@@ -70,18 +138,14 @@ jobs:
       - name: Install Python dependencies
         run: uv sync
 
-      - name: Ruff lint
-        run: uv run ruff check .
-
-      - name: Ruff format check
-        run: uv run ruff format --check .
-
       - name: pytest
         run: uv run python -m pytest
         env:
           QT_QPA_PLATFORM: offscreen
 
   review:
+    needs: changes
+    if: needs.changes.outputs.review == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -90,6 +154,8 @@ jobs:
         run: node --test review/*.test.js portal/capslap_portal/static/*.test.js
 
   portal:
+    needs: changes
+    if: needs.changes.outputs.portal == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -103,3 +169,18 @@ jobs:
         run: uv sync && uv run pytest
       - name: Portal image builds
         run: docker build -f portal/Dockerfile -t capslap-portal .
+
+  python-lint:
+    needs: changes
+    if: needs.changes.outputs.python_lint == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Ruff lint
+        run: uvx --from 'ruff==0.16.7' ruff check .
+      - name: Ruff format check
+        run: uvx --from 'ruff==0.16.7' ruff format --check .

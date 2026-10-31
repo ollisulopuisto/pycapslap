@@ -67,6 +67,19 @@ git-ignored; the `sample_video` fixture makes a 5-second 1080p clip with ffmpeg
 See the root `README.md` and `pyside/README.md` for running the app,
 tests, and linters locally.
 
+## CI job selection
+
+`.github/workflows/ci.yml` detects changed paths before starting the component
+jobs. Rust changes run Rust checks; PySide source, tests, Rust core changes,
+and the review fixture run PySide tests; review page JavaScript changes run
+review tests; portal changes and review page changes run portal tests and the
+image build. Python source and Python project configuration changes run Ruff
+on Ubuntu, separately from the slower macOS PySide tests. Workflow changes run
+all CI jobs. Documentation-only changes skip the component jobs.
+
+When a test starts reading a fixture or shared build input from another
+component, add that path to the dependent component's filter in `ci.yml`.
+
 ### Optional: Finnish spell check
 
 `brew install libvoikko` turns on the caption table's spell checking. The
