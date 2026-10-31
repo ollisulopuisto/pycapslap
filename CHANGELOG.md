@@ -7,6 +7,8 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.10.31.2] - 2026-10-31
+
 ### Fixed
 - **Long-running local jobs stay out of App Nap.** Active core calls are marked user-initiated while still allowing normal idle system and display sleep.
 
