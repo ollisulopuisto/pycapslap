@@ -72,8 +72,10 @@ class AppNapGuard:
             self._active += 1
             if self._activity is None and self._process_info is not None:
                 try:
-                    self._activity = self._process_info.beginActivityWithOptions_reason_(
-                        NS_ACTIVITY_BACKGROUND, reason
+                    self._activity = (
+                        self._process_info.beginActivityWithOptions_reason_(
+                            NS_ACTIVITY_BACKGROUND, reason
+                        )
                     )
                 except Exception as exc:
                     logger.warning("could not begin App Nap assertion: %s", exc)
