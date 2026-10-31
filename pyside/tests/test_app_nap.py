@@ -45,10 +45,7 @@ def test_assertion_held_until_last_job_ends():
     first = guard.begin("core:transcribe")
     second = guard.begin("core:export")
     assert len(pi.begun) == 1  # overlapping jobs share one assertion
-    assert (
-        pi.begun[0][0]
-        == NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP
-    )
+    assert pi.begun[0][0] == NS_ACTIVITY_USER_INITIATED_ALLOWING_IDLE_SYSTEM_SLEEP
     assert guard.held
     guard.end(first)
     assert guard.held and not pi.ended

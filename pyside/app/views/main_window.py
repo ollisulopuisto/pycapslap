@@ -8,6 +8,7 @@ import threading
 from collections import deque
 from pathlib import Path
 
+import re
 from html import escape
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl, Signal
@@ -1878,12 +1879,20 @@ class MainWindow(QMainWindow):
             return []
         return whatsnew.parse_changelog(path.read_text(encoding="utf-8"))
 
+    @staticmethod
+    def _whats_new_item_html(item: str) -> str:
+        # Changelog bullets use markdown bold leads ("**Lead.** text");
+        # escape first, then render the bold, so nothing else is markup.
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escape(item))
+
     def _whats_new_html(self, entries: list) -> str:
         parts = []
         for version, items in entries:
             if not items:
                 continue
-            bullets = "".join(f"<li>{escape(item)}</li>" for item in items)
+            bullets = "".join(
+                f"<li>{self._whats_new_item_html(item)}</li>" for item in items
+            )
             parts.append(f"<h3>{version}</h3><ul>{bullets}</ul>")
         return "".join(parts)
 
@@ -1911,7 +1920,11 @@ class MainWindow(QMainWindow):
         # First run of this feature (or a fresh install): show only the
         # current version's notes, not the whole history - everything else
         # is from before the user ever ran the app.
-        unseen = entries[:1] if not last_seen else whatsnew.unseen_entries(entries, last_seen)
+        unseen = (
+            entries[:1]
+            if not last_seen
+            else whatsnew.unseen_entries(entries, last_seen)
+        )
         if not unseen:
             return
         QMessageBox.information(
