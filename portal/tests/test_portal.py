@@ -226,7 +226,13 @@ def test_pages_keep_the_link_out_of_referrers_and_search(client):
     assert r.text.startswith("Videoiden hyväksyntä")
     assert r.headers["referrer-policy"] == "no-referrer"
     assert "noindex" in r.headers["x-robots-tag"]
-    assert client.get("/admin").status_code == 200
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
+    admin_res = client.get("/admin")
+    assert admin_res.status_code == 200
+    assert admin_res.headers["x-frame-options"] == "DENY"
+    assert admin_res.headers["content-security-policy"] == "frame-ancestors 'none'"
     assert client.get("/review/").status_code == 200
 
 
