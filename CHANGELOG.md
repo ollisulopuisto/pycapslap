@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.01.1] - 2026-11-01
+
+### Fixed
+- **What's New now reads the release notes correctly.** It recognizes the versioned changelog headings, skips unreleased notes, compares version numbers numerically, and renders bold lead-ins.
+
 ## [v26.10.31.2] - 2026-10-31
 
 ### Fixed
