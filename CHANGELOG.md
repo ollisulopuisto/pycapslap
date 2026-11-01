@@ -7,6 +7,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.01.2] - 2026-11-01
+
+### Fixed
+- **Malformed saved presets no longer crash startup.** Invalid preset entries are skipped for use but preserved when the preset file is saved, so correcting one does not discard unrelated data.
+
+### Security
+- **Portal pages cannot be embedded by other sites.** Review and admin responses now include anti-clickjacking headers.
+
 ## [v26.11.01.1] - 2026-11-01
 
 ### Fixed
