@@ -132,6 +132,10 @@ def create_app(settings: Settings) -> FastAPI:
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Robots-Tag"] = "noindex, nofollow"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        # Prevent clickjacking: stop malicious sites from embedding the portal
+        # in an iframe to trick clients or editors into taking unauthorized actions.
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
         return response
 
     def conn():
