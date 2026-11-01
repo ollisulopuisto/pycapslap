@@ -9,8 +9,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+/// Fast direct lookup table limit for ASCII and Latin Extended-A characters.
+const FAST_ADVANCE_LIMIT: usize = 0x180;
+
 /// Advance widths of one font, in em units (multiply by font size in px).
 pub struct FontMetrics {
+    /// Direct lookup table indexed by character codepoint for codepoints < FAST_ADVANCE_LIMIT.
+    /// Eliminates HashMap hashing overhead in the hot text measurement loops.
+    fast_advances: [f32; FAST_ADVANCE_LIMIT],
     advances: HashMap<char, f32>,
     units_per_em: f32,
     fallback_advance: f32,
@@ -49,6 +55,17 @@ impl FontMetrics {
             return None;
         }
 
+        let fallback_advance = total / counted as f32;
+
+        // Pre-populate direct lookup table for Latin range:
+        let mut fast_advances = [fallback_advance; FAST_ADVANCE_LIMIT];
+        for (&c, &adv) in &advances {
+            let idx = c as usize;
+            if idx < FAST_ADVANCE_LIMIT {
+                fast_advances[idx] = adv;
+            }
+        }
+
         // usWinAscent + usWinDescent, as libass reads it (ass_face_set_size);
         // hhea's ascent - descent when a font has no OS/2 numbers.
         let win_height = face
@@ -64,22 +81,30 @@ impl FontMetrics {
             .unwrap_or(1.0);
 
         Some(FontMetrics {
+            fast_advances,
             advances,
             units_per_em,
-            fallback_advance: total / counted as f32,
+            fallback_advance,
             em_per_font_px,
         })
     }
 
     /// Width of `text` when libass sets it at ASS font size `font_px`, in pixels.
     pub fn measure(&self, text: &str, font_px: f32) -> f32 {
+        // Fast path: direct array index lookup for characters in the ASCII / Latin Extended-A
+        // range (< 0x180), falling back to HashMap only for characters beyond.
         let em_width: f32 = text
             .chars()
             .map(|c| {
-                self.advances
-                    .get(&c)
-                    .copied()
-                    .unwrap_or(self.fallback_advance)
+                let cp = c as usize;
+                if cp < FAST_ADVANCE_LIMIT {
+                    self.fast_advances[cp]
+                } else {
+                    self.advances
+                        .get(&c)
+                        .copied()
+                        .unwrap_or(self.fallback_advance)
+                }
             })
             .sum();
         em_width * font_px * self.em_per_font_px
@@ -284,5 +309,24 @@ mod tests {
             full.measure("KANNETTAVA", 60.0),
             family.measure("KANNETTAVA", 60.0)
         );
+    }
+
+    #[test]
+    fn test_fast_advances_and_fallback() {
+        let m = metrics_for("Montserrat Black").expect("bundled font should load");
+
+        // Fast table coverage: ASCII and Latin Extended-A characters (< 0x180)
+        let sample_fast = "Hello World! Åäö 123";
+        let width_fast = m.measure(sample_fast, 40.0);
+        assert!(width_fast > 0.0);
+
+        // Fallback coverage: characters >= 0x180 (e.g. Cyrillic, Greek, em-dash, symbols)
+        // Cyrillic 'П', 'р', 'и', 'в', 'е', 'т' have codepoints >= 0x400
+        let sample_fallback = "Привет";
+        let width_fallback = m.measure(sample_fallback, 40.0);
+        // Each character should fall back to the fallback_advance
+        let expected_em_fallback = sample_fallback.chars().count() as f32 * m.fallback_advance;
+        let expected_px = expected_em_fallback * 40.0 * m.em_per_font_px;
+        assert!((width_fallback - expected_px).abs() < 1e-4);
     }
 }
