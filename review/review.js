@@ -385,7 +385,9 @@ function renderCues() {
     const note = li.querySelector('.note')
     const start = li.querySelector('.start')
     const end = li.querySelector('.end')
-    li.querySelector('.play-cue').title = t('playCue')
+    const playCueBtn = li.querySelector('.play-cue')
+    playCueBtn.title = t('playCue')
+    playCueBtn.setAttribute('aria-label', t('playCue'))
     note.placeholder = t('notePlaceholder')
 
     text.value = seg.text
