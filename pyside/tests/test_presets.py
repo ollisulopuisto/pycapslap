@@ -1,3 +1,4 @@
+import json
 from app.models.captions import CaptionStyle
 from app.services.preset_manager import PresetManager
 
@@ -60,3 +61,40 @@ def test_preset_manager_default_style(tmp_path):
     assert default_style is not None
     assert default_style.font_name == "THE BOLD FONT"
     assert default_style.font_size == 80
+
+
+def test_preset_manager_tolerates_and_preserves_malformed_entries(tmp_path):
+    # Regression: a valid-JSON presets file with a wrong-typed field used to
+    # raise ValueError out of _load, crashing PresetManager construction.
+    preset_file = tmp_path / "custom_presets.json"
+    preset_file.write_text(
+        json.dumps(
+            {
+                "presets": {
+                    "good": CaptionStyle(font_name="GoodFont").to_dict(),
+                    "bad-typed": {"fontSize": "huge"},
+                },
+                "default_style": {"anchorPct": "high"},
+            }
+        )
+    )
+
+    manager = PresetManager(storage_path=preset_file)
+    assert manager.list_presets() == ["good"]
+    assert manager.get_default_style() is None
+
+    # Malformed entries survive a save untouched (no silent data loss).
+    manager.save_preset("another", CaptionStyle(font_name="OtherFont"))
+    raw = json.loads(preset_file.read_text())
+    assert raw["presets"]["bad-typed"] == {"fontSize": "huge"}
+    assert raw["default_style"] == {"anchorPct": "high"}
+
+    # Re-saving under the same name replaces the malformed entry.
+    manager.save_preset("bad-typed", CaptionStyle(font_name="FixedFont"))
+    raw = json.loads(preset_file.read_text())
+    assert raw["presets"]["bad-typed"]["fontName"] == "FixedFont"
+
+    # Deleting a malformed entry works too.
+    manager2 = PresetManager(storage_path=preset_file)
+    manager2.save_preset("leftover", CaptionStyle())
+    assert manager2.delete_preset("leftover") is True
