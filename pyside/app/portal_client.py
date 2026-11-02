@@ -7,6 +7,7 @@ worker thread by the window.
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
@@ -20,7 +21,12 @@ class PortalError(RuntimeError):
 
 class Portal:
     def __init__(self, url: str, token: str, timeout: float = 30.0):
-        self.url = url.rstrip("/")
+        clean_url = url.rstrip("/")
+        # Validate scheme and host to prevent SSRF or arbitrary local file access (e.g. file://).
+        parts = urllib.parse.urlsplit(clean_url)
+        if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+            raise PortalError("Portal URL must be an http or https address.")
+        self.url = clean_url
         self.token = token
         self.timeout = timeout
 
