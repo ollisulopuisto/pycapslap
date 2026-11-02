@@ -96,6 +96,28 @@ def test_a_wrong_token_is_a_readable_error(fake_portal):
         Portal("http://127.0.0.1:9", TOKEN, timeout=2).series()
 
 
+def test_portal_url_scheme_validation():
+    # Only http and https URLs with valid netlocs are accepted.
+    for unsafe_url in (
+        "file:///etc/passwd",
+        "ftp://example.com/pub",
+        "gopher://example.com:70",
+        "javascript:alert(1)",
+        "http://",
+        "https://",
+        "data:text/plain,hello",
+        "",
+    ):
+        with pytest.raises(PortalError, match="http or https address"):
+            Portal(unsafe_url, TOKEN)
+
+    # Valid URLs initialize correctly without error.
+    p1 = Portal("http://localhost:8000", TOKEN)
+    assert p1.url == "http://localhost:8000"
+    p2 = Portal("https://portal.example.com/", TOKEN)
+    assert p2.url == "https://portal.example.com"
+
+
 def test_publish_uploads_the_render_and_the_fixes_come_back(
     qtbot, tmp_path, fake_portal, no_modal_message_boxes
 ):
