@@ -313,17 +313,16 @@ pub async fn generate_captions_single_pass(
     result
 }
 
-/// Turn one cue's tokens into the lines the editor should draw, carrying the
-/// same per-line font size the burner writes into the ASS document.
+/// Turn one cue's tokens and laid-out lines into the lines the editor should draw,
+/// carrying the same per-line font size the burner writes into the ASS document.
+///
+/// Bolt ⚡ optimization: Reuses precomputed `cue_layout` instead of calling `cue_lines`
+/// repeatedly for every karaoke window / cue.
 fn preview_lines(
     tokens: &[String],
+    layout: &[crate::justify::JustifiedLine],
     hi_idx: usize,
-    justify_lines: bool,
-    font_family: &str,
-    frame_w: u32,
-    base_px: u32,
 ) -> Vec<crate::types::PreviewLine> {
-    let layout = cue_lines(tokens, justify_lines, font_family, frame_w, base_px);
     layout
         .iter()
         .map(|line| crate::types::PreviewLine {
@@ -390,6 +389,15 @@ pub fn generate_preview_layout(
             for (segment_tokens, segment_spans) in segments {
                 let group_start_ms = segment_spans.first().map(|s| s.start_ms).unwrap_or(0);
                 let group_end_ms = segment_spans.last().map(|s| s.end_ms).unwrap_or(0);
+                // Bolt ⚡ optimization: compute cue line layout once for the segment
+                // rather than re-computing it on every word window.
+                let cue_layout = cue_lines(
+                    &segment_tokens,
+                    params.justify_lines,
+                    &style.font_name,
+                    frame_w,
+                    style.font_size,
+                );
                 let y_pct = to_pct(cue_anchor_y(
                     &params.position_overrides,
                     &params.blocked_bands,
@@ -398,14 +406,7 @@ pub fn generate_preview_layout(
                     default_y,
                     frame_h,
                     style.align,
-                    cue_lines(
-                        &segment_tokens,
-                        params.justify_lines,
-                        &style.font_name,
-                        frame_w,
-                        style.font_size,
-                    )
-                    .len(),
+                    cue_layout.len(),
                     style.font_size,
                 ));
 
@@ -422,11 +423,8 @@ pub fn generate_preview_layout(
                         end_ms,
                         lines: preview_lines(
                             &segment_tokens,
+                            &cue_layout,
                             i,
-                            params.justify_lines,
-                            &style.font_name,
-                            frame_w,
-                            style.font_size,
                         ),
                         y_pct,
                         group_start_ms,
@@ -456,16 +454,21 @@ pub fn generate_preview_layout(
                 );
                 let hi_idx = hi_opt.unwrap_or(usize::MAX);
 
+                let cue_layout = cue_lines(
+                    &segment_tokens,
+                    params.justify_lines,
+                    &style.font_name,
+                    frame_w,
+                    style.font_size,
+                );
+
                 // Without justification the burner emits the cue as one
                 // flowing run and lets libass wrap it, so the layout is one
                 // line here too and the client wraps it with the same margins.
                 let lines_structure = preview_lines(
                     &segment_tokens,
+                    &cue_layout,
                     hi_idx,
-                    params.justify_lines,
-                    &style.font_name,
-                    frame_w,
-                    style.font_size,
                 );
 
                 let y_pct = to_pct(cue_anchor_y(
