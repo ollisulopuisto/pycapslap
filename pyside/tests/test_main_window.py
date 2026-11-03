@@ -31,6 +31,55 @@ def test_main_window_init(qtbot):
     window.close()
 
 
+def test_cue_for_position_binary_search(qtbot, no_modal_message_boxes):
+    """Verify that _cue_for_position correctly finds active cues using binary search."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    # 1. Empty list
+    assert window._cue_for_position(100) is None
+
+    # 2. Populated cues list with gaps
+    cues = [
+        {"startMs": 1000, "endMs": 2000, "text": "First"},
+        {"startMs": 2500, "endMs": 3500, "text": "Second"},
+        {"startMs": 3500, "endMs": 4000, "text": "Third"},
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    # Before first cue
+    assert window._cue_for_position(0) is None
+    assert window._cue_for_position(999) is None
+
+    # Exact start boundary of first cue
+    assert window._cue_for_position(1000) == cues[0]
+    # Middle of first cue
+    assert window._cue_for_position(1500) == cues[0]
+    # Just before end of first cue
+    assert window._cue_for_position(1999) == cues[0]
+
+    # Exact end boundary of first cue (half-open [startMs, endMs))
+    assert window._cue_for_position(2000) is None
+    # In gap between first and second cue
+    assert window._cue_for_position(2200) is None
+
+    # Exact start of second cue
+    assert window._cue_for_position(2500) == cues[1]
+    # Middle of second cue
+    assert window._cue_for_position(3000) == cues[1]
+
+    # At boundary between second and third (end of second = start of third)
+    assert window._cue_for_position(3500) == cues[2]
+    assert window._cue_for_position(3999) == cues[2]
+
+    # At or after end of third cue
+    assert window._cue_for_position(4000) is None
+    assert window._cue_for_position(5000) is None
+
+    window.close()
+
+
 def test_main_window_load_1080p_video(qtbot):
     repo_root = Path(__file__).resolve().parents[2]
     sample = str((repo_root / "rust" / "bin" / "test_input.mp4").resolve())
