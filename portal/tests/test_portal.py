@@ -173,6 +173,28 @@ def test_a_review_of_other_captions_is_refused(client):
     )
 
 
+def test_oversized_captions_payload_is_rejected(client):
+    out = publish(client)
+    token = out["seriesLink"].split("/")[-1]
+    vid = out["video"]["id"]
+
+    # Exceeds the 5MB captions body limit
+    huge_payload = b" " * (5 * 1024 * 1024 + 1)
+    res_client = client.post(
+        f"/api/s/{token}/videos/{vid}/review",
+        content=huge_payload,
+        headers={"Content-Type": "application/json"},
+    )
+    assert res_client.status_code == 413
+
+    res_admin = client.put(
+        f"/api/admin/videos/{vid}/captions",
+        content=huge_payload,
+        headers=AUTH | {"Content-Type": "application/json"},
+    )
+    assert res_admin.status_code == 413
+
+
 def test_feedback_on_an_episode_and_a_moment_in_a_video(client):
     out = publish(client)
     token = out["seriesLink"].split("/")[-1]
