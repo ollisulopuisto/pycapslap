@@ -62,6 +62,12 @@ PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core 
 
 ## 🚀 Quick Start
 
+For a timecoded short-form workflow, run `pycapslap clips interview.mp4
+--cuts moments.csv`. Autoraffkat renders each selected range as a separate,
+face-aware 9:16 clip and opens the results in PyCapSlap for captions and final
+review. See the [PySide guide](pyside/README.md#timecoded-vertical-clips) for
+the CSV format and options.
+
 ### Prerequisites
 * **Python 3.12+** and [**uv**](https://github.com/astral-sh/uv)
 * **Rust**: [rustup.rs](https://rustup.rs/)

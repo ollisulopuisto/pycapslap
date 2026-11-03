@@ -121,12 +121,14 @@ def main():
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    window = MainWindow()
-    window.show()
-
-    # If a video was passed as CLI argument, load it immediately
-    if len(sys.argv) > 1 and Path(sys.argv[1]).exists():
-        window.load_video(str(Path(sys.argv[1]).resolve()))
+    videos = [Path(arg).resolve() for arg in sys.argv[1:] if Path(arg).is_file()]
+    windows = []
+    for video in videos or [None]:
+        window = MainWindow()
+        windows.append(window)  # Keep every queued document window alive.
+        window.show()
+        if video is not None:
+            window.load_video(str(video))
 
     sys.exit(app.exec())
 

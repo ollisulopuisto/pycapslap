@@ -24,6 +24,28 @@ uv run pycapslap
 uv run pycapslap ../rust/bin/test_input.mp4
 ```
 
+### Timecoded vertical clips
+
+Install autoraffkat's command-line tool, then hand it a long video and a CSV
+of moments. Autoraffkat makes one face-aware 9:16 MP4 per row; PyCapSlap opens
+the resulting clips in separate windows so you can caption, check, and render
+each one.
+
+```csv
+name,start,end
+intro,00:03:20.000,00:03:48.200
+best-story,00:17:05.500,00:17:42.000
+```
+
+```bash
+uv run pycapslap clips interview.mp4 --cuts moments.csv
+```
+
+Use `--output-dir shorts/` to choose the destination, `--center-crop` to skip
+face measurement, or `--autoraffkat /path/to/autoraffkat` if the executable is
+not on `PATH`. Source times use `HH:MM:SS.mmm`, `MM:SS.mmm`, or seconds. The
+default output folder is `<video-name>-vertical-clips` beside the source.
+
 ---
 
 ## ✨ Features
