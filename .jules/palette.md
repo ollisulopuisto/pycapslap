@@ -1,3 +1,7 @@
 ## 2026-11-03 - Accessible file inputs in label wrapper buttons
 **Learning:** Adding the HTML `hidden` attribute to `<input type="file">` inside a stylized `<label>` completely removes the input from the browser's accessibility tree and keyboard tab order (`display: none !important`), making the file picker unreachable for keyboard-only users. Using accessible off-screen / clipped styles (`position: absolute; width: 1px; height: 1px; clip: rect(0, 0, 0, 0);`) retains full keyboard focusability without changing the visual button appearance, and `:has(:focus-visible)` on the wrapper label surfaces the focus ring when navigated via keyboard.
 **Action:** When styling custom file upload controls using `<label>` wrappers, never use the `hidden` attribute or `display: none` on the file input; use visually-hidden clipping and bubble `:focus-visible` up to the label with `.picker:has(:focus-visible)`.
+
+## 2026-11-03 - Global :focus-visible across sister frontend subprojects
+**Learning:** In multi-frontend repositories sharing design tokens (e.g., `--accent: #4f46e5` / `#6366f1`), omitting `:focus-visible` rings in secondary frontends leaves interactive controls (buttons, inputs, tabs, action links) relying on default UA focus indicators, which fail contrast checks or disappear entirely against dark themes (`#111113`).
+**Action:** Ensure all CSS stylesheets across client-facing web surfaces (`review`, `portal`) define standard `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }` to maintain keyboard accessibility parity.
