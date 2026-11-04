@@ -64,6 +64,7 @@ default output folder is `<video-name>-vertical-clips` beside the source.
 * **🎬 Multi-Format Rendering:** Burn captions into 9:16, 1:1, 4:5, or 16:9 exports with one click via the Rust + FFmpeg VideoToolbox pipeline, with live render progress.
 * **💾 Sidecar Persistence:** Automatic loading and saving of `.capslap.json` sidecar files.
 * **📊 Live Perf Telemetry:** Status bar shows GUI/Rust core RSS memory and rolling seek latency in real time.
+* **🤖 Headless CLI & Agent Workflow:** Complete CLI suite (`info`, `transcribe`, `edit`, `render`, `workflow`) with `--json` and NDJSON streaming progress (`--json-events`) for automation and LLM agents.
 
 ---
 

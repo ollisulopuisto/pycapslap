@@ -12,5 +12,5 @@
 ## Done
 - Export progress stays visibly active when the input duration is unknown. FFmpeg's elapsed output time cannot form a percentage without a total duration, so the progress bar uses its indeterminate state until it can report a percentage.
 
-## Open
-- **Agent-driven CLI/API:** Expand the current CLI beyond the timecoded clip launcher so an LLM or other agent can drive the full captioning workflow without GUI automation. Define documented commands and machine-readable inputs, progress events, and results for transcription, caption review/editing, and final rendering; expose the actions with stable interfaces and clear error reporting.
+## Done (verified)
+- **Agent-driven CLI/API:** Expand the current CLI beyond the timecoded clip launcher so an LLM or other agent can drive the full captioning workflow without GUI automation. Subcommands `info`, `transcribe`, `edit`, `render`, and `workflow` provide machine-readable inputs, NDJSON progress events (`--json-events`), JSON outputs (`--json`), and clean error reporting alongside the Python programmatic API (`app.api`). See `docs/api.md`.

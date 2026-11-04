@@ -16,6 +16,16 @@ def main():
         status = render_clips(sys.argv[2:])
         if status:
             raise SystemExit(status)
+
+    cli_subcommands = {"info", "transcribe", "edit", "render", "workflow"}
+    if len(sys.argv) > 1 and (
+        sys.argv[1] in cli_subcommands or sys.argv[1] in ("-h", "--help")
+    ):
+        from app.cli import run_cli
+
+        status = run_cli(sys.argv[1:])
+        raise SystemExit(status)
+
     from app.main import main as app_main
 
     return app_main()
