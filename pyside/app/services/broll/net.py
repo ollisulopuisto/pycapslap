@@ -11,7 +11,18 @@ USER_AGENT = "PyCapSlap-broll/0.1 (https://github.com/ollisulopuisto/pycapslap)"
 ATTEMPTS = 3
 
 
+def _validate_url(url: str) -> None:
+    # Restrict to standard HTTP/HTTPS schemes to prevent SSRF and local file
+    # disclosure via file://, ftp://, or arbitrary custom protocol handlers.
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"Unsupported URL scheme '{scheme}': only http and https are allowed"
+        )
+
+
 def get(url: str, params: dict[str, Any] | None = None, *, cancel=None) -> bytes:
+    _validate_url(url)
     # A list value repeats the key, as `fl[]=a&fl[]=b` needs.
     query = urllib.parse.urlencode(params, doseq=True) if params else ""
     full = f"{url}?{query}" if query else url
@@ -45,6 +56,7 @@ def download(url, destination, *, cancel=None, progress=None):
     """Stream media in bounded chunks. Metadata JSON keeps using get()."""
     from app.services.broll.control import check
 
+    _validate_url(url)
     check(cancel)
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     # One stalled read is bounded; cancellation is checked between chunks.

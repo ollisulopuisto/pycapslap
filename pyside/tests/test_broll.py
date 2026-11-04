@@ -259,3 +259,15 @@ def test_doubled_author_markup_is_collapsed():
         "Unknown author"
     )
     assert commons._plain("<a>Ann</a> <a>Ann</a>") == "Ann Ann"  # two people, kept
+
+
+@pytest.mark.parametrize("scheme", ["file", "ftp", "data", "gopher", ""])
+def test_net_rejects_non_http_schemes(tmp_path, scheme):
+    from app.services.broll import net
+
+    url = f"{scheme}:///tmp/test.jpg" if scheme else "/tmp/test.jpg"
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        net.get(url)
+
+    with pytest.raises(ValueError, match="Unsupported URL scheme"):
+        net.download(url, tmp_path / "out.jpg")
