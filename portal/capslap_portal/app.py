@@ -26,6 +26,8 @@ from capslap_portal import db
 STATIC = Path(__file__).parent / "static"
 # The caption review page from this repo; the Docker image copies it next to the app.
 DEFAULT_REVIEW_DIR = Path(__file__).resolve().parents[2] / "review"
+# Limit caption JSON payloads (reviews/updates) to 5MB to prevent memory & disk exhaustion DoS.
+MAX_CAPTIONS_BYTES = 5 * 1024 * 1024
 
 
 @dataclass
@@ -101,6 +103,22 @@ def _row(row: sqlite3.Row | None, what: str) -> sqlite3.Row:
     if row is None:
         raise HTTPException(404, f"No such {what}.")
     return row
+
+
+async def _read_json_body(
+    request: Request, max_bytes: int = MAX_CAPTIONS_BYTES
+) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length and content_length.isdigit() and int(content_length) > max_bytes:
+        raise HTTPException(413, "The captions payload is too large.")
+    size = 0
+    chunks = []
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > max_bytes:
+            raise HTTPException(413, "The captions payload is too large.")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _check_captions(data: Any) -> str:
@@ -385,8 +403,9 @@ def create_app(settings: Settings) -> FastAPI:
         token: str, video_id: int, request: Request, c=Depends(conn)
     ):
         client_video(token, video_id, c)
+        raw = await _read_json_body(request)
         try:
-            data = json.loads(await request.body())
+            data = json.loads(raw)
         except ValueError as err:
             raise HTTPException(422, "Not JSON.") from err
         body = _check_captions(data)
@@ -687,8 +706,9 @@ def create_app(settings: Settings) -> FastAPI:
             c.execute("SELECT id FROM videos WHERE id=?", (video_id,)).fetchone(),
             "video",
         )
+        raw = await _read_json_body(request)
         try:
-            data = json.loads(await request.body())
+            data = json.loads(raw)
         except ValueError as err:
             raise HTTPException(422, "Not JSON.") from err
         c.execute(
