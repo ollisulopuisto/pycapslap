@@ -7,6 +7,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.04.2] - 2026-11-04
+
+### Added
+- **Agent-driven CLI and Python API.** Inspect media, transcribe, edit caption sidecars, and render from scripts with JSON results and streamed progress. The macOS app bundle includes `PyCapSlapCLI`.
+
+### Fixed
+- Headless exports now honor saved trim endpoints and the editor's default caption position. The info command reports media metadata, and the composite workflow can preserve Orukeet filler words.
+
 ## [v26.11.01.2] - 2026-11-01
 
 ### Fixed
