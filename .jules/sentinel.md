@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-04 - Restrict Network Fetching Protocols to HTTP/HTTPS
+**Vulnerability:** Network media retrieval helper routines passed untrusted or dynamically resolved URLs directly to `urllib.request.urlopen()` without protocol scheme restrictions. This opened risks of unintended protocol execution, SSRF, or local file disclosure via `file://`, `ftp://`, or custom handlers.
+**Learning:** Standard library HTTP clients like Python's `urllib.request` support arbitrary URL schemes by default, including local filesystem access, unless explicitly constrained before dispatch.
+**Prevention:** Always validate URL schemes with `urllib.parse.urlsplit()` against an allowlist of permitted protocols (`http`, `https`) before calling `urlopen()`.
+
 ## 2026-11-03 - Enforce Payload Limits on Caption Ingestion Endpoints
 **Vulnerability:** Caption ingestion endpoints (`/review` and `/captions`) buffered request bodies entirely into memory and persisted them directly into SQLite without payload size bounds. This exposed the portal to resource exhaustion and disk bloat denial-of-service via oversized JSON payloads.
 **Learning:** Endpoints that consume raw request bodies with `request.body()` bypass typical framework per-field size validations, allowing arbitrary memory allocation before deserialization.
