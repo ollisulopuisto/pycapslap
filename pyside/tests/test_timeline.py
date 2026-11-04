@@ -58,6 +58,62 @@ def test_timeline_select_segment(qtbot):
     assert timeline.selected_segment == seg1
 
 
+def test_timeline_click_segment_binary_search_boundaries(qtbot):
+    """Verify O(log N) bisect segment selection handles start, middle, end, gaps, and empty state."""
+    timeline = VisualTimelineWidget()
+    timeline.resize(1000, 80)
+    timeline.set_duration(10000)  # 1 px ~= 10 ms (duration_ms / (width - 1))
+    qtbot.addWidget(timeline)
+    timeline.show()
+
+    # 1. Click on empty segments list
+    timeline.set_segments([])
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(200, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(200, 40))
+    assert timeline.selected_segment is None
+
+    # 2. Multiple segments with gaps
+    seg1 = CaptionSegment(start_ms=1000, end_ms=3000, text="First")
+    seg2 = CaptionSegment(start_ms=5000, end_ms=7000, text="Second")
+    seg3 = CaptionSegment(start_ms=8500, end_ms=9500, text="Third")
+    timeline.set_segments([seg1, seg2, seg3])
+
+    # Click in gap before seg1 (x = 50 -> ~500 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(50, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(50, 40))
+    assert timeline.selected_segment is None
+
+    # Click inside seg1 near start (start_ms=1000 -> x = 150 -> ~1500 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(150, 40))
+    assert timeline.selected_segment == seg1
+
+    # Click inside seg1 near end (end_ms=3000 -> x = 280 -> ~2800 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(280, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(280, 40))
+    assert timeline.selected_segment == seg1
+
+    # Click in gap between seg1 and seg2 (x = 400 -> ~4000 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+    assert timeline.selected_segment is None
+
+    # Click inside seg2 middle (x = 600 -> ~6000 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(600, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(600, 40))
+    assert timeline.selected_segment == seg2
+
+    # Click inside seg3 (x = 900 -> ~9000 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(900, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(900, 40))
+    assert timeline.selected_segment == seg3
+
+    # Click in gap after seg3 (x = 980 -> ~9800 ms)
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(980, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(980, 40))
+    assert timeline.selected_segment is None
+
+
 def _trimmed_timeline(qtbot, start_ms=2000, end_ms=8000):
     timeline = VisualTimelineWidget()
     qtbot.addWidget(timeline)
