@@ -116,6 +116,13 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
 
     match r.method.as_str() {
         "ping" => write_ok(&id, &serde_json::json!({"ok": true})),
+        "probe" => match serde_json::from_value::<core::types::ProbeVideoParams>(r.params) {
+            Ok(p) => match core::video::probe(&id, &p.input, &mut emit).await {
+                Ok(result) => write_ok(&id, &result),
+                Err(e) => write_err(&id, e.to_string()),
+            },
+            Err(e) => write_err(&id, format!("Invalid params for probe: {e}")),
+        },
         "cancel" => {
             // New cancel method
             if let Some(target_id) = r.params.as_str() {

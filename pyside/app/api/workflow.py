@@ -48,14 +48,18 @@ class CapSlapSession:
         return fut.result(timeout=timeout)
 
     def probe(self, video_path: str | Path, timeout: float = 15.0) -> dict[str, Any]:
-        """Probe video metadata using extractFirstFrame."""
+        """Return media metadata and sidecar status for a video."""
         path_str = str(Path(video_path).resolve())
         if not os.path.exists(path_str):
             raise FileNotFoundError(f"Video file not found: {path_str}")
+        metadata = self.client.call("probe", {"input": path_str}).result(
+            timeout=timeout
+        )
         fut = self.client.call("extractFirstFrame", {"videoPath": path_str})
         res = fut.result(timeout=timeout)
         sidecar = Path(f"{path_str}.capslap.json")
         return {
+            **(metadata or {}),
             "path": path_str,
             "hasFirstFrame": bool(res and res.get("imageData")),
             "sidecarExists": sidecar.is_file(),
@@ -153,12 +157,29 @@ class CapSlapSession:
 
         style = captions.style
         export_formats = formats or ["9:16"]
+        trim_end_ms = captions.trim_end_ms or 0
+        if captions.trim_end_ms is not None:
+            metadata = self.client.call("probe", {"input": path_str}).result(
+                timeout=15.0
+            )
+            duration = (metadata or {}).get("duration")
+            if duration is None:
+                raise ValueError(
+                    "Could not determine video duration for the saved trim end"
+                )
+            duration_ms = round(float(duration) * 1000)
+            # CaptionsFile stores the trim end as an absolute timeline mark;
+            # the Rust renderer expects the amount to remove from the end.
+            trim_end_ms = max(0, duration_ms - captions.trim_end_ms)
+        position_overrides = captions.position_overrides or [
+            PositionOverride(start_ms=0, end_ms=10**9, y_pct=style.anchor_pct)
+        ]
 
         params: dict[str, Any] = {
             "inputVideo": path_str,
             "segments": [s.to_dict() for s in captions.segments],
             "trimStartMs": captions.trim_start_ms or 0,
-            "trimEndMs": captions.trim_end_ms or 0,
+            "trimEndMs": trim_end_ms,
             "exportFormats": export_formats,
             "cropStrategy": crop_strategy,
             "proofShortSide": proof_short_side,
@@ -175,7 +196,7 @@ class CapSlapSession:
             "outlineColor": style.outline_color,
             "outlineWidth": style.outline_width,
             "backgroundBox": style.background_box,
-            "positionOverrides": [o.to_dict() for o in captions.position_overrides],
+            "positionOverrides": [o.to_dict() for o in position_overrides],
         }
 
         prog_slot = None

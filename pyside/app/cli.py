@@ -55,6 +55,12 @@ def cmd_info(args: argparse.Namespace) -> int:
             result = {
                 "ok": True,
                 "video": str(video_path),
+                "duration": meta.get("duration"),
+                "width": meta.get("width"),
+                "height": meta.get("height"),
+                "fps": meta.get("fps"),
+                "audio": meta.get("audio"),
+                "hasVideo": meta.get("video"),
                 "sidecarExists": sidecar.is_file(),
                 "sidecarPath": str(sidecar) if sidecar.is_file() else None,
                 "hasFirstFrame": meta.get("hasFirstFrame", False),
@@ -343,6 +349,7 @@ def cmd_workflow(args: argparse.Namespace) -> int:
                 video_path=video_path,
                 backend=args.backend,
                 model=args.model,
+                keep_fillers=args.keep_fillers,
                 language=args.language,
                 clean_syllables=True,
                 clean_orphans=True,
@@ -553,6 +560,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_work.add_argument("video", help="Path to source video")
     p_work.add_argument("--backend", choices=["whisper", "orukeet"], default="whisper")
     p_work.add_argument("--model", default="tiny")
+    p_work.add_argument(
+        "--keep-fillers",
+        action="store_true",
+        help="Keep Orukeet filler words and repetitions",
+    )
     p_work.add_argument("--language", help="Audio language code")
     p_work.add_argument(
         "--preset",

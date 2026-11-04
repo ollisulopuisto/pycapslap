@@ -23,6 +23,12 @@ uv run pycapslap info video.mp4 --json
 {
   "ok": true,
   "video": "/absolute/path/to/video.mp4",
+  "duration": 123.4,
+  "width": 1920,
+  "height": 1080,
+  "fps": 29.97,
+  "audio": true,
+  "hasVideo": true,
   "sidecarExists": true,
   "sidecarPath": "/absolute/path/to/video.mp4.capslap.json",
   "hasFirstFrame": true,
@@ -95,6 +101,9 @@ uv run pycapslap edit video.mp4 \
 - `--patch-json <json>`: List of segment patches by index.
 - `--trim-start <ms>` / `--trim-end <ms>`: Adjust timeline trim marks.
 
+Trim values are timeline marks from the start of the source video. During render,
+PyCapSlap converts the saved end mark to the amount trimmed from the source's end.
+
 ---
 
 ### 4. Burn & Render Export (`pycapslap render`)
@@ -134,6 +143,9 @@ uv run pycapslap workflow video.mp4 \
   --crop fill \
   --json
 ```
+
+For Orukeet, pass `--keep-fillers` to retain filler words and repetitions in the
+transcript. By default, the composite workflow omits them.
 
 ---
 

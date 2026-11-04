@@ -302,6 +302,12 @@ pub struct ExtractFirstFrameResult {
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct ProbeVideoParams {
+    pub input: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct ExtractFrameParams {
     pub video_path: String,
     pub time_ms: u64,
