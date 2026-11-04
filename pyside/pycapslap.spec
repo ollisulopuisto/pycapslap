@@ -86,6 +86,22 @@ a = Analysis(
     cipher=block_cipher,
 )
 
+# Ship a console executable beside the GUI app so the CLI is usable from the
+# DMG without installing this source package or a separate Python runtime.
+cli_analysis = Analysis(
+    [str(pyside_dir / "app" / "cli_entry.py")],
+    pathex=[str(pyside_dir)],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    cipher=block_cipher,
+)
+
 # The worker is a standalone PyInstaller executable. The Rust core can use it
 # without requiring a system Python or an unpacked script in release builds.
 orukeet_datas, orukeet_binaries, orukeet_hidden = collect_all("orukeet")
@@ -117,6 +133,7 @@ worker_exe = EXE(
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+cli_pyz = PYZ(cli_analysis.pure, cli_analysis.zipped_data, cipher=block_cipher)
 
 exe = EXE(
     pyz,
@@ -133,12 +150,25 @@ exe = EXE(
     else str(pyside_dir / "app" / "resources" / "icon.ico"),
 )
 
+cli_exe = EXE(
+    cli_pyz,
+    cli_analysis.scripts,
+    [],
+    exclude_binaries=True,
+    name="PyCapSlapCLI",
+    debug=False,
+    strip=False,
+    upx=False,
+    console=True,
+)
+
 coll = COLLECT(
     exe,
+    cli_exe,
     worker_exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
+    a.binaries + cli_analysis.binaries,
+    a.zipfiles + cli_analysis.zipfiles,
+    a.datas + cli_analysis.datas,
     strip=False,
     upx=False,
     name="PyCapSlap",

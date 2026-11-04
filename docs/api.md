@@ -6,6 +6,14 @@ PyCapSlap provides a headless CLI and Python API designed for automation, script
 
 The CLI supports inspecting media, transcribing audio, editing caption sidecars, and rendering burned-in captions with structured output (`--json`) and NDJSON streaming progress events (`--json-events`).
 
+In the macOS DMG build, run the bundled CLI directly:
+
+```bash
+"/Applications/PyCapSlap.app/Contents/MacOS/PyCapSlapCLI" --help
+```
+
+For a source checkout, use `uv run pycapslap` from `pyside/` as shown below.
+
 ### 1. Inspect Video & Captions (`pycapslap info`)
 
 Inspect video metadata and verify whether a `.capslap.json` sidecar exists:

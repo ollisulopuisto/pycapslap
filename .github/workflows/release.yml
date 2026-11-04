@@ -54,6 +54,11 @@ jobs:
           CORE="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/target/release/core"
           echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
 
+      - name: Smoke-test the bundled agent CLI
+        run: |
+          CLI="pyside/dist/PyCapSlap.app/Contents/MacOS/PyCapSlapCLI"
+          "$CLI" --help
+
       - name: Smoke-test the bundled Whisper CLI
         run: |
           CLI="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
