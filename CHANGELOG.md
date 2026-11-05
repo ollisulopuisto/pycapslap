@@ -7,11 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
-## [v26.11.05.3] - 2026-11-05
+## [v26.11.05.4] - 2026-11-05
 
-### Packaging
-- Rebuilt the current main revision and published a notarized, stapled macOS
-  installer DMG.
+### Fixed
+- macOS app bundles now declare foreground-app status, restoring app switching,
+  focus, and app-level shortcuts such as Command-Q.
 
 ## [v26.11.05.2] - 2026-11-05
 

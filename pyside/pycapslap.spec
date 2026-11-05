@@ -186,6 +186,11 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "PyCapSlap",
             "CFBundleShortVersionString": bundle_version,
             "CFBundleVersion": bundle_version,
+            # This is a foreground GUI app. PyInstaller's generated default
+            # marks it background-only, which removes it from Cmd-Tab and
+            # prevents it receiving app-level shortcuts such as Cmd-Q.
+            "LSBackgroundOnly": False,
+            "LSUIElement": False,
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "15.0",
         },
