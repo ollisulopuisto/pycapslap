@@ -7,6 +7,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.05.3] - 2026-11-05
+
+### Packaging
+- Rebuilt the current main revision and published a notarized, stapled macOS
+  installer DMG.
+
 ## [v26.11.05.2] - 2026-11-05
 
 ### Packaging
