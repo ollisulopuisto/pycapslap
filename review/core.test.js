@@ -7,7 +7,9 @@ import {
   diffSegments,
   formatTime,
   History,
+  isSafeHttpUrl,
   parseCaptionsFile,
+  sameOriginHttp,
   parseTime,
   rescaleWords,
   retimeWords,
@@ -169,4 +171,34 @@ test('keeps at most `limit` steps', () => {
   const h = new History({ limit: 2 })
   for (const s of ['a', 'b', 'c']) h.record(s)
   assert.deepEqual(h.past, ['b', 'c'])
+})
+
+test('validates safe HTTP and HTTPS URLs', () => {
+  const base = 'https://example.com/review/'
+  assert.equal(isSafeHttpUrl('https://example.com/captions.json', base), true)
+  assert.equal(isSafeHttpUrl('http://example.com/captions.json', base), true)
+  assert.equal(isSafeHttpUrl('/api/captions.json', base), true)
+  assert.equal(isSafeHttpUrl('captions.json', base), true)
+  assert.equal(isSafeHttpUrl('https://other.example.com/caps.json', base), true)
+
+  assert.equal(isSafeHttpUrl('javascript:alert(1)', base), false)
+  assert.equal(isSafeHttpUrl('data:application/json,{}', base), false)
+  assert.equal(isSafeHttpUrl('blob:https://example.com/uuid', base), false)
+  assert.equal(isSafeHttpUrl('file:///etc/passwd', base), false)
+  assert.equal(isSafeHttpUrl('not-a-url', 'invalid-base'), false)
+})
+
+test('validates same origin HTTP and HTTPS URLs', () => {
+  const base = 'https://example.com/review/'
+  assert.equal(sameOriginHttp('/api/s/token/review', base), true)
+  assert.equal(sameOriginHttp('https://example.com/api/s/token/review', base), true)
+  assert.equal(sameOriginHttp('submit.json', base), true)
+
+  // Rejects cross-origin
+  assert.equal(sameOriginHttp('https://evil.com/review', base), false)
+  assert.equal(sameOriginHttp('http://example.com/review', base), false) // scheme mismatch / different origin
+  // Rejects non-HTTP schemes even if origin matches
+  assert.equal(sameOriginHttp('blob:https://example.com/uuid', base), false)
+  assert.equal(sameOriginHttp('javascript:alert(1)', base), false)
+  assert.equal(sameOriginHttp('data:text/html,bad', base), false)
 })

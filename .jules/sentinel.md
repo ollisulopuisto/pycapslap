@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-05 - Enforce Scheme Validation in Client Origin Checks
+**Vulnerability:** Same-origin validation checking `new URL(url, location.href).origin === location.origin` permitted non-HTTP schemes such as `blob:` URLs because `URL.origin` for blob URLs inherits the creator origin (e.g., `blob:https://example.com/UUID` has origin `https://example.com`). Additionally, dynamic fetch calls accepted arbitrary URL schemes.
+**Learning:** Browser URL origin resolution differs between schemes; origin equality alone is not sufficient to guarantee that a destination URL is a standard HTTP or HTTPS endpoint.
+**Prevention:** In client-side URL validation helpers, always verify both that `parsed.origin === base.origin` and that `parsed.protocol` strictly matches `http:` or `https:`.
+
 ## 2026-11-04 - Restrict Network Fetching Protocols to HTTP/HTTPS
 **Vulnerability:** Network media retrieval helper routines passed untrusted or dynamically resolved URLs directly to `urllib.request.urlopen()` without protocol scheme restrictions. This opened risks of unintended protocol execution, SSRF, or local file disclosure via `file://`, `ftp://`, or custom handlers.
 **Learning:** Standard library HTTP clients like Python's `urllib.request` support arbitrary URL schemes by default, including local filesystem access, unless explicitly constrained before dispatch.

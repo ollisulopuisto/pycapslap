@@ -208,3 +208,30 @@ export class History {
     return this.future.length > 0
   }
 }
+
+/**
+ * Validates that `url` resolves to an HTTP or HTTPS URL relative to `base`.
+ * Rejects non-HTTP schemes (javascript:, data:, blob:, file:, etc.).
+ */
+export function isSafeHttpUrl(url, base) {
+  try {
+    const parsed = new URL(url, base)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Validates that `url` shares origin with `base` and strictly uses HTTP or HTTPS.
+ * Rejects blob:, javascript:, data:, and cross-origin destinations.
+ */
+export function sameOriginHttp(url, base) {
+  try {
+    const parsed = new URL(url, base)
+    const baseParsed = new URL(base)
+    return parsed.origin === baseParsed.origin && (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+  } catch {
+    return false
+  }
+}
