@@ -25,7 +25,8 @@ for Apple Silicon macOS. Pushing a `v*` tag starts
    release.
 
 The bundled Whisper runtime requires macOS 15 or later, and the app's minimum
-system version is set to match. The app is unsigned and not notarized. On first launch, users may need to
+system version is set to match. The app and DMG are signed with a Developer ID Application certificate (CI secrets
+`BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `KEYCHAIN_PASSWORD`) but not notarized. On first launch, users may need to
 right-click the app and choose **Open**, or allow it in System Settings under
 **Privacy & Security**.
 

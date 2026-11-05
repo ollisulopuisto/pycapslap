@@ -65,6 +65,42 @@ jobs:
           LIBS="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/lib/libinternal"
           DYLD_LIBRARY_PATH="$LIBS" "$CLI" --help >/dev/null
 
+      - name: Import Developer ID certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cert="$RUNNER_TEMP/build_certificate.p12"
+          keychain="$RUNNER_TEMP/app-signing.keychain-db"
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 -D -o "$cert"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
+          security import "$cert" -P "$P12_PASSWORD" -T /usr/bin/codesign -f pkcs12 -k "$keychain"
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$keychain"
+
+      - name: Sign PyCapSlap.app
+        working-directory: pyside/dist
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Olli Sulopuisto (LWSR8T5392)"
+        run: |
+          set -euo pipefail
+          # Sign nested Mach-O files first (deepest paths first), then the bundle itself.
+          find PyCapSlap.app -type f -print0 | while IFS= read -r -d '' f; do
+            if file -b "$f" | grep -q 'Mach-O'; then
+              printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
+            fi
+          done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
+            codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+          done
+          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" PyCapSlap.app
+          codesign --verify --deep --strict --verbose=2 PyCapSlap.app
+
       - name: Create macOS disk image
         working-directory: pyside/dist
         run: |
@@ -72,6 +108,14 @@ jobs:
           ditto PyCapSlap.app installer/PyCapSlap.app
           ln -s /Applications installer/Applications
           hdiutil create -volname "PyCapSlap" -srcfolder installer -ov -format UDZO PyCapSlap-macos-arm64.dmg
+          codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" PyCapSlap-macos-arm64.dmg
+          codesign --verify --verbose=2 PyCapSlap-macos-arm64.dmg
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/build_certificate.p12"
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -96,10 +140,10 @@ jobs:
           generate_release_notes: true
           draft: false
           body: |
-            macOS (Apple Silicon) build. Unsigned/ad-hoc — on first launch,
+            macOS (Apple Silicon) build, signed with a Developer ID
+            Application certificate but not notarized yet — on first launch,
             right-click the app and choose Open (or allow it in
-            System Settings > Privacy & Security) since it isn't notarized
-            by a paid Apple Developer account.
+            System Settings > Privacy & Security).
 
             See CHANGELOG.md for what's in this release.
         env:
