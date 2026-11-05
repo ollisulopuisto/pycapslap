@@ -19,7 +19,7 @@
           <span data-i18n="reviewer">Your name</span>
           <input id="reviewer" type="text" autocomplete="name" />
         </label>
-        <span class="summary" id="summary"></span>
+        <span class="summary" id="summary" role="status" aria-live="polite"></span>
         <button id="send" class="primary" hidden disabled data-i18n="send">Send to the editor</button>
         <button id="download" class="primary" disabled data-i18n="download">Download reviewed captions</button>
       </div>
@@ -79,14 +79,14 @@
       <li class="cue">
         <div class="cue-head">
           <button class="play-cue" type="button" title="" aria-label="Play this caption">▶</button>
-          <input class="time start" type="text" inputmode="decimal" />
+          <input class="time start" type="text" inputmode="decimal" aria-label="Start time" />
           <span class="dash">–</span>
-          <input class="time end" type="text" inputmode="decimal" />
+          <input class="time end" type="text" inputmode="decimal" aria-label="End time" />
           <span class="badge changed-badge" data-i18n="changed">changed</span>
           <button class="link revert" type="button" data-i18n="revert">Undo</button>
-          <button class="link comment-toggle" type="button" data-i18n="comment">Comment</button>
+          <button class="link comment-toggle" type="button" aria-expanded="false" data-i18n="comment">Comment</button>
         </div>
-        <textarea class="text" rows="2" spellcheck="true"></textarea>
+        <textarea class="text" rows="2" spellcheck="true" aria-label="Caption text"></textarea>
         <textarea class="note" rows="2" hidden></textarea>
       </li>
     </template>

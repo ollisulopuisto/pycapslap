@@ -38,6 +38,9 @@ const STRINGS = {
     comment: 'Kommentti',
     playCue: 'Toista tämä teksti',
     notePlaceholder: 'Kommentti tekijälle (ei näy videossa)',
+    startTime: 'Alkamisaika',
+    endTime: 'Päättymisaika',
+    captionText: 'Tekstityksen teksti',
     summaryNone: 'Ei muutoksia',
     summaryChanges: (n) => `${n} ${n === 1 ? 'muutos' : 'muutosta'}`,
     summaryComments: (n) => `${n} ${n === 1 ? 'kommentti' : 'kommenttia'}`,
@@ -59,6 +62,9 @@ const STRINGS = {
 const EN = {
   playCue: 'Play this caption',
   notePlaceholder: 'Comment for the editor (not shown in the video)',
+  startTime: 'Start time',
+  endTime: 'End time',
+  captionText: 'Caption text',
   summaryNone: 'No changes',
   summaryChanges: (n) => `${n} ${n === 1 ? 'change' : 'changes'}`,
   summaryComments: (n) => `${n} ${n === 1 ? 'comment' : 'comments'}`,
@@ -384,9 +390,16 @@ function renderCues() {
     const start = li.querySelector('.start')
     const end = li.querySelector('.end')
     const playCueBtn = li.querySelector('.play-cue')
+    const commentToggle = li.querySelector('.comment-toggle')
     playCueBtn.title = t('playCue')
     playCueBtn.setAttribute('aria-label', t('playCue'))
+    start.setAttribute('aria-label', t('startTime'))
+    end.setAttribute('aria-label', t('endTime'))
+    text.setAttribute('aria-label', t('captionText'))
     note.placeholder = t('notePlaceholder')
+    const noteId = `note-${index}`
+    note.id = noteId
+    commentToggle.setAttribute('aria-controls', noteId)
 
     text.value = seg.text
     start.value = formatTime(seg.startMs)
@@ -395,6 +408,7 @@ function renderCues() {
       note.value = state.comments[index]
       note.hidden = false
     }
+    commentToggle.setAttribute('aria-expanded', String(!note.hidden))
 
     text.addEventListener('input', () => {
       remember(`text:${index}`)
@@ -420,8 +434,9 @@ function renderCues() {
     })
     li.querySelector('.play-cue').addEventListener('click', () => playCue(index))
     li.querySelector('.revert').addEventListener('click', () => revertCue(index))
-    li.querySelector('.comment-toggle').addEventListener('click', () => {
+    commentToggle.addEventListener('click', () => {
       note.hidden = !note.hidden
+      commentToggle.setAttribute('aria-expanded', String(!note.hidden))
       if (!note.hidden) note.focus()
     })
     markCue(li, index)
