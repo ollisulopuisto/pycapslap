@@ -683,3 +683,46 @@ def test_caption_panel_finds_the_playhead_cue_by_identity(qtbot):
     assert panel.cue_table.currentRow() == 1
     panel.set_playhead_segment(None)
     assert panel.cue_table.selectionModel().selectedRows() == []
+
+
+def test_caption_panel_row_for_binary_search(qtbot):
+    """Verify O(log N) bisect fallback in _row_for handles equality lookup, boundaries, and missing items."""
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+
+    # 1. Empty state
+    panel.set_segments([])
+    assert panel._row_for(None) == -1
+    assert panel._row_for(CaptionSegment(1000, 2000, "hello")) == -1
+
+    # 2. Populated list
+    seg0 = CaptionSegment(start_ms=1000, end_ms=2000, text="first")
+    seg1_a = CaptionSegment(start_ms=3000, end_ms=4000, text="second_a")
+    seg1_b = CaptionSegment(start_ms=3000, end_ms=4500, text="second_b")
+    seg2 = CaptionSegment(start_ms=5000, end_ms=6000, text="third")
+    panel.set_segments([seg0, seg1_a, seg1_b, seg2])
+
+    # None returns -1
+    assert panel._row_for(None) == -1
+
+    # Exact identity matches return immediately from _row_of
+    assert panel._row_for(seg0) == 0
+    assert panel._row_for(seg1_a) == 1
+    assert panel._row_for(seg1_b) == 2
+    assert panel._row_for(seg2) == 3
+
+    # Cloned/equivalent objects with different identity hit the bisect path
+    assert panel._row_for(CaptionSegment(1000, 2000, "first")) == 0
+    assert panel._row_for(CaptionSegment(3000, 4000, "second_a")) == 1
+    assert panel._row_for(CaptionSegment(3000, 4500, "second_b")) == 2
+    assert panel._row_for(CaptionSegment(5000, 6000, "third")) == 3
+
+    # Segments not present in the table
+    # Before all
+    assert panel._row_for(CaptionSegment(500, 900, "before")) == -1
+    # Same start time as seg0 but different end/text
+    assert panel._row_for(CaptionSegment(1000, 2000, "different_text")) == -1
+    # In between
+    assert panel._row_for(CaptionSegment(2500, 2800, "gap")) == -1
+    # After all
+    assert panel._row_for(CaptionSegment(7000, 8000, "after")) == -1
