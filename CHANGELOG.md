@@ -7,6 +7,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.05.1] - 2026-11-05
+
+### Packaging
+- macOS release DMGs are now signed with Hardened Runtime, notarized by Apple,
+  and published with the notarization ticket stapled.
+
 ## [v26.11.04.2] - 2026-11-04
 
 ### Added

@@ -25,10 +25,20 @@ for Apple Silicon macOS. Pushing a `v*` tag starts
    release.
 
 The bundled Whisper runtime requires macOS 15 or later, and the app's minimum
-system version is set to match. The app and DMG are signed with a Developer ID Application certificate (CI secrets
-`BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `KEYCHAIN_PASSWORD`) but not notarized. On first launch, users may need to
-right-click the app and choose **Open**, or allow it in System Settings under
-**Privacy & Security**.
+system version is set to match. The release workflow signs the app with the
+Developer ID Application certificate and enables Hardened Runtime, then signs,
+submits, and staples the DMG. Configure these repository Actions secrets:
+
+- `BUILD_CERTIFICATE_BASE64`: base64-encoded Developer ID `.p12` certificate.
+- `P12_PASSWORD`: password used when exporting the `.p12` certificate.
+- `KEYCHAIN_PASSWORD`: temporary CI keychain password.
+- `APPLE_NOTARY_KEY_ID`: App Store Connect API key ID.
+- `APPLE_NOTARY_ISSUER_ID`: App Store Connect API issuer ID.
+- `APPLE_NOTARY_PRIVATE_KEY_BASE64`: base64-encoded App Store Connect `.p8`
+  private key.
+
+The workflow checks that all six secrets are present before building. Apple
+notarization failures stop the release before the DMG artifact is uploaded.
 
 ## Local DMG packaging
 

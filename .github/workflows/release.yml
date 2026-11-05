@@ -21,6 +21,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check signing and notarization secrets
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          for name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD KEYCHAIN_PASSWORD \
+            APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER_ID APPLE_NOTARY_PRIVATE_KEY_BASE64; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing required GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -97,10 +115,18 @@ jobs:
               printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
             fi
           done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
-            codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
           done
-          codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" PyCapSlap.app
+          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" PyCapSlap.app
           codesign --verify --deep --strict --verbose=2 PyCapSlap.app
+
+      - name: Prepare App Store Connect API key
+        env:
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo -n "$APPLE_NOTARY_PRIVATE_KEY_BASE64" | base64 -D -o "$RUNNER_TEMP/AuthKey.p8"
+          chmod 600 "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Create macOS disk image
         working-directory: pyside/dist
@@ -112,10 +138,26 @@ jobs:
           codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" PyCapSlap-macos-arm64.dmg
           codesign --verify --verbose=2 PyCapSlap-macos-arm64.dmg
 
+      - name: Notarize and staple disk image
+        working-directory: pyside/dist
+        env:
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit PyCapSlap-macos-arm64.dmg \
+            --key "$RUNNER_TEMP/AuthKey.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple PyCapSlap-macos-arm64.dmg
+          xcrun stapler validate PyCapSlap-macos-arm64.dmg
+
       - name: Remove signing keychain
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/build_certificate.p12"
+          rm -f "$RUNNER_TEMP/AuthKey.p8"
           security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
 
       - name: Upload build artifact
@@ -143,9 +185,8 @@ jobs:
           draft: false
           body: |
             macOS (Apple Silicon) build, signed with a Developer ID
-            Application certificate but not notarized yet — on first launch,
-            right-click the app and choose Open (or allow it in
-            System Settings > Privacy & Security).
+            Application certificate and notarized by Apple. The notarization
+            ticket is stapled to the disk image.
 
             See CHANGELOG.md for what's in this release.
         env:
