@@ -4,11 +4,13 @@ import {
   clampTimes,
   formatTime,
   History,
+  isSafeHttpUrl,
   parseCaptionsFile,
   parseTime,
   rescaleWords,
   retimeWords,
   reviewFileName,
+  sameOriginHttp,
 } from './core.js'
 import { isLocked, lockText, unlock, WrongPassword } from './lock.js'
 
@@ -267,7 +269,7 @@ async function loadFromQuery() {
     }
   }
   try {
-    if (captionsUrl) {
+    if (captionsUrl && isSafeHttpUrl(captionsUrl, location.href)) {
       const response = await fetch(captionsUrl)
       await openCaptions(await response.text(), decodeURIComponent(captionsUrl.split('/').pop()))
     }
@@ -293,11 +295,7 @@ async function loadFromQuery() {
 
 // Only this site's own addresses: a link must not make the page post a review elsewhere.
 function sameSite(url) {
-  try {
-    return new URL(url, location.href).origin === location.origin
-  } catch {
-    return false
-  }
+  return sameOriginHttp(url, location.href)
 }
 
 // ── Drafts survive a closed tab ───────────────────────────────────────────────
