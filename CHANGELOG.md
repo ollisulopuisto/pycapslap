@@ -7,6 +7,12 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.05.2] - 2026-11-05
+
+### Packaging
+- Use the configured Apple ID app-specific password for CI notarization, then
+  staple the accepted ticket to the macOS disk image.
+
 ## [v26.11.05.1] - 2026-11-05
 
 ### Packaging

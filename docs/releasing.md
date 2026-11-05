@@ -32,12 +32,10 @@ submits, and staples the DMG. Configure these repository Actions secrets:
 - `BUILD_CERTIFICATE_BASE64`: base64-encoded Developer ID `.p12` certificate.
 - `P12_PASSWORD`: password used when exporting the `.p12` certificate.
 - `KEYCHAIN_PASSWORD`: temporary CI keychain password.
-- `APPLE_NOTARY_KEY_ID`: App Store Connect API key ID.
-- `APPLE_NOTARY_ISSUER_ID`: App Store Connect API issuer ID.
-- `APPLE_NOTARY_PRIVATE_KEY_BASE64`: base64-encoded App Store Connect `.p8`
-  private key.
+- `APPLE_ID`: Apple Developer account email used for notarization.
+- `APPLE_APP_PASSWORD`: app-specific password for that Apple ID.
 
-The workflow checks that all six secrets are present before building. Apple
+The workflow checks that all five secrets are present before building. Apple
 notarization failures stop the release before the DMG artifact is uploaded.
 
 ## Local DMG packaging
