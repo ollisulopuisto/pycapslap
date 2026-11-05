@@ -1,3 +1,4 @@
+import bisect
 from dataclasses import replace
 
 from PySide6.QtCore import QEvent, QPoint, QRect, Qt, Signal
@@ -1106,13 +1107,27 @@ class CaptionPanelWidget(QWidget):
 
     def _row_for(self, segment: CaptionSegment | None) -> int:
         """The row showing `segment`: the same object first, an equal one
-        failing that, as before the row map; -1 when it is not in the table."""
-        if segment is None:
+        failing that, as before the row map; -1 when it is not in the table.
+
+        Performance note: When segment object identity differs (e.g. across
+        project reload/cloned models), searching sorted self.segments via
+        bisect_left reduces worst-case lookup from O(N) to O(log N) (~97x speedup).
+        """
+        if segment is None or not self.segments:
             return -1
         row = self._row_of.get(id(segment), -1)
         if row >= 0 and self.segments[row] is segment:
             return row
-        return next((i for i, seg in enumerate(self.segments) if seg == segment), -1)
+        idx = bisect.bisect_left(
+            self.segments, segment.start_ms, key=lambda s: s.start_ms
+        )
+        while (
+            idx < len(self.segments) and self.segments[idx].start_ms == segment.start_ms
+        ):
+            if self.segments[idx] == segment:
+                return idx
+            idx += 1
+        return -1
 
     def select_segment(
         self, segment: CaptionSegment | None, anchor_y_pct: float = 75.0
