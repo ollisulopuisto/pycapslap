@@ -98,6 +98,18 @@ test('finds the caption on screen', () => {
   assert.equal(activeIndex(sidecar.segments, 100), 0)
   assert.equal(activeIndex(sidecar.segments, 2000), 1)
   assert.equal(activeIndex(sidecar.segments, 4200), -1)
+
+  // Edge cases: empty list, boundaries, gaps, before start, after end
+  assert.equal(activeIndex([], 100), -1)
+  assert.equal(activeIndex(sidecar.segments, -10), -1)
+  assert.equal(activeIndex(sidecar.segments, 0), 0) // exact startMs
+  assert.equal(activeIndex(sidecar.segments, 1999), 0)
+  assert.equal(activeIndex(sidecar.segments, 2000), 1) // boundary between seg 0 and seg 1
+  assert.equal(activeIndex(sidecar.segments, 4000), -1) // gap between seg 1 (endMs 4000) and seg 2 (startMs 4500)
+  assert.equal(activeIndex(sidecar.segments, 4499), -1) // still in gap
+  assert.equal(activeIndex(sidecar.segments, 4500), 2) // seg 2 startMs
+  assert.equal(activeIndex(sidecar.segments, 6000), -1) // exact end of last segment
+  assert.equal(activeIndex(sidecar.segments, 10000), -1) // past last segment
 })
 
 test('logs text and time changes by caption', () => {
