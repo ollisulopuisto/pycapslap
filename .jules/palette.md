@@ -5,3 +5,7 @@
 ## 2026-11-03 - Global :focus-visible across sister frontend subprojects
 **Learning:** In multi-frontend repositories sharing design tokens (e.g., `--accent: #4f46e5` / `#6366f1`), omitting `:focus-visible` rings in secondary frontends leaves interactive controls (buttons, inputs, tabs, action links) relying on default UA focus indicators, which fail contrast checks or disappear entirely against dark themes (`#111113`).
 **Action:** Ensure all CSS stylesheets across client-facing web surfaces (`review`, `portal`) define standard `:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }` to maintain keyboard accessibility parity.
+
+## 2026-11-06 - Global spacebar media shortcuts breaking standard button activation
+**Learning:** Registering a document-level `keydown` listener for `Space` that only checks `['INPUT', 'TEXTAREA'].includes(activeElement.tagName)` breaks native keyboard interaction for `<button>` and `<a>` elements (`e.preventDefault()` halts browser-native button activation on Space).
+**Action:** When implementing global media play/pause hotkeys on `Space`, exempt all interactive elements (`BUTTON`, `A`, `SELECT`, `INPUT`, `TEXTAREA`) so keyboard users can navigate to and activate buttons with Space as expected by accessibility standards.
