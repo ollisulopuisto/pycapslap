@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-06 - Enforce Same-Origin Resolution on Client API Paths
+**Vulnerability:** Client API request dispatchers that concatenate base URLs with endpoint paths or accept dynamically resolved paths can route authenticated requests (including administrative Bearer tokens) to cross-origin or alternate-scheme destinations if paths are protocol-relative, absolute URLs, or have mismatched schemes.
+**Learning:** Naive URL concatenation (`base_url + path`) or unvalidated path resolutions permit cross-origin escapes or scheme mutations when paths are not checked against the client's configured base origin.
+**Prevention:** In API clients that attach authentication credentials, parse and validate the resolved target against the base URL's scheme and netloc before dispatching requests, rejecting cross-origin or non-matching scheme paths.
+
 ## 2026-11-05 - Enforce Scheme Validation in Client Origin Checks
 **Vulnerability:** Same-origin validation checking `new URL(url, location.href).origin === location.origin` permitted non-HTTP schemes such as `blob:` URLs because `URL.origin` for blob URLs inherits the creator origin (e.g., `blob:https://example.com/UUID` has origin `https://example.com`). Additionally, dynamic fetch calls accepted arbitrary URL schemes.
 **Learning:** Browser URL origin resolution differs between schemes; origin equality alone is not sufficient to guarantee that a destination URL is a standard HTTP or HTTPS endpoint.

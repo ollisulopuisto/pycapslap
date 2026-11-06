@@ -118,6 +118,20 @@ def test_portal_url_scheme_validation():
     assert p2.url == "https://portal.example.com"
 
 
+def test_portal_request_path_validation():
+    p = Portal("https://portal.example.com", TOKEN)
+    # Rejects cross-origin, protocol-relative, and arbitrary scheme endpoints
+    for unsafe_path in (
+        "https://evil.com/api/admin",
+        "http://portal.example.com/api/admin",
+        "//evil.com/api/admin",
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+    ):
+        with pytest.raises(PortalError, match="must be relative"):
+            p._request("GET", unsafe_path)
+
+
 def test_publish_uploads_the_render_and_the_fixes_come_back(
     qtbot, tmp_path, fake_portal, no_modal_message_boxes
 ):
