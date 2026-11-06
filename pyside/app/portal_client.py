@@ -42,8 +42,22 @@ class Portal:
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             all_headers["Content-Type"] = "application/json"
+        # Enforce same-origin relative endpoints to prevent token leakage or SSRF.
+        parts = urllib.parse.urlsplit(path)
+        full_url = (
+            path
+            if parts.scheme or parts.netloc
+            else urllib.parse.urljoin(self.url + "/", path)
+        )
+        base_parts = urllib.parse.urlsplit(self.url)
+        target_parts = urllib.parse.urlsplit(full_url)
+        if (
+            target_parts.scheme.lower() != base_parts.scheme.lower()
+            or target_parts.netloc.lower() != base_parts.netloc.lower()
+        ):
+            raise PortalError(f"Request path must be relative to {self.url}")
         request = urllib.request.Request(
-            self.url + path, data=data, method=method, headers=all_headers
+            full_url, data=data, method=method, headers=all_headers
         )
         try:
             return urllib.request.urlopen(request, timeout=self.timeout)
