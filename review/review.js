@@ -396,6 +396,7 @@ function renderCues() {
     start.setAttribute('aria-label', t('startTime'))
     end.setAttribute('aria-label', t('endTime'))
     text.setAttribute('aria-label', t('captionText'))
+    note.setAttribute('aria-label', t('notePlaceholder'))
     note.placeholder = t('notePlaceholder')
     const noteId = `note-${index}`
     note.id = noteId
@@ -607,8 +608,8 @@ document.addEventListener('keydown', (e) => {
     else undo()
     return
   }
-  const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)
-  if (e.key === ' ' && !typing) {
+  const interactive = ['BUTTON', 'A', 'INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)
+  if (e.key === ' ' && !interactive) {
     e.preventDefault()
     if (video.paused) video.play()
     else video.pause()
