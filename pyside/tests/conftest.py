@@ -14,8 +14,8 @@ SAMPLE_VIDEO = REPO_ROOT / "rust" / "bin" / "test_input.mp4"
 @pytest.fixture(autouse=True)
 def isolated_settings(tmp_path):
     """Each test gets empty QSettings, never the user's own."""
-    QCoreApplication.setOrganizationName("PyCapSlapTests")
-    QCoreApplication.setApplicationName("PyCapSlapTests")
+    QCoreApplication.setOrganizationName("TekstitysTests")
+    QCoreApplication.setApplicationName("TekstitysTests")
     QSettings.setDefaultFormat(QSettings.Format.IniFormat)
     QSettings.setPath(
         QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path)

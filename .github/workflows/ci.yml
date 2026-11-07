@@ -41,7 +41,7 @@ jobs:
               - 'pyside/app/**'
               - 'pyside/src/**'
               - 'pyside/tests/**'
-              - 'pyside/pycapslap.spec'
+              - 'pyside/tekstitys.spec'
               - 'pyside/pyproject.toml'
               - 'pyside/uv.lock'
               - 'rust/**'

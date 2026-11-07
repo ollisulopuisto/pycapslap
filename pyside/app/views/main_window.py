@@ -180,7 +180,7 @@ class MainWindow(QMainWindow):
         self, core_client: CoreClient | None = None, parent: QWidget | None = None
     ):
         super().__init__(parent)
-        self.setWindowTitle("PyCapSlap — High-Performance Native Video Captions")
+        self.setWindowTitle("Tekstitys — High-Performance Native Video Captions")
         # Most video is vertical, so the window opens tall: the 9:16 preview
         # gets the height and the sidebar sits beside it.
         screen = QGuiApplication.primaryScreen()
@@ -1829,7 +1829,7 @@ class MainWindow(QMainWindow):
         add(file_menu, "Close Window", QKeySequence.StandardKey.Close, self.close)
         add(
             file_menu,
-            "Quit PyCapSlap",
+            "Quit Tekstitys",
             QKeySequence.StandardKey.Quit,
             self.close,
             QAction.MenuRole.QuitRole,
@@ -1922,7 +1922,7 @@ class MainWindow(QMainWindow):
             )
             return
         QMessageBox.information(
-            self, f"What's New in PyCapSlap {current}", self._whats_new_html(entries)
+            self, f"What's New in Tekstitys {current}", self._whats_new_html(entries)
         )
         QSettings().setValue(whatsnew.QSETTINGS_KEY, current)
 
@@ -1944,7 +1944,7 @@ class MainWindow(QMainWindow):
         if not unseen:
             return
         QMessageBox.information(
-            self, f"What's New in PyCapSlap {current}", self._whats_new_html(unseen)
+            self, f"What's New in Tekstitys {current}", self._whats_new_html(unseen)
         )
         QSettings().setValue(whatsnew.QSETTINGS_KEY, current)
 
@@ -2423,7 +2423,7 @@ class MainWindow(QMainWindow):
         self.project.is_dirty = False
         self._record_history()
 
-        self.setWindowTitle(f"PyCapSlap — {os.path.basename(file_path)}")
+        self.setWindowTitle(f"Tekstitys — {os.path.basename(file_path)}")
         self.meta_lbl.setText(
             f"File: {os.path.basename(file_path)}\n"
             f"Path: {file_path}\n"

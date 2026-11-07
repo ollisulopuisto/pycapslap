@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a macOS application bundle for PyCapSlap: dist/PyCapSlap.app."""
+"""Create a macOS application bundle for Tekstitys: dist/Tekstitys.app."""
 
 import plistlib
 import shutil
@@ -13,7 +13,7 @@ def create_app_bundle(output_dir: Path | None = None) -> Path:
         output_dir = repo_root / "dist"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    app_bundle = output_dir / "PyCapSlap.app"
+    app_bundle = output_dir / "Tekstitys.app"
     contents_dir = app_bundle / "Contents"
     macos_dir = contents_dir / "MacOS"
     resources_dir = contents_dir / "Resources"
@@ -28,13 +28,13 @@ def create_app_bundle(output_dir: Path | None = None) -> Path:
 
     # 2. Write Info.plist
     info_plist = {
-        "CFBundleName": "PyCapSlap",
-        "CFBundleDisplayName": "PyCapSlap",
-        "CFBundleIdentifier": "com.pycapslap.app",
+        "CFBundleName": "Tekstitys",
+        "CFBundleDisplayName": "Tekstitys",
+        "CFBundleIdentifier": "com.tekstitys.app",
         "CFBundleVersion": "0.1.0",
         "CFBundleShortVersionString": "0.1.0",
         "CFBundlePackageType": "APPL",
-        "CFBundleExecutable": "PyCapSlap",
+        "CFBundleExecutable": "Tekstitys",
         "CFBundleIconFile": "icon.icns",
         "NSHighResolutionCapable": True,
         "LSMinimumSystemVersion": "12.0",
@@ -42,16 +42,16 @@ def create_app_bundle(output_dir: Path | None = None) -> Path:
     with open(contents_dir / "Info.plist", "wb") as f:
         plistlib.dump(info_plist, f)
 
-    # 3. Create launcher script in Contents/MacOS/PyCapSlap
-    launcher_path = macos_dir / "PyCapSlap"
+    # 3. Create launcher script in Contents/MacOS/Tekstitys
+    launcher_path = macos_dir / "Tekstitys"
     launcher_script = f"""#!/bin/bash
 DIR="$( cd "$( dirname "${{BASH_SOURCE[0]}}" )" && pwd )"
 REPO_ROOT="{repo_root}"
 cd "$REPO_ROOT"
 if command -v uv >/dev/null 2>&1; then
-    exec uv run pycapslap "$@"
+    exec uv run tekstitys "$@"
 else
-    exec "$REPO_ROOT/.venv/MacOS/PyCapSlap" "$REPO_ROOT/pyside/app/main.py" "$@"
+    exec "$REPO_ROOT/.venv/MacOS/Tekstitys" "$REPO_ROOT/pyside/app/main.py" "$@"
 fi
 """
     launcher_path.write_text(launcher_script, encoding="utf-8")

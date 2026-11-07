@@ -9,24 +9,24 @@ def test_ensure_macos_app_name_noop_on_non_darwin():
         assert reexeced is False
 
 
-def test_ensure_macos_app_name_noop_if_already_pycapslap():
-    with patch("sys.platform", "darwin"), patch("sys.executable", "/path/to/PyCapSlap"):
+def test_ensure_macos_app_name_noop_if_already_tekstitys():
+    with patch("sys.platform", "darwin"), patch("sys.executable", "/path/to/Tekstitys"):
         reexeced = ensure_macos_app_name()
         assert reexeced is False
 
 
 def test_ensure_macos_app_name_noop_if_reexec_flag_set(monkeypatch):
-    monkeypatch.setenv("PYCAPSLAP_REEXECED", "1")
+    monkeypatch.setenv("TEKSTITYS_REEXECED", "1")
     with patch("sys.platform", "darwin"), patch("sys.executable", "/path/to/python3"):
         reexeced = ensure_macos_app_name()
         assert reexeced is False
 
 
 def test_ensure_macos_app_name_reexecs(monkeypatch, tmp_path):
-    monkeypatch.delenv("PYCAPSLAP_REEXECED", raising=False)
+    monkeypatch.delenv("TEKSTITYS_REEXECED", raising=False)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     # Set when the suite is run without a re-exec; this test is about the re-exec.
-    monkeypatch.delenv("PYCAPSLAP_NO_REEXEC", raising=False)
+    monkeypatch.delenv("TEKSTITYS_NO_REEXEC", raising=False)
 
     # Keep the MacOS/ link out of the real venv, where it would go stale.
     monkeypatch.setattr("sys.prefix", str(tmp_path / "venv"))
@@ -44,5 +44,5 @@ def test_ensure_macos_app_name_reexecs(monkeypatch, tmp_path):
         assert reexeced is True
         assert mock_execve.called
         called_binary, called_args, called_env = mock_execve.call_args[0]
-        assert "PyCapSlap" in called_binary
-        assert called_env.get("PYCAPSLAP_REEXECED") == "1"
+        assert "Tekstitys" in called_binary
+        assert called_env.get("TEKSTITYS_REEXECED") == "1"

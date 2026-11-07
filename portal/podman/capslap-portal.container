@@ -1,7 +1,7 @@
 # The portal itself. Build the image first, from the repository root:
 #   podman build -f portal/Dockerfile -t localhost/capslap-portal:latest .
 [Unit]
-Description=PyCapSlap review portal
+Description=Tekstitys review portal
 
 [Container]
 Image=localhost/capslap-portal:latest

@@ -19,7 +19,7 @@ def test_main_window_init(qtbot):
     qtbot.addWidget(window)
     window.show()
 
-    assert window.windowTitle().startswith("PyCapSlap")
+    assert window.windowTitle().startswith("Tekstitys")
     assert window.player is not None
     assert window.core is not None
     assert window.overlay is not None

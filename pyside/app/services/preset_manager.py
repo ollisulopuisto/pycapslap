@@ -14,8 +14,12 @@ class PresetManager:
         if storage_path is not None:
             self.storage_path = Path(storage_path)
         else:
-            config_dir = Path.home() / ".config" / "pycapslap"
-            config_dir.mkdir(parents=True, exist_ok=True)
+            config_dir = Path.home() / ".config" / "tekstitys"
+            legacy_dir = Path.home() / ".config" / "pycapslap"
+            if not config_dir.exists() and legacy_dir.exists():
+                config_dir = legacy_dir
+            else:
+                config_dir.mkdir(parents=True, exist_ok=True)
             self.storage_path = config_dir / "presets.json"
 
         self._presets: dict[str, CaptionStyle] = {}

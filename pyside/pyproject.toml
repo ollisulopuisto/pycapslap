@@ -1,5 +1,5 @@
 [project]
-name = "pycapslap"
+name = "tekstitys"
 version = "0.1.0"
 description = "Snappy, native video captioning and AI transcription desktop app"
 readme = "README.md"
@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pycapslap = "pycapslap:main"
+tekstitys = "tekstitys:main"
 
 [build-system]
 requires = ["uv_build>=0.12.12,<0.13.0"]

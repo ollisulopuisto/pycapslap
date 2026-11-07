@@ -63,24 +63,24 @@ jobs:
       - name: Install Python dependencies
         run: uv sync
 
-      - name: Build PyCapSlap.app
+      - name: Build Tekstitys.app
         working-directory: pyside
-        run: uv run --with pyinstaller pyinstaller pycapslap.spec --noconfirm
+        run: uv run --with pyinstaller pyinstaller tekstitys.spec --noconfirm
 
       - name: Smoke-test the bundled core binary
         run: |
-          CORE="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/target/release/core"
+          CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
           echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
 
       - name: Smoke-test the bundled agent CLI
         run: |
-          CLI="pyside/dist/PyCapSlap.app/Contents/MacOS/PyCapSlapCLI"
+          CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
           "$CLI" --help
 
       - name: Smoke-test the bundled Whisper CLI
         run: |
-          CLI="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
-          LIBS="pyside/dist/PyCapSlap.app/Contents/Frameworks/rust/bin/lib/libinternal"
+          CLI="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
+          LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
           DYLD_LIBRARY_PATH="$LIBS" "$CLI" --help >/dev/null
 
       - name: Import Developer ID certificate
@@ -102,32 +102,32 @@ jobs:
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           security find-identity -v -p codesigning "$keychain"
 
-      - name: Sign PyCapSlap.app
+      - name: Sign Tekstitys.app
         working-directory: pyside/dist
         env:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Olli Sulopuisto (LWSR8T5392)"
         run: |
           set -euo pipefail
           # Sign nested Mach-O files first (deepest paths first), then the bundle itself.
-          find PyCapSlap.app -type f -print0 | while IFS= read -r -d '' f; do
+          find Tekstitys.app -type f -print0 | while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
               printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
             fi
           done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
             codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
           done
-          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" PyCapSlap.app
-          codesign --verify --deep --strict --verbose=2 PyCapSlap.app
+          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
+          codesign --verify --deep --strict --verbose=2 Tekstitys.app
 
       - name: Create macOS disk image
         working-directory: pyside/dist
         run: |
           mkdir installer
-          ditto PyCapSlap.app installer/PyCapSlap.app
+          ditto Tekstitys.app installer/Tekstitys.app
           ln -s /Applications installer/Applications
-          hdiutil create -volname "PyCapSlap" -srcfolder installer -ov -format UDZO PyCapSlap-macos-arm64.dmg
-          codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" PyCapSlap-macos-arm64.dmg
-          codesign --verify --verbose=2 PyCapSlap-macos-arm64.dmg
+          hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
+          codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg
+          codesign --verify --verbose=2 Tekstitys-macos-arm64.dmg
 
       - name: Notarize and staple disk image
         working-directory: pyside/dist
@@ -136,13 +136,13 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
-          xcrun notarytool submit PyCapSlap-macos-arm64.dmg \
+          xcrun notarytool submit Tekstitys-macos-arm64.dmg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "LWSR8T5392" \
             --wait
-          xcrun stapler staple PyCapSlap-macos-arm64.dmg
-          xcrun stapler validate PyCapSlap-macos-arm64.dmg
+          xcrun stapler staple Tekstitys-macos-arm64.dmg
+          xcrun stapler validate Tekstitys-macos-arm64.dmg
 
       - name: Remove signing keychain
         if: always()
@@ -153,8 +153,8 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PyCapSlap-macos-arm64
-          path: pyside/dist/PyCapSlap-macos-arm64.dmg
+          name: Tekstitys-macos-arm64
+          path: pyside/dist/Tekstitys-macos-arm64.dmg
 
   release:
     needs: build
@@ -164,7 +164,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: PyCapSlap-macos-arm64
+          name: Tekstitys-macos-arm64
           path: artifacts
 
       - name: Create GitHub Release

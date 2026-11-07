@@ -1,6 +1,6 @@
-# PyCapSlap ⚡
+# Tekstitys ⚡
 
-**PyCapSlap** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet or whisper.cpp, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
+**Tekstitys** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet or whisper.cpp, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
 
 **Local by default.** Orukeet's Q8 model and native runtime are downloaded and verified once. Whisper models can also be downloaded from Transcription Settings. Audio is processed on your computer; transcription works offline after setup.
 
@@ -10,7 +10,7 @@ The bundled macOS app currently requires macOS 15 or later.
 
 ## 🛠️ Architecture
 
-PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core engine.
+Tekstitys is a native PySide6 (Qt 6) desktop application powered by a Rust core engine.
 
 * **Unified Hardware Canvas**: Native `QVideoSink` surface renders video frames and active caption overlays in a single hardware-accelerated pass.
 * **Non-blocking IPC**: Bi-directional asynchronous JSON-RPC streaming between Python and the Rust binary prevents UI stuttering under heavy transcription or encoding workloads.
@@ -42,7 +42,7 @@ PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core 
 * 🎯 **Interactive Timeline & Auto-Dodge**:
   * Real-time drag-and-drop vertical subtitle positioning on video canvas.
   * Automated computer-vision activity detection ("Auto Dodge") to avoid obscuring faces or high-motion areas.
-* ✅ **Client Review**: send the captions to a client, who checks and corrects them in their browser on the [review page](https://ollisulopuisto.github.io/pycapslap/) and sends the file back.
+* ✅ **Client Review**: send the captions to a client, who checks and corrects them in their browser on the [review page](https://ollisulopuisto.github.io/tekstitys/) and sends the file back.
   * **Client Review → Export for Review…** saves a `.review.capslap.json`, locked with a password it offers to generate. Send the file with the video (a smaller preview is fine), and the password another way, such as a text message. The page is public, but a locked file is useless without the password; share the video through a link that needs a login or a password.
   * The client opens both on the page, watches the video with the captions on it, fixes wording or timing, leaves comments, and downloads the reviewed file, locked with the same password. Nothing is uploaded; a half-done review survives a closed tab, locked too.
   * **Client Review → Import Reviewed Captions…** applies their fixes cue by cue (word timings are rebuilt from yours, style and positions stay) and lists their comments. Save, render.
@@ -66,9 +66,9 @@ PyCapSlap is a native PySide6 (Qt 6) desktop application powered by a Rust core 
 
 ## 🚀 Quick Start
 
-For a timecoded short-form workflow, run `pycapslap clips interview.mp4
+For a timecoded short-form workflow, run `tekstitys clips interview.mp4
 --cuts moments.csv`. Autoraffkat renders each selected range as a separate,
-face-aware 9:16 clip and opens the results in PyCapSlap for captions and final
+face-aware 9:16 clip and opens the results in Tekstitys for captions and final
 review. See the [PySide guide](pyside/README.md#timecoded-vertical-clips) for
 the CSV format and options.
 
@@ -80,7 +80,7 @@ the CSV format and options.
   (`brew install libvoikko`). Without it the app runs exactly as before,
   just without the squiggles.
 
-### Running PyCapSlap
+### Running Tekstitys
 ```bash
 # 1. Build the Rust core binary
 cd rust
@@ -88,7 +88,7 @@ cargo build --release
 cd ..
 
 # 2. Launch the desktop application
-uv run pycapslap
+uv run tekstitys
 ```
 
 ---
@@ -103,7 +103,7 @@ Orukeet's model and runtime installation details are documented in the [Orukeet 
 
 ## 🧪 Development & Quality Assurance
 
-PyCapSlap strictly follows a **Red-Green Test-Driven Development (TDD)** workflow.
+Tekstitys strictly follows a **Red-Green Test-Driven Development (TDD)** workflow.
 
 ```bash
 # Run all Python Qt and model tests

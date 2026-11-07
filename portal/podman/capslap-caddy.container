@@ -1,6 +1,6 @@
 # Caddy in front of the portal; it fetches and renews the HTTPS certificate.
 [Unit]
-Description=Caddy for the PyCapSlap review portal
+Description=Caddy for the Tekstitys review portal
 Requires=capslap-portal.service
 After=capslap-portal.service
 

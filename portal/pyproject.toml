@@ -1,7 +1,7 @@
 [project]
 name = "capslap-portal"
 version = "0.1.0"
-description = "Review portal for PyCapSlap renders: series, episodes, caption fixes and feedback"
+description = "Review portal for Tekstitys renders: series, episodes, caption fixes and feedback"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

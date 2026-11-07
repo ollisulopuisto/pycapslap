@@ -407,8 +407,8 @@ def cmd_workflow(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pycapslap",
-        description="PyCapSlap: Native video captioning, transcription, and render CLI/API.",
+        prog="tekstitys",
+        description="Tekstitys: Native video captioning, transcription, and render CLI/API.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 

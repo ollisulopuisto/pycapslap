@@ -85,7 +85,7 @@ const t = (key, ...args) => {
 }
 if (lang !== 'en') {
   document.documentElement.lang = lang
-  document.title = `${t('title')} · PyCapSlap`
+  document.title = `${t('title')} · Tekstitys`
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const text = STRINGS[lang][el.dataset.i18n]
     if (typeof text === 'string') el.textContent = text
