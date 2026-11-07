@@ -132,7 +132,7 @@ def test_a_review_of_other_captions_is_refused():
 
 def test_a_locked_file_hides_the_captions_and_opens_with_the_password():
     data = {"segments": [{"startMs": 0, "endMs": 1000, "text": "Salainen sää"}]}
-    locked = lock_file(data, "k7mq-x2fp", iterations=1000)
+    locked = lock_file(data, "k7mq-x2fp")
     assert is_locked(locked) and not is_locked(data)
     assert "Salainen" not in json.dumps(locked)
     assert unlock_file(locked, "k7mq-x2fp") == data
@@ -146,11 +146,32 @@ def test_opens_the_file_the_review_page_tests_open():
 
 
 def test_a_damaged_locked_file_is_not_a_wrong_password():
-    locked = lock_file({"segments": []}, "pw", iterations=1000)
+    locked = lock_file({"segments": []}, "pw")
     locked["iv"] = "not base64!"
     with pytest.raises(ValueError) as err:
         unlock_file(locked, "pw")
     assert not isinstance(err.value, WrongPassword)
+
+
+def test_unlock_rejects_invalid_format_kdf_or_iterations():
+    base = lock_file({"segments": []}, "pw")
+
+    for bad_it in [0, 599_999, 2_000_001, -1, "600000", True]:
+        bad = dict(base, iterations=bad_it)
+        with pytest.raises(ValueError, match="iterations"):
+            unlock_file(bad, "pw")
+
+    bad_fmt = dict(base, format="wrong")
+    with pytest.raises(ValueError, match="unsupported"):
+        unlock_file(bad_fmt, "pw")
+
+    bad_version = dict(base, formatVersion=2)
+    with pytest.raises(ValueError, match="unsupported"):
+        unlock_file(bad_version, "pw")
+
+    bad_kdf = dict(base, kdf="MD5")
+    with pytest.raises(ValueError, match="unsupported"):
+        unlock_file(bad_kdf, "pw")
 
 
 def test_new_passwords_are_readable_and_differ():

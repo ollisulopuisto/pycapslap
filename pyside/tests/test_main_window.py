@@ -778,7 +778,7 @@ def test_export_locks_the_file_and_the_reply_opens_with_the_same_password(
     # The client's reply comes back locked with the same password: no prompt.
     sent["segments"][0]["text"] = "Kyllä on sää"
     reply = tmp_path / "talk.mp4.reviewed.capslap.json"
-    reply.write_text(json.dumps(lock_file(sent, "k7mq-x2fp", iterations=1000)))
+    reply.write_text(json.dumps(lock_file(sent, "k7mq-x2fp")))
     monkeypatch.setattr(
         window,
         "_ask_import_password",
@@ -805,7 +805,6 @@ def test_import_asks_again_after_a_wrong_password(
             lock_file(
                 {"segments": [{"startMs": 0, "endMs": 2000, "text": "Kaksi"}]},
                 "oikea",
-                iterations=1000,
             )
         )
     )

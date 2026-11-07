@@ -31,7 +31,10 @@ REVIEW_FORMAT = "capslap-review"
 # Password-locked files: the whole captions file, AES-256-GCM with a key from
 # PBKDF2-SHA256. The review page reads and writes the same (review/lock.js).
 LOCKED_FORMAT = "capslap-locked"
+LOCKED_KDF = "PBKDF2-SHA256"
 LOCK_ITERATIONS = 600_000
+MIN_LOCK_ITERATIONS = LOCK_ITERATIONS
+MAX_LOCK_ITERATIONS = 2_000_000
 # No look-alikes (0/o, 1/l/i), so a password read out over the phone survives.
 _PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
@@ -87,17 +90,28 @@ def lock_file(
 def unlock_file(locked: dict[str, Any], password: str) -> dict[str, Any]:
     """The captions file inside `locked`. Raises WrongPassword."""
     try:
-        key = _key(
-            password, base64.b64decode(locked["salt"]), int(locked["iterations"])
-        )
+        if (
+            locked.get("format") != LOCKED_FORMAT
+            or locked.get("formatVersion") != 1
+            or locked.get("kdf") != LOCKED_KDF
+        ):
+            raise ValueError("unsupported locked file format, version, or kdf")
+        raw_iterations = locked["iterations"]
+        if not isinstance(raw_iterations, int) or isinstance(raw_iterations, bool):
+            raise ValueError("iterations must be an integer")
+        if not (MIN_LOCK_ITERATIONS <= raw_iterations <= MAX_LOCK_ITERATIONS):
+            raise ValueError(
+                f"iterations {raw_iterations} out of bounds ({MIN_LOCK_ITERATIONS}-{MAX_LOCK_ITERATIONS})"
+            )
+        key = _key(password, base64.b64decode(locked["salt"]), raw_iterations)
         plain = AESGCM(key).decrypt(
             base64.b64decode(locked["iv"]), base64.b64decode(locked["data"]), None
         )
+        data = json.loads(plain.decode("utf-8"))
     except (KeyError, TypeError, ValueError) as err:
         raise ValueError(f"damaged locked file ({err})") from err
     except InvalidTag as err:
         raise WrongPassword() from err
-    data = json.loads(plain.decode("utf-8"))
     if not isinstance(data, dict):
         raise ValueError("not a captions file")
     return data
