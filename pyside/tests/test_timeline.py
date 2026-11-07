@@ -35,6 +35,33 @@ def test_timeline_index_of_binary_search(qtbot):
     assert timeline._index_of(None) == -1
 
 
+def test_timeline_index_of_falls_back_for_unsorted_segments(qtbot):
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+    later = CaptionSegment(start_ms=5000, end_ms=6000, text="Later")
+    earlier = CaptionSegment(start_ms=1000, end_ms=2000, text="Earlier")
+    timeline.set_segments([later, earlier])
+
+    assert timeline._index_of(later) == 0
+    assert timeline._index_of(earlier) == 1
+
+
+def test_timeline_click_keeps_first_match_for_overlapping_segments(qtbot):
+    timeline = VisualTimelineWidget()
+    timeline.resize(1000, 80)
+    timeline.set_duration(10000)
+    qtbot.addWidget(timeline)
+    timeline.show()
+    first = CaptionSegment(start_ms=1000, end_ms=7000, text="First")
+    second = CaptionSegment(start_ms=3000, end_ms=5000, text="Second")
+    timeline.set_segments([first, second])
+
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+
+    assert timeline.selected_segment is first
+
+
 def test_timeline_initial_state(qtbot):
     parent = QWidget()
     timeline = VisualTimelineWidget(parent)
