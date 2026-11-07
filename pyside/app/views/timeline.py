@@ -102,6 +102,8 @@ class VisualTimelineWidget(QWidget):
         self.duration_ms: int = 0
         self.current_position_ms: int = 0
         self.segments: list[CaptionSegment] = []
+        self._segments_sorted = True
+        self._segments_non_overlapping = True
         self.selected_segment: CaptionSegment | None = None
         self._is_scrubbing: bool = False
         self.trim_start_ms = 0
@@ -226,6 +228,14 @@ class VisualTimelineWidget(QWidget):
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self.segments = list(segments)
+        self._segments_sorted = all(
+            previous.start_ms <= current.start_ms
+            for previous, current in zip(self.segments, self.segments[1:])
+        )
+        self._segments_non_overlapping = self._segments_sorted and all(
+            previous.end_ms <= current.start_ms
+            for previous, current in zip(self.segments, self.segments[1:])
+        )
         self._invalidate_static()
         self.update()
 
@@ -271,9 +281,22 @@ class VisualTimelineWidget(QWidget):
         return None
 
     def _index_of(self, seg: CaptionSegment) -> int:
-        for i, other in enumerate(self.segments):
-            if other is seg:
-                return i
+        """The index of `seg` in `self.segments`, or -1 if not found.
+
+        Sorted segment lists use bisect for O(log N) lookup. Unsorted sidecars
+        keep the original identity scan so lookup remains correct.
+        """
+        if not self.segments or seg is None:
+            return -1
+        if not self._segments_sorted:
+            return next(
+                (i for i, other in enumerate(self.segments) if other is seg), -1
+            )
+        idx = bisect.bisect_left(self.segments, seg.start_ms, key=lambda s: s.start_ms)
+        while idx < len(self.segments) and self.segments[idx].start_ms == seg.start_ms:
+            if self.segments[idx] is seg:
+                return idx
+            idx += 1
         return -1
 
     def _drag_cue_to(self, x: float) -> None:
@@ -368,11 +391,10 @@ class VisualTimelineWidget(QWidget):
             self.current_position_ms = target_ms
 
             # Check if clicked inside a segment
-            # Performance note: self.segments is sorted chronologically by start_ms.
-            # Using bisect_right achieves O(log N) lookup time instead of an O(N)
-            # linear scan across all segments (~17.5x faster at 1,000 cues).
+            # Use binary search only when ordering and non-overlap are known;
+            # unusual sidecars retain the original first-match behavior.
             clicked_seg = None
-            if self.segments:
+            if self._segments_non_overlapping:
                 idx = (
                     bisect.bisect_right(
                         self.segments, target_ms, key=lambda s: s.start_ms
@@ -383,6 +405,15 @@ class VisualTimelineWidget(QWidget):
                     cand = self.segments[idx]
                     if cand.start_ms <= target_ms <= cand.end_ms:
                         clicked_seg = cand
+            else:
+                clicked_seg = next(
+                    (
+                        seg
+                        for seg in self.segments
+                        if seg.start_ms <= target_ms <= seg.end_ms
+                    ),
+                    None,
+                )
 
             self.selected_segment = clicked_seg
             if clicked_seg:

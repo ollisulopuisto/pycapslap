@@ -5,6 +5,63 @@ from app.models.captions import CaptionSegment
 from app.views.timeline import MAX_ZOOM, VisualTimelineWidget
 
 
+def test_timeline_index_of_binary_search(qtbot):
+    """Verify O(log N) bisect segment index lookup handles empty, missing, boundaries, and duplicates."""
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+
+    # Empty segments
+    assert timeline._index_of(None) == -1
+    seg_dummy = CaptionSegment(start_ms=1000, end_ms=2000, text="Dummy")
+    assert timeline._index_of(seg_dummy) == -1
+
+    # Populated segments
+    seg1 = CaptionSegment(start_ms=1000, end_ms=2000, text="Seg 1")
+    seg2 = CaptionSegment(start_ms=3000, end_ms=4000, text="Seg 2")
+    seg3 = CaptionSegment(start_ms=3000, end_ms=5000, text="Seg 3 (duplicate start)")
+    seg4 = CaptionSegment(start_ms=6000, end_ms=7000, text="Seg 4")
+    timeline.set_segments([seg1, seg2, seg3, seg4])
+
+    assert timeline._index_of(seg1) == 0
+    assert timeline._index_of(seg2) == 1
+    assert timeline._index_of(seg3) == 2
+    assert timeline._index_of(seg4) == 3
+
+    # Segment not in list (even if start_ms matches an existing segment)
+    other_same_time = CaptionSegment(start_ms=3000, end_ms=4500, text="Other")
+    assert timeline._index_of(other_same_time) == -1
+    other_diff_time = CaptionSegment(start_ms=8000, end_ms=9000, text="Other 2")
+    assert timeline._index_of(other_diff_time) == -1
+    assert timeline._index_of(None) == -1
+
+
+def test_timeline_index_of_falls_back_for_unsorted_segments(qtbot):
+    timeline = VisualTimelineWidget()
+    qtbot.addWidget(timeline)
+    later = CaptionSegment(start_ms=5000, end_ms=6000, text="Later")
+    earlier = CaptionSegment(start_ms=1000, end_ms=2000, text="Earlier")
+    timeline.set_segments([later, earlier])
+
+    assert timeline._index_of(later) == 0
+    assert timeline._index_of(earlier) == 1
+
+
+def test_timeline_click_keeps_first_match_for_overlapping_segments(qtbot):
+    timeline = VisualTimelineWidget()
+    timeline.resize(1000, 80)
+    timeline.set_duration(10000)
+    qtbot.addWidget(timeline)
+    timeline.show()
+    first = CaptionSegment(start_ms=1000, end_ms=7000, text="First")
+    second = CaptionSegment(start_ms=3000, end_ms=5000, text="Second")
+    timeline.set_segments([first, second])
+
+    qtbot.mousePress(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+    qtbot.mouseRelease(timeline, Qt.MouseButton.LeftButton, pos=QPoint(400, 40))
+
+    assert timeline.selected_segment is first
+
+
 def test_timeline_initial_state(qtbot):
     parent = QWidget()
     timeline = VisualTimelineWidget(parent)
