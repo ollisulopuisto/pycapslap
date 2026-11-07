@@ -153,6 +153,23 @@ def test_a_damaged_locked_file_is_not_a_wrong_password():
     assert not isinstance(err.value, WrongPassword)
 
 
+def test_unlock_rejects_invalid_format_kdf_or_iterations():
+    base = lock_file({"segments": []}, "pw", iterations=1000)
+
+    for bad_it in [0, 999, 2_000_001, -1, "1000", True]:
+        bad = dict(base, iterations=bad_it)
+        with pytest.raises(ValueError, match="iterations"):
+            unlock_file(bad, "pw")
+
+    bad_fmt = dict(base, format="wrong")
+    with pytest.raises(ValueError, match="unsupported"):
+        unlock_file(bad_fmt, "pw")
+
+    bad_kdf = dict(base, kdf="MD5")
+    with pytest.raises(ValueError, match="unsupported"):
+        unlock_file(bad_kdf, "pw")
+
+
 def test_new_passwords_are_readable_and_differ():
     a, b = new_review_password(), new_review_password()
     assert a != b

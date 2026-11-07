@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-07 - Validate PBKDF2 Iteration Bounds and KDF Metadata
+**Vulnerability:** Encrypted review files unpack untrusted JSON payloads containing KDF parameters (`iterations`, `kdf`, `format`) directly into derivation routines. Without bounds checking, attackers can specify exorbitant iteration counts to trigger CPU-exhaustion denial of service or trivial iteration counts to downgrade password strength.
+**Learning:** Relying on user-controlled cryptographic parameters in container formats without server/client bounds validation exposes consumers to algorithmic complexity DoS and cryptographic downgrade attacks.
+**Prevention:** Constrain untrusted key derivation parameters to a strict, validated range (`MIN_ITERATIONS` to `MAX_ITERATIONS`) and verify that format and KDF algorithm identifiers match known, expected standards before initiating derivation.
+
 ## 2026-11-06 - Enforce Same-Origin Resolution on Client API Paths
 **Vulnerability:** Client API request dispatchers that concatenate base URLs with endpoint paths or accept dynamically resolved paths can route authenticated requests (including administrative Bearer tokens) to cross-origin or alternate-scheme destinations if paths are protocol-relative, absolute URLs, or have mismatched schemes.
 **Learning:** Naive URL concatenation (`base_url + path`) or unvalidated path resolutions permit cross-origin escapes or scheme mutations when paths are not checked against the client's configured base origin.
