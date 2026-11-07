@@ -1,6 +1,6 @@
 # Caption review page
 
-A static page for clients to check and correct captions made in PyCapSlap. No
+A static page for clients to check and correct captions made in Tekstitys. No
 build step, no dependencies, no server: open `index.html` from any static host
 (GitHub Pages publishes it from `main`, see `.github/workflows/review-page.yml`).
 

@@ -56,7 +56,7 @@ class CoreClient(QObject):
 
         # A PyInstaller-frozen build extracts/unpacks its bundled data next
         # to sys._MEIPASS (onefile) or next to the executable (onedir) —
-        # either way, `rust/...` was bundled at that root by pycapslap.spec.
+        # either way, `rust/...` was bundled at that root by tekstitys.spec.
         frozen_root = getattr(sys, "_MEIPASS", None)
         if frozen_root:
             possible_paths.append(
@@ -113,17 +113,24 @@ class CoreClient(QObject):
                 Path(__file__).resolve().parent / "services" / "orukeet_worker.py"
             )
         if sys.platform == "darwin":
-            cache_dir = Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
+            cache_dir = Path.home() / "Library" / "Caches" / "Tekstitys" / "orukeet"
+            if (
+                not cache_dir.exists()
+                and (
+                    Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
+                ).exists()
+            ):
+                cache_dir = Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
         elif os.name == "nt":
             cache_dir = (
                 Path(os.environ.get("LOCALAPPDATA", Path.home()))
-                / "PyCapSlap"
+                / "Tekstitys"
                 / "orukeet"
             )
         else:
             cache_dir = (
                 Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-                / "pycapslap"
+                / "tekstitys"
                 / "orukeet"
             )
         env["CAPSLAP_ORUKEET_CACHE"] = str(cache_dir)

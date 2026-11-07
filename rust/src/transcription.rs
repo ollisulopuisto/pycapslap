@@ -82,24 +82,31 @@ impl OrukeetWorker {
 }
 
 pub fn orukeet_installation_path() -> PathBuf {
-    let root = std::env::var_os("CAPSLAP_ORUKEET_CACHE")
+    let root = std::env::var_os("TEKSTITYS_ORUKEET_CACHE")
+        .or_else(|| std::env::var_os("CAPSLAP_ORUKEET_CACHE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             if cfg!(target_os = "macos") {
-                std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir)
-                    .join("Library/Caches/PyCapSlap/orukeet")
+                let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+                let p = home.join("Library/Caches/Tekstitys/orukeet");
+                let legacy = home.join("Library/Caches/PyCapSlap/orukeet");
+                if !p.exists() && legacy.exists() {
+                    legacy
+                } else {
+                    p
+                }
             } else if cfg!(target_os = "windows") {
                 std::env::var_os("LOCALAPPDATA")
                     .map(PathBuf::from)
                     .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
                     .unwrap_or_else(std::env::temp_dir)
-                    .join("PyCapSlap/orukeet")
+                    .join("Tekstitys/orukeet")
             } else {
                 std::env::var_os("XDG_CACHE_HOME")
                     .map(PathBuf::from)
                     .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
                     .unwrap_or_else(std::env::temp_dir)
-                    .join("pycapslap/orukeet")
+                    .join("tekstitys/orukeet")
             }
         });
     root.join("installation.json")

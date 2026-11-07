@@ -1,21 +1,21 @@
 # Videoiden hyväksyntä
 
-The PyCapSlap review portal.
+The Tekstitys review portal.
 
 A small server where clients watch the renders of their episodes, fix the
 captions and leave feedback, and where the editor collects both. It runs next
-to PyCapSlap: the app publishes a render with its captions, and imports what
+to Tekstitys: the app publishes a render with its captions, and imports what
 comes back.
 
 - **Series and episodes.** Every series has one secret link
   (`/s/<token>`). Whoever has it sees that series' episodes and nothing else.
   A new link can be made at any time; the old one stops working.
-- **An episode** lists its videos (the small proof renders PyCapSlap makes,
+- **An episode** lists its videos (the small proof renders Tekstitys makes,
   good for phones and for sharing), each with a player and a download button.
 - **Captions.** *Check captions* opens the caption review page on the video.
   The client fixes wording and timing and presses *Send*; the corrected file is
   stored as a new version. The editor downloads it from the admin page (or
-  the app fetches it) and imports it into PyCapSlap as is.
+  the app fetches it) and imports it into Tekstitys as is.
 - **Post texts.** Each video carries the text it goes out with on every
   service it is meant for (the editor ticks YouTube, TikTok, Instagram,
   Facebook, LinkedIn and X per video). The editor writes them on the admin

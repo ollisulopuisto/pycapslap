@@ -1,6 +1,6 @@
-# PyCapSlap CLI & Programmatic API Reference
+# Tekstitys CLI & Programmatic API Reference
 
-PyCapSlap provides a headless CLI and Python API designed for automation, scripts, and LLM / AI agents to drive video captioning workflows without GUI automation.
+Tekstitys provides a headless CLI and Python API designed for automation, scripts, and LLM / AI agents to drive video captioning workflows without GUI automation.
 
 ## Command-Line Interface (CLI)
 
@@ -9,21 +9,21 @@ The CLI supports inspecting media, transcribing audio, editing caption sidecars,
 In the macOS DMG build, run the bundled CLI directly:
 
 ```bash
-"/Applications/PyCapSlap.app/Contents/MacOS/PyCapSlapCLI" --help
+"/Applications/Tekstitys.app/Contents/MacOS/TekstitysCLI" --help
 ```
 
-For a source checkout, use `uv run pycapslap` from `pyside/` as shown below.
+For a source checkout, use `uv run tekstitys` from `pyside/` as shown below.
 
-### 1. Inspect Video & Captions (`pycapslap info`)
+### 1. Inspect Video & Captions (`tekstitys info`)
 
 Inspect video metadata and verify whether a `.capslap.json` sidecar exists:
 
 ```bash
 # Human-readable output
-uv run pycapslap info video.mp4
+uv run tekstitys info video.mp4
 
 # Machine-readable JSON output
-uv run pycapslap info video.mp4 --json
+uv run tekstitys info video.mp4 --json
 ```
 
 **JSON Output Format:**
@@ -53,12 +53,12 @@ uv run pycapslap info video.mp4 --json
 
 ---
 
-### 2. Transcribe Audio (`pycapslap transcribe`)
+### 2. Transcribe Audio (`tekstitys transcribe`)
 
 Transcribe a video's audio track locally using Whisper or Orukeet:
 
 ```bash
-uv run pycapslap transcribe video.mp4 \
+uv run tekstitys transcribe video.mp4 \
   --backend whisper \
   --model tiny \
   --preset justified \
@@ -81,19 +81,19 @@ uv run pycapslap transcribe video.mp4 \
 
 ---
 
-### 3. Edit & Patch Captions (`pycapslap edit`)
+### 3. Edit & Patch Captions (`tekstitys edit`)
 
 Manipulate caption sidecars non-destructively:
 
 ```bash
 # Apply a style preset and shift position
-uv run pycapslap edit video.mp4 --preset karaoke --position 80 --json
+uv run tekstitys edit video.mp4 --preset karaoke --position 80 --json
 
 # Replace text terms across all segments
-uv run pycapslap edit video.mp4 --replace "oldword=newword" --json
+uv run tekstitys edit video.mp4 --replace "oldword=newword" --json
 
 # Patch specific cues by index
-uv run pycapslap edit video.mp4 \
+uv run tekstitys edit video.mp4 \
   --patch-json '[{"index": 0, "text": "Corrected introductory sentence"}]' \
   --json
 ```
@@ -110,16 +110,16 @@ uv run pycapslap edit video.mp4 \
 - `--trim-start <ms>` / `--trim-end <ms>`: Adjust timeline trim marks.
 
 Trim values are timeline marks from the start of the source video. During render,
-PyCapSlap converts the saved end mark to the amount trimmed from the source's end.
+Tekstitys converts the saved end mark to the amount trimmed from the source's end.
 
 ---
 
-### 4. Burn & Render Export (`pycapslap render`)
+### 4. Burn & Render Export (`tekstitys render`)
 
 Render captioned videos with Apple VideoToolbox / hardware acceleration:
 
 ```bash
-uv run pycapslap render video.mp4 \
+uv run tekstitys render video.mp4 \
   --format 9:16 \
   --crop fill \
   --proof 720 \
@@ -138,12 +138,12 @@ uv run pycapslap render video.mp4 \
 
 ---
 
-### 5. Composite Workflow (`pycapslap workflow`)
+### 5. Composite Workflow (`tekstitys workflow`)
 
 Run the full end-to-end captioning workflow (transcribe -> clean/preset -> burn):
 
 ```bash
-uv run pycapslap workflow video.mp4 \
+uv run tekstitys workflow video.mp4 \
   --backend whisper \
   --model tiny \
   --preset oneliner \

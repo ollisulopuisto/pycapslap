@@ -6,7 +6,7 @@ import urllib.request
 from typing import Any
 
 # Wikimedia identifies clients by User-Agent and asks them to say who they are.
-USER_AGENT = "PyCapSlap-broll/0.1 (https://github.com/ollisulopuisto/pycapslap)"
+USER_AGENT = "Tekstitys-broll/0.1 (https://github.com/ollisulopuisto/tekstitys)"
 # Wikimedia answers 429 with Retry-After when a client is busy; three tries.
 ATTEMPTS = 3
 

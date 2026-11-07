@@ -25,7 +25,7 @@ def test_standard_mac_shortcuts_are_in_the_menus(qtbot):
         "Open Video…": QKeySequence.StandardKey.Open,
         "Save Project": QKeySequence.StandardKey.Save,
         "Close Window": QKeySequence.StandardKey.Close,
-        "Quit PyCapSlap": QKeySequence.StandardKey.Quit,
+        "Quit Tekstitys": QKeySequence.StandardKey.Quit,
         "Zoom In": QKeySequence.StandardKey.ZoomIn,
         "Zoom Out": QKeySequence.StandardKey.ZoomOut,
         "Transcription Settings…": QKeySequence.StandardKey.Preferences,

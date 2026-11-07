@@ -49,14 +49,20 @@ def _cache_dir() -> Path:
     if configured:
         return Path(configured)
     if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
+        cache_dir = Path.home() / "Library" / "Caches" / "Tekstitys" / "orukeet"
+        if (
+            not cache_dir.exists()
+            and (Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet").exists()
+        ):
+            return Path.home() / "Library" / "Caches" / "PyCapSlap" / "orukeet"
+        return cache_dir
     if os.name == "nt":
         return (
-            Path(os.environ.get("LOCALAPPDATA", Path.home())) / "PyCapSlap" / "orukeet"
+            Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Tekstitys" / "orukeet"
         )
     return (
         Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-        / "pycapslap"
+        / "tekstitys"
         / "orukeet"
     )
 

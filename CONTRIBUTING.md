@@ -3,7 +3,7 @@
 ## Good first contribution: Windows / Linux packaged builds
 
 `.github/workflows/release.yml` currently only builds and releases a macOS
-(Apple Silicon) `PyCapSlap.dmg`. Windows and Linux aren't built at all. If
+(Apple Silicon) `Tekstitys.dmg`. Windows and Linux aren't built at all. If
 you want to take this on:
 
 **What exists already:**
@@ -12,7 +12,7 @@ you want to take this on:
 - `scripts/download-binaries.sh` has `download_windows()`/`download_linux()`
   functions already stubbed in, but unused and untested — the macOS path
   (`download_macos()`) is the one that's actually been exercised.
-- `pyside/pycapslap.spec` (PyInstaller) bundles `rust/target/release/core`,
+- `pyside/tekstitys.spec` (PyInstaller) bundles `rust/target/release/core`,
   the Orukeet worker, `rust/bin/` (ffmpeg/ffprobe + runtime libs), and
   `rust/src/fonts/` — the same shape should carry over per platform, but the
   macOS-specific bits (`.icns` icon, `BUNDLE(...)` producing a `.app`) need
@@ -112,7 +112,7 @@ answers, and it mirrors the renderer's own font-size formula.
 The release workflow builds tags named `vYY.MM.DD.N` (the calendar version
 format documented in CHANGELOG.md). `scripts/bundle_version.py` uses that
 exact tag for both `CFBundleShortVersionString` and `CFBundleVersion` in
-`pyside/pycapslap.spec`; non-tag builds use the first released changelog
+`pyside/tekstitys.spec`; non-tag builds use the first released changelog
 heading. Invalid release tags fail before packaging instead of silently
 shipping `0.0.0`. The Python package's `0.1.0` is not the release identifier.
 

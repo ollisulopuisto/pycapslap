@@ -1,5 +1,5 @@
 // The editor's side: series and their secret links, episodes, videos, every
-// captions version (to import into PyCapSlap) and all feedback.
+// captions version (to import into Tekstitys) and all feedback.
 
 import { h } from './dom.js'
 import { PLATFORMS } from './platforms.js'
@@ -259,7 +259,7 @@ function episodeBlock(seriesId, e) {
             )
           )
         )
-      : h('p', { class: 'muted' }, 'No videos. Publish one from PyCapSlap, or upload below.'),
+      : h('p', { class: 'muted' }, 'No videos. Publish one from Tekstitys, or upload below.'),
     e.videos.map((v) => postsBlock(v)),
     uploadForm(e.id, refresh),
     h('h3', { style: 'margin-top:12px' }, `Feedback (${e.feedback.length})`),

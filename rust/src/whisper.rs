@@ -33,26 +33,32 @@ fn model_filename(model: &str) -> Result<&'static str> {
 }
 
 fn model_dir() -> PathBuf {
-    if let Some(path) = std::env::var_os("CAPSLAP_WHISPER_MODELS") {
+    if let Some(path) = std::env::var_os("TEKSTITYS_WHISPER_MODELS").or_else(|| std::env::var_os("CAPSLAP_WHISPER_MODELS")) {
         return PathBuf::from(path);
     }
     #[cfg(target_os = "macos")]
-    let root = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Library/Application Support/PyCapSlap/whisper");
+    let root = {
+        let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let p = home.join("Library/Application Support/Tekstitys/whisper");
+        let legacy = home.join("Library/Application Support/PyCapSlap/whisper");
+        if !p.exists() && legacy.exists() {
+            legacy
+        } else {
+            p
+        }
+    };
     #[cfg(target_os = "windows")]
     let root = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("PyCapSlap/whisper");
+        .join("Tekstitys/whisper");
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let root = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))
         .unwrap_or_else(std::env::temp_dir)
-        .join("pycapslap/whisper");
+        .join("tekstitys/whisper");
     root
 }
 
@@ -136,7 +142,7 @@ fn whisper_binary() -> Result<PathBuf> {
     }
     candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin/whisper-cli-macos-arm64"));
     candidates.into_iter().find(|path| path.is_file()).ok_or_else(|| {
-        anyhow!("The Whisper CLI is missing. Reinstall PyCapSlap or rebuild its bundled whisper.cpp runtime.")
+        anyhow!("The Whisper CLI is missing. Reinstall Tekstitys or rebuild its bundled whisper.cpp runtime.")
     })
 }
 

@@ -1,5 +1,5 @@
 """The portal's web app: a client side reached by a series' secret link, and an
-editor side (admin page and the PyCapSlap app) behind one admin token.
+editor side (admin page and the Tekstitys app) behind one admin token.
 
 Clients:  /s/<token>              the series' episodes
           /s/<token>/e/<id>       an episode's videos, caption check, feedback
@@ -719,7 +719,7 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/api/admin/videos/{video_id}/captions", dependencies=A)
     def admin_get_captions(video_id: int, version: int | None = None, c=Depends(conn)):
-        """The newest captions (or one version) as a file PyCapSlap imports as is."""
+        """The newest captions (or one version) as a file Tekstitys imports as is."""
         v = _row(
             c.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone(),
             "video",

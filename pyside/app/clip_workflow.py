@@ -13,8 +13,8 @@ from urllib.parse import unquote, urlparse
 
 def render_clips(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        prog="pycapslap clips",
-        description="Render timecoded vertical clips, then open them in PyCapSlap.",
+        prog="tekstitys clips",
+        description="Render timecoded vertical clips, then open them in Tekstitys.",
     )
     parser.add_argument("video", help="local video path or file:// URL")
     parser.add_argument("--cuts", required=True, help="CSV with name,start,end columns")
@@ -56,7 +56,7 @@ def render_clips(argv: list[str]) -> int:
     )
     if not executable:
         print(
-            "PyCapSlap clips needs autoraffkat on PATH. Install autoraffkat or pass "
+            "Tekstitys clips needs autoraffkat on PATH. Install autoraffkat or pass "
             "--autoraffkat /path/to/autoraffkat.",
             file=sys.stderr,
         )

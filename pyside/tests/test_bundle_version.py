@@ -86,7 +86,7 @@ class BundleVersionTests(unittest.TestCase):
                 {"GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v26.10.30.2"},
             ),
         ):
-            runpy.run_path(str(ROOT / "pyside" / "pycapslap.spec"), globals_)
+            runpy.run_path(str(ROOT / "pyside" / "tekstitys.spec"), globals_)
         self.assertEqual(len(bundle_calls), 1)
         self.assertEqual(bundle_calls[0]["version"], "26.10.30.2")
         plist = bundle_calls[0]["info_plist"]

@@ -18,11 +18,11 @@ from app.views.main_window import MainWindow
 
 
 def ensure_macos_app_name() -> bool:
-    """Ensure the process name shown in macOS Dock, Menu Bar, and Cmd+Tab is PyCapSlap.
+    """Ensure the process name shown in macOS Dock, Menu Bar, and Cmd+Tab is Tekstitys.
 
     On macOS, unbundled processes display the executable binary basename in the
-    Task Switcher (Cmd+Tab) and Dock. By ensuring a Mach-O executable named 'PyCapSlap'
-    exists and executing it, macOS registers the process under the name 'PyCapSlap'.
+    Task Switcher (Cmd+Tab) and Dock. By ensuring a Mach-O executable named 'Tekstitys'
+    exists and executing it, macOS registers the process under the name 'Tekstitys'.
     """
     if sys.platform != "darwin":
         return False
@@ -31,18 +31,20 @@ def ensure_macos_app_name() -> bool:
         return False
 
     if (
-        os.environ.get("PYCAPSLAP_REEXECED") == "1"
+        os.environ.get("TEKSTITYS_REEXECED") == "1"
+        or os.environ.get("TEKSTITYS_NO_REEXEC") == "1"
+        or os.environ.get("PYCAPSLAP_REEXECED") == "1"
         or os.environ.get("PYCAPSLAP_NO_REEXEC") == "1"
     ):
         return False
 
-    if os.path.basename(sys.executable) == "PyCapSlap":
+    if os.path.basename(sys.executable) == "Tekstitys":
         return False
 
     try:
         real_py = os.path.realpath(sys.executable)
         real_bin_dir = os.path.dirname(real_py)
-        toolchain_bin = os.path.join(real_bin_dir, "PyCapSlap")
+        toolchain_bin = os.path.join(real_bin_dir, "Tekstitys")
 
         if not os.path.exists(toolchain_bin):
             try:
@@ -52,31 +54,31 @@ def ensure_macos_app_name() -> bool:
                 os.chmod(toolchain_bin, 0o755)
 
         # On macOS (APFS/HFS+), filesystems are usually case-insensitive.
-        # Placing 'PyCapSlap' in .venv/bin would collide with the 'pycapslap' script.
-        # Instead, we place the symlink in .venv/MacOS/PyCapSlap, where Python
+        # Placing 'Tekstitys' in .venv/bin would collide with the 'tekstitys' script.
+        # Instead, we place the symlink in .venv/MacOS/Tekstitys, where Python
         # discovers .venv/pyvenv.cfg automatically (via grandparent directory).
         venv_root = Path(sys.prefix)
         venv_macos = venv_root / "MacOS"
         venv_macos.mkdir(parents=True, exist_ok=True)
-        venv_pycapslap = venv_macos / "PyCapSlap"
+        venv_tekstitys = venv_macos / "Tekstitys"
         try:
             # A stale link (e.g. left by a test's temp dir) must be replaced, or
             # the re-exec falls back to a Python outside the venv.
             if (
-                venv_pycapslap.is_symlink()
-                and os.readlink(venv_pycapslap) != toolchain_bin
+                venv_tekstitys.is_symlink()
+                and os.readlink(venv_tekstitys) != toolchain_bin
             ):
-                venv_pycapslap.unlink()
-            if not venv_pycapslap.exists():
-                os.symlink(toolchain_bin, str(venv_pycapslap))
+                venv_tekstitys.unlink()
+            if not venv_tekstitys.exists():
+                os.symlink(toolchain_bin, str(venv_tekstitys))
         except OSError:
             pass
 
-        target_bin = str(venv_pycapslap) if venv_pycapslap.exists() else toolchain_bin
+        target_bin = str(venv_tekstitys) if venv_tekstitys.exists() else toolchain_bin
         main_script = str(Path(__file__).resolve())
         args = [target_bin, main_script] + sys.argv[1:]
         env = os.environ.copy()
-        env["PYCAPSLAP_REEXECED"] = "1"
+        env["TEKSTITYS_REEXECED"] = "1"
         if str(pyside_dir) not in env.get("PYTHONPATH", ""):
             existing_pythonpath = env.get("PYTHONPATH")
             env["PYTHONPATH"] = (
@@ -89,7 +91,7 @@ def ensure_macos_app_name() -> bool:
         os.execve(target_bin, args, env)
         return True
     except Exception as e:
-        logger.warning("Could not set macOS process name to PyCapSlap: %s", e)
+        logger.warning("Could not set macOS process name to Tekstitys: %s", e)
         return False
 
 
@@ -109,9 +111,9 @@ def main():
     ensure_macos_app_name()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("PyCapSlap")
-    app.setApplicationDisplayName("PyCapSlap")
-    app.setOrganizationName("PyCapSlap")
+    app.setApplicationName("Tekstitys")
+    app.setApplicationDisplayName("Tekstitys")
+    app.setOrganizationName("Tekstitys")
     # Stylesheets resolve the default font's family; when it is the missing
     # "Sans Serif" alias Qt spends ~300 ms building its alias table on the
     # first styled widget. A family that exists skips that.

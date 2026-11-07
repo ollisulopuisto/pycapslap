@@ -1,4 +1,4 @@
-# PyInstaller spec for PyCapSlap.
+# PyInstaller spec for Tekstitys.
 #
 # Bundles the PySide6 app together with the Rust core binary and its own
 # runtime dependencies (ffmpeg/ffprobe, local Orukeet worker, bundled fonts) so
@@ -9,9 +9,9 @@
 #
 # Build (from the pyside/ directory, after `cargo build --release` in
 # rust/ has produced rust/target/release/core):
-#   uv tool run pyinstaller pycapslap.spec --noconfirm
+#   uv tool run pyinstaller tekstitys.spec --noconfirm
 #
-# Output: dist/PyCapSlap.app (macOS) — a plain onedir bundle is used
+# Output: dist/Tekstitys.app (macOS) — a plain onedir bundle is used
 # (not --onefile) so startup doesn't pay a self-extraction cost every launch.
 
 import runpy
@@ -140,7 +140,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="PyCapSlap",
+    name="Tekstitys",
     debug=False,
     strip=False,
     upx=False,
@@ -155,7 +155,7 @@ cli_exe = EXE(
     cli_analysis.scripts,
     [],
     exclude_binaries=True,
-    name="PyCapSlapCLI",
+    name="TekstitysCLI",
     debug=False,
     strip=False,
     upx=False,
@@ -171,19 +171,19 @@ coll = COLLECT(
     a.datas + cli_analysis.datas,
     strip=False,
     upx=False,
-    name="PyCapSlap",
+    name="Tekstitys",
 )
 
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name="PyCapSlap.app",
+        name="Tekstitys.app",
         icon=str(pyside_dir / "app" / "resources" / "icon.icns"),
-        bundle_identifier="com.pycapslap.app",
+        bundle_identifier="com.tekstitys.app",
         version=bundle_version,
         info_plist={
-            "CFBundleName": "PyCapSlap",
-            "CFBundleDisplayName": "PyCapSlap",
+            "CFBundleName": "Tekstitys",
+            "CFBundleDisplayName": "Tekstitys",
             "CFBundleShortVersionString": bundle_version,
             "CFBundleVersion": bundle_version,
             # This is a foreground GUI app. PyInstaller's generated default

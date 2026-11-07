@@ -7,6 +7,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.07.284] - 2026-11-07
+
+### Changed
+- Renamed project from PyCapSlap to Tekstitys across app bundles, identifiers, workflows, documentation, and CLI entry points.
+
 ## [v26.11.05.4] - 2026-11-05
 
 ### Fixed
