@@ -33,7 +33,7 @@ REVIEW_FORMAT = "capslap-review"
 LOCKED_FORMAT = "capslap-locked"
 LOCKED_KDF = "PBKDF2-SHA256"
 LOCK_ITERATIONS = 600_000
-MIN_LOCK_ITERATIONS = 1_000
+MIN_LOCK_ITERATIONS = LOCK_ITERATIONS
 MAX_LOCK_ITERATIONS = 2_000_000
 # No look-alikes (0/o, 1/l/i), so a password read out over the phone survives.
 _PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
@@ -90,8 +90,12 @@ def lock_file(
 def unlock_file(locked: dict[str, Any], password: str) -> dict[str, Any]:
     """The captions file inside `locked`. Raises WrongPassword."""
     try:
-        if locked.get("format") != LOCKED_FORMAT or locked.get("kdf") != LOCKED_KDF:
-            raise ValueError("unsupported locked file format or kdf")
+        if (
+            locked.get("format") != LOCKED_FORMAT
+            or locked.get("formatVersion") != 1
+            or locked.get("kdf") != LOCKED_KDF
+        ):
+            raise ValueError("unsupported locked file format, version, or kdf")
         raw_iterations = locked["iterations"]
         if not isinstance(raw_iterations, int) or isinstance(raw_iterations, bool):
             raise ValueError("iterations must be an integer")

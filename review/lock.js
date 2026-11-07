@@ -6,7 +6,7 @@
 export const LOCKED_FORMAT = 'capslap-locked'
 export const LOCKED_KDF = 'PBKDF2-SHA256'
 export const ITERATIONS = 600000
-export const MIN_ITERATIONS = 1000
+export const MIN_ITERATIONS = ITERATIONS
 export const MAX_ITERATIONS = 2000000
 
 const subtle = globalThis.crypto.subtle
@@ -49,11 +49,11 @@ export async function deriveKey(password, salt, iterations = ITERATIONS) {
  * key from an earlier unlock is used as is when the file was locked with it.
  */
 export async function unlock(locked, password, known = null) {
-  if (locked?.format !== LOCKED_FORMAT || locked?.kdf !== LOCKED_KDF) {
-    throw new Error('Unsupported locked file format or kdf.')
+  if (locked?.format !== LOCKED_FORMAT || locked?.formatVersion !== 1 || locked?.kdf !== LOCKED_KDF) {
+    throw new Error('Unsupported locked file format, version, or kdf.')
   }
-  const iterations = Number(locked.iterations)
-  if (!Number.isInteger(iterations) || iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
+  const iterations = locked.iterations
+  if (!Number.isSafeInteger(iterations) || iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
     throw new Error(`Iterations out of bounds (${MIN_ITERATIONS}-${MAX_ITERATIONS}).`)
   }
   const salt = fromBase64(locked.salt)

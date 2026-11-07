@@ -47,8 +47,10 @@ test('plain captions are not locked', () => {
 test('rejects invalid format, kdf or iterations', async () => {
   const base = await fromApp()
   await assert.rejects(unlock({ ...base, format: 'invalid' }, PASSWORD), /Unsupported locked file/)
+  await assert.rejects(unlock({ ...base, formatVersion: 2 }, PASSWORD), /Unsupported locked file/)
   await assert.rejects(unlock({ ...base, kdf: 'PBKDF2-MD5' }, PASSWORD), /Unsupported locked file/)
-  await assert.rejects(unlock({ ...base, iterations: 999 }, PASSWORD), /Iterations out of bounds/)
+  await assert.rejects(unlock({ ...base, iterations: 599999 }, PASSWORD), /Iterations out of bounds/)
   await assert.rejects(unlock({ ...base, iterations: 2000001 }, PASSWORD), /Iterations out of bounds/)
+  await assert.rejects(unlock({ ...base, iterations: '600000' }, PASSWORD), /Iterations out of bounds/)
   await assert.rejects(unlock({ ...base, iterations: 'bad' }, PASSWORD), /Iterations out of bounds/)
 })
