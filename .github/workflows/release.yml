@@ -93,12 +93,10 @@ jobs:
           cert="$RUNNER_TEMP/build_certificate.p12"
           keychain="$RUNNER_TEMP/app-signing.keychain-db"
           echo -n "$BUILD_CERTIFICATE_BASE64" | base64 -D -o "$cert"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security import "$cert" -P "$P12_PASSWORD" -T /usr/bin/codesign -f pkcs12 -k "$keychain"
+          export KEYCHAIN_PATH="$keychain" CERTIFICATE_PATH="$cert"
+          export KEYCHAIN_PASSWORD="$KEYCHAIN_PASSWORD" P12_PASSWORD="$P12_PASSWORD"
+          python3 scripts/macos_ci_credentials.py import-certificate
           rm -f "$cert"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
           security find-identity -v -p codesigning "$keychain"
 
@@ -136,10 +134,11 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
+          export KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          export APPLE_TEAM_ID="${APPLE_TEAM_ID:-LWSR8T5392}"
+          python3 "$GITHUB_WORKSPACE/scripts/macos_ci_credentials.py" store-notary-credentials
           xcrun notarytool submit Tekstitys-macos-arm64.dmg \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --team-id "LWSR8T5392" \
+            --keychain-profile ci-notary --keychain "$KEYCHAIN_PATH" \
             --wait
           xcrun stapler staple Tekstitys-macos-arm64.dmg
           xcrun stapler validate Tekstitys-macos-arm64.dmg
