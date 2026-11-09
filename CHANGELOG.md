@@ -7,6 +7,26 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+## [v26.11.09.1] - 2026-11-09
+
+### Fixed
+- **Transcription works again in signed macOS builds.** Since v26.11.05.1 the
+  release was signed with Hardened Runtime but no entitlements, which broke
+  both local transcription backends: dyld stripped the `DYLD_LIBRARY_PATH`
+  the Whisper CLI needs to find its bundled ggml libraries, and library
+  validation stopped the Orukeet worker from loading the downloaded
+  NeMo-Speech runtime. The signing step now applies an entitlements file
+  (`com.apple.security.cs.allow-dyld-environment-variables` and
+  `com.apple.security.cs.disable-library-validation`), and the smoke tests
+  run again after signing so this cannot ship silently.
+- **Whisper no longer aborts mid-transcription on Metal.** The bundled
+  whisper.cpp enables flash attention by default; its Metal flash-attention
+  path asserts (GGML_ASSERT, mask padding) under beam search. The core now
+  passes `--no-flash-attn`.
+- **Orukeet worker crashes now report their actual error.** The core keeps
+  the worker's last stderr lines and includes them in the failure message
+  instead of a bare exit status.
+
 ## [v26.11.07.284] - 2026-11-07
 
 ### Changed

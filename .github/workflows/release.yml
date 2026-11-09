@@ -106,16 +106,39 @@ jobs:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Olli Sulopuisto (LWSR8T5392)"
         run: |
           set -euo pipefail
+          # scripts/entitlements.plist grants the Hardened Runtime exceptions
+          # the bundled helpers need: whisper-cli is launched with
+          # DYLD_LIBRARY_PATH (stripped in restricted mode otherwise) and the
+          # Orukeet worker dlopens the user-downloaded NeMo-Speech runtime
+          # (rejected by default library validation otherwise).
+          ENTITLEMENTS="$GITHUB_WORKSPACE/scripts/entitlements.plist"
           # Sign nested Mach-O files first (deepest paths first), then the bundle itself.
           find Tekstitys.app -type f -print0 | while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
               printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
             fi
           done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
-            codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGNING_IDENTITY" "$f"
           done
-          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
+          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
           codesign --verify --deep --strict --verbose=2 Tekstitys.app
+
+      - name: Smoke-test the signed app
+        # The pre-signing smoke tests above pass even when the Hardened
+        # Runtime configuration breaks the helpers: only the signed binaries
+        # run in dyld restricted mode. Re-run them after signing so a missing
+        # entitlement fails the build instead of shipping.
+        run: |
+          set -euo pipefail
+          CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
+          echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
+          CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
+          "$CLI" --help >/dev/null
+          # whisper-cli must still find its bundled ggml dylibs when launched
+          # the way the core launches it (DYLD_LIBRARY_PATH + restricted mode).
+          WHISPER="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
+          LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
+          DYLD_LIBRARY_PATH="$LIBS" "$WHISPER" --help >/dev/null
 
       - name: Create macOS disk image
         working-directory: pyside/dist

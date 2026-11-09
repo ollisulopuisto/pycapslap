@@ -1,7 +1,9 @@
 use crate::rpc::RpcEvent;
 use crate::types::{CaptionSegment, TranscribeSegmentsParams, TranscribeSegmentsResult};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, OnceCell};
@@ -12,6 +14,7 @@ struct OrukeetWorker {
     child: Child,
     input: ChildStdin,
     output: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    stderr_tail: Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
 impl OrukeetWorker {
@@ -43,15 +46,28 @@ impl OrukeetWorker {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("Orukeet worker has no stdout"))?;
-        if let Some(mut stderr) = child.stderr.take() {
+        // Keep the worker's last stderr lines so a crash (e.g. Gatekeeper or
+        // dyld refusing a library) surfaces its actual message instead of a
+        // bare exit status.
+        let stderr_tail = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        if let Some(stderr) = child.stderr.take() {
+            let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
-                let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+                let mut lines = tokio::io::BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let mut tail = tail.lock().unwrap();
+                    if tail.len() >= 12 {
+                        tail.pop_front();
+                    }
+                    tail.push_back(line.chars().take(500).collect::<String>());
+                }
             });
         }
         Ok(Self {
             child,
             input,
             output: tokio::io::BufReader::new(stdout).lines(),
+            stderr_tail,
         })
     }
 
@@ -64,7 +80,13 @@ impl OrukeetWorker {
         let response = loop {
             let Some(line) = self.output.next_line().await? else {
                 let status = self.child.try_wait()?;
-                anyhow::bail!("Orukeet worker exited (status: {status:?})");
+                let tail = self.stderr_tail.lock().unwrap();
+                let details = tail.iter().cloned().collect::<Vec<_>>().join("\n");
+                drop(tail);
+                if details.is_empty() {
+                    anyhow::bail!("Orukeet worker exited (status: {status:?})");
+                }
+                anyhow::bail!("Orukeet worker exited (status: {status:?}):\n{details}");
             };
             let response: serde_json::Value = serde_json::from_str(&line)?;
             if response.get("id").and_then(|v| v.as_str()) == Some(request_id.as_str()) {
