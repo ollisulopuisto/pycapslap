@@ -1,132 +1,156 @@
-# Tekstitys ⚡
+# Tekstitys
 
-**Tekstitys** is a high-performance native desktop video caption generator and subtitle editor. It transcribes audio locally with Orukeet or whisper.cpp, creates timed caption segments, lets you edit placement and styling, and burns captions into exports across social aspect ratios.
+Tekstitys is a desktop caption editor for video. Transcribe audio on your own
+computer, correct words and timing, style captions over a video preview, and
+export a video with the captions burned in. Projects use a `.capslap.json`
+sidecar beside the source video, so editing captions does not overwrite the
+original footage.
 
-**Local by default.** Orukeet's Q8 model and native runtime are downloaded and verified once. Whisper models can also be downloaded from Transcription Settings. Audio is processed on your computer; transcription works offline after setup.
+The desktop app uses Python/PySide6 for the editor and a Rust core for media and
+caption processing. The repository also contains a browser caption-review page
+and an optional self-hosted review portal.
 
-The bundled macOS app currently requires macOS 15 or later.
+## Install on a Mac
 
----
+Packaged releases target **Apple Silicon and macOS 15 or later**. Windows and Linux
+packaged apps are not currently provided; the export encoder uses Apple's
+VideoToolbox. See [CONTRIBUTING.md](CONTRIBUTING.md) for portability work.
 
-## 🛠️ Architecture
+1. Open this repository's [Releases](../../releases) and download `Tekstitys.dmg`
+   from the release you want.
+2. Open it and copy Tekstitys to Applications.
+3. Open a video. Use **Transcription Settings** to install/verify the selected
+   local model and runtime before the first transcription.
+4. Transcribe, check the cue text and timing, choose a style, then render.
 
-Tekstitys is a native PySide6 (Qt 6) desktop application powered by a Rust core engine.
+Orukeet and whisper.cpp run locally after their downloads are installed. Setup
+needs a network connection and enough disk space for the chosen model. Review
+transcriptions before export, especially names, numbers and punctuation.
 
-* **Unified Hardware Canvas**: Native `QVideoSink` surface renders video frames and active caption overlays in a single hardware-accelerated pass.
-* **Non-blocking IPC**: Bi-directional asynchronous JSON-RPC streaming between Python and the Rust binary prevents UI stuttering under heavy transcription or encoding workloads.
-* **Direct Project Root Execution**: Managed seamlessly with [`uv`](https://github.com/astral-sh/uv) workspace orchestration.
+## Editing and export
 
----
+- **Two transcription backends:** Orukeet with its verified Q8 model/runtime,
+  including verbatim or edited output, and whisper.cpp with selectable models.
+- **Cue editing:** text and timecode editing, keyboard timing nudges, shifting
+  words between neighbouring cues, syllable repair and orphan-line cleanup.
+  Optional libvoikko support adds Finnish spelling suggestions.
+- **Preview and placement:** drag captions on the video, adjust their vertical
+  anchor, view platform safe areas and use activity-based Auto Dodge placement.
+  The preview uses the core's caption layout instead of separate line breaking.
+- **Styles:** bundled fonts, saved show presets, uppercase/karaoke styling and
+  a justified two-line layout that sizes each line to the caption box.
+- **Trim and render:** timeline handles or I/O marks set the cut. Render 9:16,
+  1:1, 4:5 or 16:9, with fit/crop choices and an optional smaller proof copy.
+  Logo overlays and intro/outro clips are supported.
+- **Audio episodes:** the B-roll Reel dialog can search public media sources,
+  let you accept or reject assets and render a vertical reel with credits.
+  Check each source's licence and attribution before publishing.
+- **Automation:** `info`, `transcribe`, `edit`, `render` and `workflow` commands
+  expose JSON results and NDJSON progress. See the [CLI/API reference](docs/api.md).
 
-## ✨ Key Features
+## Client review
 
-* 🎙️ **Local transcription with Orukeet or Whisper**: Choose either Orukeet's verified Q8 model and native runtime or whisper.cpp from the caption panel. Orukeet is selected by default and offers **Verbatim** to keep filler words and repetitions or **Edited** for a cleaner transcript. Whisper uses its standard output and selectable local models; download a model from **Transcription Settings**. Both backends run offline after setup.
-* 🧩 **Smart Syllable Logic & Word Preservation**:
-  * **Automatic Syllable Re-gluing**: Detects and merges broken syllables (`sep-` + `a-` + `rat-` + `ed` → `separated`) both within cues and across segment boundaries.
-  * **Atomic Word Protection**: Guarantees that compound words or hyphenated phrases never get cut in half across line breaks or subtitle screens.
-  * **Manual Word Shifting**: Instant `◀ Shift Start` and `Shift End ▶` buttons to shift words between adjacent cues without typing — a shifted syllable joins the word it belongs to instead of landing next to it.
-  * **Finnish Spell Check** (optional): with [libvoikko](https://voikko.puimula.org/) installed, unknown words are underlined in the cue table and right-click offers corrections. Syllables split on purpose are left alone.
-* ⏱️ **Cue Timing You Can Edit**:
-  * Type timecodes straight into the Start/End columns (`mm:ss.t`), clamped to the neighbouring cues, with word timings scaled to match.
-  * `Alt`+`←`/`→` nudges the start, `Alt`+`Shift`+`←`/`→` the end, `Alt`+`Ctrl`+`←`/`→` the whole cue.
-* ✂️ **Trimming**: drag the blue handles on the timeline, or stop playback on the frame you want and press `I` (start) or `O` (end), or click the I and O buttons next to Stop. **Stop** returns to the trim's start and playback stops at its end, so checking the cut is one click.
-  * Delete a cue emptied by shifting its words away; its time goes to the cue that took them.
-* 🔤 **Hierarchical Typography System**:
-  * Organized font menus categorized into **Modern / Sans**, **Display / Impact**, **Fun / Comic**, **Serif / Elegant**, and **Handwritten / Script**.
-  * Bundled with creator-favorite fonts: Montserrat, Komika Axis, THE BOLD FONT, Roboto, Bebas Neue, Bangers, and more.
-* 🎨 **Custom Show Style Presets**:
-  * Save custom typography, font sizes, colors, and karaoke highlight styling permanently per show or podcast.
-  * Fast dropdown switcher to recall styles for different projects instantly.
-  * **Justified two-line style**: both lines flush to the same width, each sized to fill it, so a short line renders large and a long one small — measured against the real font, not guessed.
-* 👁️ **What You See Is What Gets Burned**: the on-video preview draws the layout the renderer produces — the same line breaks, font sizes, uppercasing and placement that end up in the export, rather than a second guess at them.
-* 🎯 **Interactive Timeline & Auto-Dodge**:
-  * Real-time drag-and-drop vertical subtitle positioning on video canvas.
-  * Automated computer-vision activity detection ("Auto Dodge") to avoid obscuring faces or high-motion areas.
-* ✅ **Client Review**: send the captions to a client, who checks and corrects them in their browser on the [review page](https://ollisulopuisto.github.io/tekstitys/) and sends the file back.
-  * **Client Review → Export for Review…** saves a `.review.capslap.json`, locked with a password it offers to generate. Send the file with the video (a smaller preview is fine), and the password another way, such as a text message. The page is public, but a locked file is useless without the password; share the video through a link that needs a login or a password.
-  * The client opens both on the page, watches the video with the captions on it, fixes wording or timing, leaves comments, and downloads the reviewed file, locked with the same password. Nothing is uploaded; a half-done review survives a closed tab, locked too.
-  * **Client Review → Import Reviewed Captions…** applies their fixes cue by cue (word timings are rebuilt from yours, style and positions stay) and lists their comments. Save, render.
-* 🗂️ **Review portal** ([`portal/`](portal/README.md)): a small server of your own where clients see their series and episodes through one secret link per series, play and download the proof renders, check the captions on the review page and send the fixes straight back, and leave free-form feedback, optionally pinned to a moment in a video.
-  * **Client Review → Publish to Portal…** uploads the latest render (its proof copy, by default) and the captions into a series and episode, made when new, and copies the episode's link.
-  * **Client Review → Import from Portal** fetches the newest captions for this video, with the client's corrections, and applies them like an imported review. The admin page (`/admin`) lists every captions version and all feedback.
-* 💾 **Non-destructive Sidecar Storage**:
-  * Projects are automatically saved as lightweight `.capslap.json` sidecar files next to your source video.
-* 🖼️ **B-roll reel for audio episodes**: **B-roll Reel…** finds Creative Commons pictures and footage on Wikimedia Commons, Openverse, the Internet Archive and NASA for each stretch of the transcript, you accept or reject each, and it builds a 9:16 reel with credits on screen, a credits card at the end and a credits text for the episode description. Only CC0, public domain, CC BY and CC BY-SA are used.
-* 🎬 **Multi-Format Video Rendering**:
-  * Burn captions with one click into **9:16 (TikTok / Reels / Shorts)**, **1:1 (Square)**, **4:5 (Instagram)**, or **16:9 (YouTube)** with Apple VideoToolbox hardware encoding.
-  * A smaller **proof copy** (720p or 540p) is encoded in the same pass as the full-size video: send the small one to be checked, publish the big one.
-  * **Logo (bug)**: a logo in a corner of the render, for videos that don't carry one. Pick the image (a PNG with transparency is best), the corner, size and opacity once; turn it off for a video that has its own, and that video remembers it. It sits over the captions, stays off the intro and outro, and the preview shows it where the render puts it.
-  * **Intro and outro clips**: pick a ready-made clip to play before the video, after it, or both (a channel ident, a "listen to the new episode" end card). They are scaled and padded to the output frame, keep their own sound (or get silence), and are joined in the same encode, proof copy included. The choice is remembered for later renders.
-* 🤖 **Headless CLI / LLM Agent Support**:
-  * Run transcription, caption editing, and rendering entirely headless without GUI automation.
-  * Subcommands: `info`, `transcribe`, `edit`, `render`, and `workflow`.
-  * Machine-readable `--json` output and NDJSON streaming progress events (`--json-events`). See [`docs/api.md`](docs/api.md).
+There are two review routes; neither is required for local editing.
 
----
+**File-based review:** use **Client Review → Export for Review…** to save a
+password-locked caption file. Send the video and caption file to the reviewer,
+with the password through a separate channel. They open both in the
+[browser review page](review/README.md), edit text/timing, leave comments and
+return the reviewed file. Import it with **Import Reviewed Captions…**.
 
-## 🚀 Quick Start
+The standalone page processes selected local files in the browser. Its draft and
+returned caption file are password-locked, but **the video is not encrypted by
+that lock**. Protect video sharing separately. URL-based media can require
+network access. See [review/README.md](review/README.md) for hosting and formats.
 
-For a timecoded short-form workflow, run `tekstitys clips interview.mp4
---cuts moments.csv`. Autoraffkat renders each selected range as a separate,
-face-aware 9:16 clip and opens the results in Tekstitys for captions and final
-review. See the [PySide guide](pyside/README.md#timecoded-vertical-clips) for
-the CSV format and options.
+**Review portal:** an optional server stores series, episodes, proof videos,
+caption versions, feedback and social post texts. The app can publish a render
+and import reviewed captions from it. A series link grants access to that series;
+anyone holding the link can use it. Use HTTPS, protect the admin token and manage
+who receives links. This route uploads content to your configured server.
+Setup and deployment are in [portal/README.md](portal/README.md).
 
-### Prerequisites
-* **Python 3.12+** and [**uv**](https://github.com/astral-sh/uv)
-* **Rust**: [rustup.rs](https://rustup.rs/)
-* **FFmpeg** installed on your system (`brew install ffmpeg` on macOS)
-* *Optional* — **libvoikko** for Finnish spell check in the caption table
-  (`brew install libvoikko`). Without it the app runs exactly as before,
-  just without the squiggles.
+## Build from source
 
-### Running Tekstitys
-```bash
-# 1. Build the Rust core binary
-cd rust
-cargo build --release
-cd ..
+The supported development path is a Mac. You need Xcode command-line tools,
+Python **3.13+**, [uv](https://docs.astral.sh/uv/), Rust/Cargo and FFmpeg with libass
+for subtitle burning. The macOS helper uses Homebrew's `ffmpeg-full`, not the
+plain FFmpeg package that may lack the needed subtitle filter.
 
-# 2. Launch the desktop application
+```sh
+git clone https://github.com/ollisulopuisto/tekstitys.git
+cd tekstitys
+TARGET_OS=macOS bash scripts/download-binaries.sh
+cargo build --release --manifest-path rust/Cargo.toml
+cd pyside
+uv sync
 uv run tekstitys
 ```
 
----
+The helper installs/copies FFmpeg and ffprobe into `rust/bin/`. The application
+finds the Rust core at `rust/target/release/core`. Model
+installation is still a separate step in Transcription Settings.
 
-## 🧠 Local Orukeet Model
+Optional Finnish spell checking:
 
-Open **Transcription Settings** beside Transcribe. Install or verify Orukeet's Q8 model and runtime, or choose a whisper.cpp model to download. Whisper models are stored in the user's application-support directory. Downloads require an internet connection; subsequent transcription runs locally.
-
-Orukeet's model and runtime installation details are documented in the [Orukeet repository](https://github.com/Oruk-AI/orukeet).
-
----
-
-## 🧪 Development & Quality Assurance
-
-Tekstitys strictly follows a **Red-Green Test-Driven Development (TDD)** workflow.
-
-```bash
-# Run all Python Qt and model tests
-uv run python -m pytest
-
-# Run Rust core tests
-cargo test --manifest-path rust/Cargo.toml
-
-# Check linter and formatting
-uv run ruff check .
-uv run ruff format --check .
+```sh
+brew install libvoikko
 ```
 
----
+Open a file directly or inspect it without opening the GUI:
 
-## 🤝 Contributing
+```sh
+# From pyside/
+uv run tekstitys /path/to/video.mp4
+uv run tekstitys info /path/to/video.mp4 --json
+```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) — in particular, Windows/Linux
-packaged builds are a wanted contribution (currently only macOS Apple
-Silicon is built/released).
+The packaged Mac app also includes a CLI:
 
----
+```sh
+"/Applications/Tekstitys.app/Contents/MacOS/TekstitysCLI" --help
+```
 
-## 📜 License
+For timecoded vertical clips, install `autoraffkat` separately and run
+`uv run tekstitys clips interview.mp4 --cuts moments.csv`. It creates clips for
+captioning in the editor. The [clip workflow guide](pyside/README.md#timecoded-vertical-clips)
+has the CSV format and options; some older component names there still say
+PyCapSlap.
 
-MIT License. Built for creators and podcast producers.
+## Privacy and security
+
+Transcription does not require a cloud transcription service. Models and native
+runtimes are downloaded first; subsequent model inference runs locally.
+
+Other features do use the network: model/runtime downloads, optional B-roll
+search/downloads and publishing to the review portal. Keep private footage out
+of public asset searches and check what you upload. The sidecar contains
+transcript text and project details; treat it as private along with the video.
+A password-locked review export is not the same as encrypting the source project
+or its media.
+
+Do not commit API credentials, portal tokens, client footage or caption exports.
+When filing a bug, use a small synthetic clip and remove private paths and text
+from logs.
+
+## Test and contribute
+
+From the repository root:
+
+```sh
+uv run --project pyside python -m pytest pyside/tests
+cargo test --manifest-path rust/Cargo.toml
+uv run --project pyside ruff check .
+uv run --project pyside ruff format --check .
+node --test review/*.test.js
+```
+
+Qt tests need the appropriate graphical environment; macOS CI also tests native
+framework paths. A successful source test is not proof that a packaged binary
+starts or renders correctly. Smoke-test the bundled core and media tools too.
+
+- [Contributing and packaging limits](CONTRIBUTING.md)
+- [CLI/API reference](docs/api.md)
+- [Review page](review/README.md)
+- [Review portal](portal/README.md)
+- [Changelog](CHANGELOG.md)
