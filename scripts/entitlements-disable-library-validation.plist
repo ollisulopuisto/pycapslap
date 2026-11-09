@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Applied ONLY to the Orukeet worker: it downloads NVIDIA's
+      NeMo-Speech.cpp runtime (libnemo_speech_asr_c.dylib, signed by a
+      different team) into ~/Library/Caches and loads it with ctypes.CDLL.
+      Default library validation rejects any dylib not signed by Apple or
+      this app's team, which kills the worker on startup.
+      Notarization-safe.
+    -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

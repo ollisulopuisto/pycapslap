@@ -174,6 +174,10 @@ pub async fn transcribe(
         .arg("--output-json-full")
         .arg("--output-file")
         .arg(&prefix)
+        // whisper.cpp 1.7.x enables flash attention by default; on Metal the
+        // flash-attention path asserts (GGML_ASSERT mask padding) when beam
+        // search is active, aborting mid-transcription.
+        .arg("--no-flash-attn")
         .arg("--print-progress");
     if let Some(lib_dir) = whisper_library_dir(&binary) {
         #[cfg(target_os = "macos")]
