@@ -1,0 +1,16 @@
+#!/usr/bin/env python3
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    rid = req.get("id")
+    m = req.get("method")
+    if m == "ping":
+        print(json.dumps({"id": rid, "result": {"ok": True}}), flush=True)
+    else:
+        print(json.dumps({"id": rid, "error": "stub core"}), flush=True)

@@ -15,10 +15,11 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
   both local transcription backends: dyld stripped the `DYLD_LIBRARY_PATH`
   the Whisper CLI needs to find its bundled ggml libraries, and library
   validation stopped the Orukeet worker from loading the downloaded
-  NeMo-Speech runtime. The signing step now applies an entitlements file
-  (`com.apple.security.cs.allow-dyld-environment-variables` and
-  `com.apple.security.cs.disable-library-validation`), and the smoke tests
-  run again after signing so this cannot ship silently.
+  NeMo-Speech runtime. The signing step now applies scoped entitlements
+  (`com.apple.security.cs.allow-dyld-environment-variables` to the Whisper
+  CLI, `com.apple.security.cs.disable-library-validation` to the Orukeet
+  worker), and the smoke tests run again after signing so this cannot ship
+  silently.
 - **Whisper no longer aborts mid-transcription on Metal.** The bundled
   whisper.cpp enables flash attention by default; its Metal flash-attention
   path asserts (GGML_ASSERT, mask padding) under beam search. The core now

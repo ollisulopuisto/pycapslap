@@ -15,6 +15,7 @@ struct OrukeetWorker {
     input: ChildStdin,
     output: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
     stderr_tail: Arc<std::sync::Mutex<VecDeque<String>>>,
+    stderr_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl OrukeetWorker {
@@ -50,7 +51,7 @@ impl OrukeetWorker {
         // dyld refusing a library) surfaces its actual message instead of a
         // bare exit status.
         let stderr_tail = Arc::new(std::sync::Mutex::new(VecDeque::new()));
-        if let Some(stderr) = child.stderr.take() {
+        let stderr_task = child.stderr.take().map(|stderr| {
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
@@ -61,13 +62,14 @@ impl OrukeetWorker {
                     }
                     tail.push_back(line.chars().take(500).collect::<String>());
                 }
-            });
-        }
+            })
+        });
         Ok(Self {
             child,
             input,
             output: tokio::io::BufReader::new(stdout).lines(),
             stderr_tail,
+            stderr_task,
         })
     }
 
@@ -80,6 +82,12 @@ impl OrukeetWorker {
         let response = loop {
             let Some(line) = self.output.next_line().await? else {
                 let status = self.child.try_wait()?;
+                // Let the stderr reader drain the pipe first, or an immediate
+                // crash is reported as a bare exit status. Bounded: a worker
+                // could close stdout while staying alive.
+                if let Some(task) = self.stderr_task.take() {
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), task).await;
+                }
                 let tail = self.stderr_tail.lock().unwrap();
                 let details = tail.iter().cloned().collect::<Vec<_>>().join("\n");
                 drop(tail);

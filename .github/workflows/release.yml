@@ -106,21 +106,29 @@ jobs:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: Olli Sulopuisto (LWSR8T5392)"
         run: |
           set -euo pipefail
-          # scripts/entitlements.plist grants the Hardened Runtime exceptions
-          # the bundled helpers need: whisper-cli is launched with
-          # DYLD_LIBRARY_PATH (stripped in restricted mode otherwise) and the
-          # Orukeet worker dlopens the user-downloaded NeMo-Speech runtime
-          # (rejected by default library validation otherwise).
-          ENTITLEMENTS="$GITHUB_WORKSPACE/scripts/entitlements.plist"
+          # Hardened Runtime entitlements are scoped to the helpers that need
+          # them: whisper-cli is launched with DYLD_LIBRARY_PATH (stripped in
+          # restricted mode otherwise) and the Orukeet worker dlopens the
+          # user-downloaded NeMo-Speech runtime (rejected by default library
+          # validation otherwise). Everything else signs with no exceptions.
+          ENT_DYLD="$GITHUB_WORKSPACE/scripts/entitlements-dyld-env.plist"
+          ENT_LIBVAL="$GITHUB_WORKSPACE/scripts/entitlements-disable-library-validation.plist"
           # Sign nested Mach-O files first (deepest paths first), then the bundle itself.
           find Tekstitys.app -type f -print0 | while IFS= read -r -d '' f; do
             if file -b "$f" | grep -q 'Mach-O'; then
               printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
             fi
           done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
-            codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            base="$(basename "$f")"
+            if [ "$base" = "whisper-cli-macos-arm64" ]; then
+              codesign --force --timestamp --options runtime --entitlements "$ENT_DYLD" --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            elif [ "$base" = "orukeet-worker" ]; then
+              codesign --force --timestamp --options runtime --entitlements "$ENT_LIBVAL" --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            else
+              codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
+            fi
           done
-          codesign --force --timestamp --options runtime --entitlements "$ENTITLEMENTS" --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
+          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
           codesign --verify --deep --strict --verbose=2 Tekstitys.app
 
       - name: Smoke-test the signed app
