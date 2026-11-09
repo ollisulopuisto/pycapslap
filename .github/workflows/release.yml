@@ -67,6 +67,20 @@ jobs:
         working-directory: pyside
         run: uv run --with pyinstaller pyinstaller tekstitys.spec --noconfirm
 
+      - name: Verify the bundle launches the editor as a foreground app
+        # COLLECT/BUNDLE inherit `console` from the LAST EXE argument (the
+        # console-mode CLI/worker), which would make PyInstaller write
+        # LSBackgroundOnly=true — a background-only app that cannot receive
+        # keyboard focus (broke caption editing in v26.10.26.2–v26.11.05.3).
+        # And BUNDLE names CFBundleExecutable after the FIRST executable, so
+        # the GUI exe must stay first in the spec. Assert both in the plist.
+        run: |
+          set -euo pipefail
+          PLIST="pyside/dist/Tekstitys.app/Contents/Info.plist"
+          [ "$(plutil -extract CFBundleExecutable raw -o - "$PLIST")" = "Tekstitys" ]
+          [ "$(plutil -extract LSBackgroundOnly raw -o - "$PLIST")" = "false" ]
+          [ "$(plutil -extract LSUIElement raw -o - "$PLIST")" = "false" ]
+
       - name: Smoke-test the bundled core binary
         run: |
           CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"

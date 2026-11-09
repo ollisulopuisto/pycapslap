@@ -162,6 +162,18 @@ cli_exe = EXE(
     console=True,
 )
 
+# ORDER MATTERS in this argument list, in both directions:
+# - The GUI exe must stay FIRST: BUNDLE names the bundle's
+#   CFBundleExecutable after the first EXECUTABLE in the TOC, so putting a
+#   console exe first would make Finder launch the CLI instead of the editor.
+# - COLLECT/BUNDLE inherit `console` from the LAST EXE: cli_exe and
+#   worker_exe are console=True, so the inherited value is True and
+#   PyInstaller's default would write LSBackgroundOnly=true into Info.plist —
+#   a background-only app that never receives keyboard focus, which broke
+#   caption editing in v26.10.26.2 through v26.11.05.3.
+# The explicit LSBackgroundOnly/LSUIElement keys in info_plist below are
+# what overrides the inherited console=True; the release workflow verifies
+# the built plist. Do not remove them.
 coll = COLLECT(
     exe,
     cli_exe,
