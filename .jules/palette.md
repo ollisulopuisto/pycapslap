@@ -9,3 +9,7 @@
 ## 2026-11-06 - Global spacebar media shortcuts breaking standard button activation
 **Learning:** Registering a document-level `keydown` listener for `Space` that only checks `['INPUT', 'TEXTAREA'].includes(activeElement.tagName)` breaks native keyboard interaction for `<button>` and `<a>` elements (`e.preventDefault()` halts browser-native button activation on Space).
 **Action:** When implementing global media play/pause hotkeys on `Space`, exempt all interactive elements (`BUTTON`, `A`, `SELECT`, `INPUT`, `TEXTAREA`) so keyboard users can navigate to and activate buttons with Space as expected by accessibility standards.
+
+## 2026-11-10 - Generic class queries overwriting sibling form controls
+**Learning:** Querying for generic utility classes like `.muted` within a form (`document.querySelector('form .muted')`) to inject status messages will collide with preceding form elements styled with the same utility class (such as `<label class="muted">` containing `<select>`), destroying essential form controls and confusing screen readers.
+**Action:** Always give status elements a distinct semantic identifier (e.g., `.status`), mark them with `role="status"` and `aria-live="polite"`, and disable the submit button during in-flight network requests to prevent duplicate submissions.
