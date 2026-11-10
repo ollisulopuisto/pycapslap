@@ -446,3 +446,30 @@ def test_the_cached_paint_matches_a_fresh_one(qtbot):
     timeline._invalidate_static()
 
     assert timeline.grab().toImage() == cached
+
+
+def test_paint_static_bisect_culling(qapp):
+    """Verify O(log N) bisect cue culling in _paint_static renders accurately."""
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtCore import QRect
+
+    widget = VisualTimelineWidget()
+    widget.resize(1200, 100)
+    widget.set_duration(60000)
+
+    # Empty segments
+    widget.set_segments([])
+    img = QImage(1200, 100, QImage.Format.Format_ARGB32)
+    p = QPainter(img)
+    widget._paint_static(p, QRect(100, 0, 200, 100))
+    p.end()
+
+    # Many segments
+    segments = [
+        CaptionSegment(start_ms=i * 500, end_ms=i * 500 + 400, text=f"Seg {i}")
+        for i in range(100)
+    ]
+    widget.set_segments(segments)
+    p = QPainter(img)
+    widget._paint_static(p, QRect(500, 0, 300, 100))
+    p.end()

@@ -617,12 +617,31 @@ class VisualTimelineWidget(QWidget):
 
         painter.setFont(cue_font)
         metrics = QFontMetrics(cue_font)
-        for seg in self.segments:
-            x_start = self._ms_to_x(seg.start_ms)
-            seg_w = max(6.0, self._ms_to_x(seg.end_ms) - x_start)
-            if x_start > clip_right or x_start + seg_w < clip_left:
-                continue
-            self._paint_cue(painter, seg, metrics)
+        # Use bisect to quickly skip segments outside the visible clip region
+        # when segments are sorted and non-overlapping.
+        if self._segments_non_overlapping and self.segments:
+            left_ms = self._x_to_ms(max(0.0, clip_left - 6.0))
+            idx = max(
+                0,
+                bisect.bisect_right(self.segments, left_ms, key=lambda s: s.start_ms)
+                - 1,
+            )
+            while idx < len(self.segments):
+                seg = self.segments[idx]
+                x_start = self._ms_to_x(seg.start_ms)
+                if x_start > clip_right:
+                    break
+                seg_w = max(6.0, self._ms_to_x(seg.end_ms) - x_start)
+                if x_start + seg_w >= clip_left:
+                    self._paint_cue(painter, seg, metrics)
+                idx += 1
+        else:
+            for seg in self.segments:
+                x_start = self._ms_to_x(seg.start_ms)
+                seg_w = max(6.0, self._ms_to_x(seg.end_ms) - x_start)
+                if x_start > clip_right or x_start + seg_w < clip_left:
+                    continue
+                self._paint_cue(painter, seg, metrics)
 
     def _paint_cue(
         self, painter: QPainter, seg: CaptionSegment, metrics: QFontMetrics
