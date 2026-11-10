@@ -155,11 +155,23 @@ def create_app(settings: Settings) -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         # Content Security Policy: enforce defense-in-depth resource restrictions
         # (blocking unauthorized external scripts, plugin objects, and frame embeds).
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; img-src 'self' data: blob:; "
-            "media-src 'self' blob:; object-src 'none'; base-uri 'self'; "
-            "frame-ancestors 'none'"
-        )
+        if request.url.path.startswith("/review"):
+            # The caption review page intentionally loads external media:
+            # ?video=URL plays in the <video> element (media-src) and
+            # ?captions=URL is fetched (connect-src). Its own URL validation
+            # restricts both to http(s); scope the relaxation to this path.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; img-src 'self' data: blob: http: https:; "
+                "media-src 'self' blob: http: https:; "
+                "connect-src 'self' http: https:; "
+                "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; img-src 'self' data: blob:; "
+                "media-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+                "frame-ancestors 'none'"
+            )
         return response
 
     def conn():
