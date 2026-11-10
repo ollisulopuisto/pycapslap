@@ -250,11 +250,15 @@ def test_pages_keep_the_link_out_of_referrers_and_search(client):
     assert "noindex" in r.headers["x-robots-tag"]
     assert r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["x-frame-options"] == "DENY"
-    assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
+    csp = r.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "default-src 'self'" in csp
+    assert "object-src 'none'" in csp
     admin_res = client.get("/admin")
     assert admin_res.status_code == 200
     assert admin_res.headers["x-frame-options"] == "DENY"
-    assert admin_res.headers["content-security-policy"] == "frame-ancestors 'none'"
+    assert "frame-ancestors 'none'" in admin_res.headers["content-security-policy"]
+    assert "default-src 'self'" in admin_res.headers["content-security-policy"]
     assert client.get("/review/").status_code == 200
 
 

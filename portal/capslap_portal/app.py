@@ -153,7 +153,13 @@ def create_app(settings: Settings) -> FastAPI:
         # Prevent clickjacking: stop malicious sites from embedding the portal
         # in an iframe to trick clients or editors into taking unauthorized actions.
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        # Content Security Policy: enforce defense-in-depth resource restrictions
+        # (blocking unauthorized external scripts, plugin objects, and frame embeds).
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; img-src 'self' data: blob:; "
+            "media-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+            "frame-ancestors 'none'"
+        )
         return response
 
     def conn():
