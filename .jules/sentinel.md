@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-08 - Enforce Comprehensive Content-Security-Policy on Portal Endpoints
+**Vulnerability:** Review portal endpoints and admin interfaces served Content-Security-Policy headers containing only `frame-ancestors 'none'`. Without resource-level restrictions, endpoints lacked defense-in-depth against malicious script execution, plug-in embedding, or unauthorized outbound resource loading.
+**Learning:** Framing protections alone leave other browser capabilities unrestricted. Applying least-privilege resource policies (`default-src`, `img-src`, `media-src`, `object-src`, `base-uri`) prevents untrusted script injection or rogue media embeds while maintaining compatibility with necessary local media blobs and inline data URIs.
+**Prevention:** Always pair framing controls with defense-in-depth resource directives (`default-src 'self'`, `object-src 'none'`, and explicit allowlists for images/media) across all application-served HTTP responses.
+
 ## 2026-11-07 - Validate PBKDF2 Iteration Bounds and KDF Metadata
 **Vulnerability:** Encrypted review files unpack untrusted JSON payloads containing KDF parameters (`iterations`, `kdf`, `format`) directly into derivation routines. Without bounds checking, attackers can specify exorbitant iteration counts to trigger CPU-exhaustion denial of service or trivial iteration counts to downgrade password strength.
 **Learning:** Relying on user-controlled cryptographic parameters in container formats without server/client bounds validation exposes consumers to algorithmic complexity DoS and cryptographic downgrade attacks.
