@@ -248,7 +248,7 @@ function notesList(episode) {
 function feedbackForm(episode) {
   const text = h('textarea', { rows: 4, placeholder: t('feedbackPlaceholder'), required: true })
   const about = h('select', {}, h('option', { value: '' }, t('wholeEpisode')))
-  const status = h('span', { class: 'muted' })
+  const status = h('span', { class: 'muted status', role: 'status', 'aria-live': 'polite' })
   let atMs = null
 
   const el = h(
@@ -257,6 +257,9 @@ function feedbackForm(episode) {
       class: 'feedback',
       onsubmit: async (e) => {
         e.preventDefault()
+        const submitBtn = el.querySelector('button[type="submit"]')
+        if (submitBtn) submitBtn.disabled = true
+        status.textContent = ''
         const videoId = about.value ? Number(about.value) : null
         try {
           await getJSON(`${api}/episodes/${episodeId}/feedback`, {
@@ -266,9 +269,13 @@ function feedbackForm(episode) {
           })
           await showEpisode()
           $('error').textContent = ''
-          document.querySelector('form.feedback .muted').textContent = t('sent')
+          const feedbackStatus = document.querySelector('form.feedback .status')
+          if (feedbackStatus) feedbackStatus.textContent = t('sent')
         } catch {
           status.textContent = t('failed')
+        } finally {
+          const currentBtn = document.querySelector('form.feedback button[type="submit"]')
+          if (currentBtn) currentBtn.disabled = false
         }
       },
     },
