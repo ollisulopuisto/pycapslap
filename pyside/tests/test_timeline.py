@@ -446,3 +446,57 @@ def test_the_cached_paint_matches_a_fresh_one(qtbot):
     timeline._invalidate_static()
 
     assert timeline.grab().toImage() == cached
+
+
+def test_paint_static_bisect_culling(qapp):
+    """Verify O(log N) bisect cue culling in _paint_static renders accurately."""
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtCore import QRect
+
+    widget = VisualTimelineWidget()
+    widget.resize(1200, 100)
+    widget.set_duration(60000)
+
+    # Empty segments
+    widget.set_segments([])
+    img = QImage(1200, 100, QImage.Format.Format_ARGB32)
+    p = QPainter(img)
+    widget._paint_static(p, QRect(100, 0, 200, 100))
+    p.end()
+
+    # Many segments
+    segments = [
+        CaptionSegment(start_ms=i * 500, end_ms=i * 500 + 400, text=f"Seg {i}")
+        for i in range(100)
+    ]
+    widget.set_segments(segments)
+    p = QPainter(img)
+    widget._paint_static(p, QRect(500, 0, 300, 100))
+    p.end()
+
+
+def test_drag_retime_refreshes_segment_flags(qapp):
+    """Regression (Devin on #67): an in-place drag retime that creates
+    overlap must drop the bisect fast path, or _paint_static skips an
+    earlier caption still visible in the clip."""
+    widget = VisualTimelineWidget()
+    widget.resize(1200, 100)
+    widget.set_duration(60000)
+    segs = [
+        CaptionSegment(start_ms=1000, end_ms=2000, text="A"),
+        CaptionSegment(start_ms=3000, end_ms=4000, text="B"),
+    ]
+    widget.set_segments(segs)
+    assert widget._segments_non_overlapping is True
+
+    # In-place retime that creates overlap, like a finished cue drag.
+    segs[1].start_ms = 1500
+    widget._refresh_segment_flags()
+
+    assert widget._segments_non_overlapping is False
+
+    # Unsorted after retime: both flags fall.
+    segs[1].start_ms = 500
+    widget._refresh_segment_flags()
+    assert widget._segments_sorted is False
+    assert widget._segments_non_overlapping is False
