@@ -259,7 +259,15 @@ def test_pages_keep_the_link_out_of_referrers_and_search(client):
     assert admin_res.headers["x-frame-options"] == "DENY"
     assert "frame-ancestors 'none'" in admin_res.headers["content-security-policy"]
     assert "default-src 'self'" in admin_res.headers["content-security-policy"]
-    assert client.get("/review/").status_code == 200
+    review_res = client.get("/review/")
+    assert review_res.status_code == 200
+    # Regression (Devin on #68): the review page loads externally hosted
+    # media, so its CSP must allow cross-origin media and caption fetches.
+    review_csp = review_res.headers["content-security-policy"]
+    assert "media-src 'self' blob: http: https:" in review_csp
+    assert "connect-src 'self' http: https:" in review_csp
+    assert "object-src 'none'" in review_csp
+    assert "frame-ancestors 'none'" in review_csp
 
 
 def test_post_texts_are_edited_approved_and_reapproved_after_a_change(client):
