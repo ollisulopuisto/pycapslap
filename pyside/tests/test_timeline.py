@@ -473,3 +473,30 @@ def test_paint_static_bisect_culling(qapp):
     p = QPainter(img)
     widget._paint_static(p, QRect(500, 0, 300, 100))
     p.end()
+
+
+def test_drag_retime_refreshes_segment_flags(qapp):
+    """Regression (Devin on #67): an in-place drag retime that creates
+    overlap must drop the bisect fast path, or _paint_static skips an
+    earlier caption still visible in the clip."""
+    widget = VisualTimelineWidget()
+    widget.resize(1200, 100)
+    widget.set_duration(60000)
+    segs = [
+        CaptionSegment(start_ms=1000, end_ms=2000, text="A"),
+        CaptionSegment(start_ms=3000, end_ms=4000, text="B"),
+    ]
+    widget.set_segments(segs)
+    assert widget._segments_non_overlapping is True
+
+    # In-place retime that creates overlap, like a finished cue drag.
+    segs[1].start_ms = 1500
+    widget._refresh_segment_flags()
+
+    assert widget._segments_non_overlapping is False
+
+    # Unsorted after retime: both flags fall.
+    segs[1].start_ms = 500
+    widget._refresh_segment_flags()
+    assert widget._segments_sorted is False
+    assert widget._segments_non_overlapping is False

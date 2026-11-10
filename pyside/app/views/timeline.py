@@ -228,6 +228,16 @@ class VisualTimelineWidget(QWidget):
 
     def set_segments(self, segments: list[CaptionSegment]) -> None:
         self.segments = list(segments)
+        self._refresh_segment_flags()
+        self._invalidate_static()
+        self.update()
+
+    def _refresh_segment_flags(self) -> None:
+        """Recompute the sorted/non-overlapping flags the bisect paths rely on.
+
+        Called from set_segments and after the timeline's own in-place retime:
+        the caption objects are mutable and shared, so a drag can make the
+        cached flags stale (Devin finding on #67)."""
         self._segments_sorted = all(
             previous.start_ms <= current.start_ms
             for previous, current in zip(self.segments, self.segments[1:])
@@ -236,8 +246,6 @@ class VisualTimelineWidget(QWidget):
             previous.end_ms <= current.start_ms
             for previous, current in zip(self.segments, self.segments[1:])
         )
-        self._invalidate_static()
-        self.update()
 
     def select_segment(self, segment: CaptionSegment | None) -> None:
         self.selected_segment = segment
@@ -373,6 +381,9 @@ class VisualTimelineWidget(QWidget):
         drag = self._cue_drag
         self._cue_drag = None
         if drag and drag.moved:
+            # The drag mutated captions in place; the cached flags from
+            # set_segments may no longer hold (Devin on #67).
+            self._refresh_segment_flags()
             # Back to the cached layer.
             self.update()
             self.cue_retimed.emit(drag.seg)
