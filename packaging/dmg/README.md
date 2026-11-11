@@ -45,10 +45,12 @@ are not visual acceptance. This opt-in is ignored outside GitHub Actions.
 
 Artwork source: `render_backgrounds.py`, Pillow and DejaVu Sans (development-only).
 The committed PNGs require no image library at packaging time. The standard layout expects only the app and Applications at the visible root.
-Solmu additionally preserves its shipped notices in a visible Documentation folder
-and adds a third light well below the install pair, with a taller initial window.
 Unexpected extra files fail closed rather than hiding their content or leaving
-black labels on dark art.
+black labels on dark art. Solmu is the one exception, and only in its own repo:
+its restyle.py explicitly whitelists and positions a visible Documentation
+folder of shipped notices, with a third light well below the install pair and a
+taller initial window. This repo's restyle.py has no such exception; a
+Documentation folder here would fail closed like any other extra file.
 
 The owner requested Finnish + English together on 11 November 2026.
 Finnish instructions use natural imperative wording; key senses checked against

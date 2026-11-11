@@ -6,6 +6,7 @@
 import importlib.util
 import os
 import plistlib
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -144,9 +145,12 @@ class CaptureContract(unittest.TestCase):
         )
         evidence = importlib.util.module_from_spec(capture_spec)
         capture_spec.loader.exec_module(evidence)
+        # The evidence directory models the code's own bare mkdtemp: it must
+        # not sit inside a harness TemporaryDirectory, whose cleanup would
+        # delete it regardless of what capture_image did - making the
+        # failed-detach retention assertion meaningless.
+        directory = Path(tempfile.mkdtemp(prefix="dmg-welcome-evidence-test-"))
         with tempfile.TemporaryDirectory() as td:
-            directory = Path(td) / "evidence"
-            directory.mkdir()
             calls = []
 
             def fake_run(command, **_kwargs):
@@ -186,6 +190,9 @@ class CaptureContract(unittest.TestCase):
                         for c in output.call_args_list
                     )
                 )
+        # Harness cleanup, explicitly after the assertions: a retained
+        # evidence directory must survive capture_image, not the harness.
+        shutil.rmtree(directory, ignore_errors=True)
 
 
 if __name__ == "__main__":
