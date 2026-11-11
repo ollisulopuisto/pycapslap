@@ -156,3 +156,18 @@ def test_correct_accented_negation_is_not_an_error():
         )
         == []
     )
+
+
+def test_hardened_typography_patterns_keep_matches():
+    from punakyna.rules import _ORDINAL_BEFORE, _RE_PERCENT, _RE_CURRENCY
+    from punakyna.style import excluded_text
+
+    assert _ORDINAL_BEFORE.search("34.  ")
+    assert not _ORDINAL_BEFORE.search("0" * 100000)
+    assert _RE_PERCENT.search("10%").group(1) == "10"
+    assert _RE_PERCENT.search("10,50%").group(1) == "10,50"
+    assert not _RE_PERCENT.search("0" * 100000)
+    assert _RE_CURRENCY.search("10,50€").group(1) == "10,50"
+    assert not _RE_CURRENCY.search("0" * 100000)
+    assert excluded_text("hello\n   > quoted")
+    assert not excluded_text("\n" * 100000)

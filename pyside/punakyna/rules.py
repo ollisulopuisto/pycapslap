@@ -324,7 +324,7 @@ def check_olla_agreement(sent_text, offset, words, voikko, cache):
 # yksikkoverbi ("lapset leikkii") on puhekielen yleinen muoto (VISK §1272
 # kuvaa puhekielen persoonajarjestelmaa), joten sita ei liputeta.
 # On/ovat kuuluu check_olla_agreement-saannolle.
-_ORDINAL_BEFORE = re.compile(r'\d+\.\s*$')
+_ORDINAL_BEFORE = re.compile(r'(?<!\d)\d++\.\s*+$')
 _COORD_BEFORE = re.compile(r'(?:^|\s)(?:ja|sekä|tai|eli|että)(?:\s|$)')
 
 
@@ -795,8 +795,8 @@ def check_active_perfect_passive_participle(sent_text, offset, words, voikko, ca
 #    (https://kielitoimistonohjepankki.fi/ohje/ajanilmaukset-kellonajat-merkinta-ja-taivutus/)
 #  - pisteelliset lyhenteet esim., jne., tms., yms., huom.
 #    (https://kielitoimistonohjepankki.fi/ohje/lyhenteet-pisteelliset/)
-_RE_PERCENT = re.compile(r'(?<![\w.,/%-])(\d+(?:,\d+)?)(%)(?!\w)')
-_RE_CURRENCY = re.compile(r'(?<![\w.,/-])(\d+(?:,\d+)?)([€$£])(?![\w])')
+_RE_PERCENT = re.compile(r'(?<![\w.,/%-])(\d++(?:,\d++)?)(%)(?!\w)')
+_RE_CURRENCY = re.compile(r'(?<![\w.,/-])(\d++(?:,\d++)?)([€$£])(?![\w])')
 _RE_CLOCK_COLON = re.compile(r'\b(klo|kello) (\d{1,2}):(\d{2})(?![\d:])', re.I)
 _RE_CLOCK_ZERO = re.compile(r'\b(klo|kello) (0\d)(?:\.(\d{2}))?(?![\d:,]|\.\d)', re.I)
 _DEC_UNITS = (r'(?:[\u00a0 ]?%|[\u00a0 ]?°C|[\u00a0 ](?:kg|g|km|m|cm|mm|l|dl|cl|€|'

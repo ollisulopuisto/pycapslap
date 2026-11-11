@@ -53,7 +53,7 @@ class StyleProfile:
 
 # Conservative exclusion: whole sentences containing quotation/code delimiters
 # are skipped. A fragmentary quotation must not change the apparent narrator.
-_QUOTED = re.compile(r'["“”«»`]|(?:^|\n)\s*[>–—]')
+_QUOTED = re.compile(r'["“”«»`]|(?:^|\n)[^\S\n]*+[>–—]')
 _PERSON_WORDS = {'minä': ('1', 'singular'), 'me': ('1', 'plural'),
                  'sinä': ('2', 'singular'), 'te': ('2', 'plural')}
 _LABELS = {'mina': 'minä', 'me': 'me', 'sina': 'sinä', 'te': 'te'}
