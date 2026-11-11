@@ -1,227 +1,238 @@
-name: Release
-
-# Builds the native PySide6 + Rust app (macOS arm64 only for now — that's
-# the only platform this app currently targets: Orukeet and ffmpeg are
-# bundled for macOS arm64, and rendering uses VideoToolbox hardware
-# encoding). Windows/Linux packaging is future work.
-
-on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch: # build and sign only; the release job runs for tags
-
+name: Tekstitys direct morning DMG
+'on':
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Expected latest merged main SHA. App checkout is pinned to this SHA.
+        required: true
+        type: string
 permissions:
   contents: write
-
+env: {}
 jobs:
   build:
-    runs-on: macos-15 # Apple Silicon runner; Whisper runtime targets macOS 15+
-
+    runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+    - name: Resolve latest merged main
+      env:
+        GH_TOKEN: ${{ github.token }}
+        EXPECTED_SHA: ${{ inputs.source_sha }}
+      run: 'set -euo pipefail
 
-      - name: Check signing and notarization secrets
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD KEYCHAIN_PASSWORD \
-            APPLE_ID APPLE_APP_PASSWORD; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Missing required GitHub Actions secret: $name"
-              exit 1
-            fi
-          done
+        SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
+        test "$EXPECTED_SHA" = "$SHA"
 
-      - name: Build Rust core
-        working-directory: rust
-        run: cargo build --release
+        echo "BUILD_SHA=$SHA" >> "$GITHUB_ENV"
 
-      - name: Download bundled ffmpeg/ffprobe
-        run: bash scripts/download-binaries.sh
-        env:
-          TARGET_OS: macOS
+        echo "App source: $SHA" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
+        '
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ env.BUILD_SHA }}
+    - name: Check signing and notarization secrets
+      env:
+        BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+        P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      run: "set -euo pipefail\nfor name in BUILD_CERTIFICATE_BASE64 P12_PASSWORD KEYCHAIN_PASSWORD \\\n  APPLE_ID APPLE_APP_PASSWORD;\
+        \ do\n  if [[ -z \"${!name}\" ]]; then\n    echo \"::error::Missing required GitHub Actions secret: $name\"\n    exit\
+        \ 1\n  fi\ndone\n"
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Build Rust core
+      working-directory: rust
+      run: cargo build --release
+    - name: Download bundled ffmpeg/ffprobe
+      run: bash scripts/download-binaries.sh
+      env:
+        TARGET_OS: macOS
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: false
+        save-cache: false
+    - name: Install Python dependencies
+      run: uv sync
+    - name: Build Tekstitys.app
+      working-directory: pyside
+      run: uv run --with pyinstaller pyinstaller tekstitys.spec --noconfirm
+    - name: Verify the bundle launches the editor as a foreground app
+      run: 'set -euo pipefail
 
-      - name: Install Python dependencies
-        run: uv sync
+        PLIST="pyside/dist/Tekstitys.app/Contents/Info.plist"
 
-      - name: Build Tekstitys.app
-        working-directory: pyside
-        run: uv run --with pyinstaller pyinstaller tekstitys.spec --noconfirm
+        [ "$(plutil -extract CFBundleExecutable raw -o - "$PLIST")" = "Tekstitys" ]
 
-      - name: Verify the bundle launches the editor as a foreground app
-        # COLLECT/BUNDLE inherit `console` from the LAST EXE argument (the
-        # console-mode CLI/worker), which would make PyInstaller write
-        # LSBackgroundOnly=true — a background-only app that cannot receive
-        # keyboard focus (broke caption editing in v26.10.26.2–v26.11.05.3).
-        # And BUNDLE names CFBundleExecutable after the FIRST executable, so
-        # the GUI exe must stay first in the spec. Assert both in the plist.
-        run: |
-          set -euo pipefail
-          PLIST="pyside/dist/Tekstitys.app/Contents/Info.plist"
-          [ "$(plutil -extract CFBundleExecutable raw -o - "$PLIST")" = "Tekstitys" ]
-          [ "$(plutil -extract LSBackgroundOnly raw -o - "$PLIST")" = "false" ]
-          [ "$(plutil -extract LSUIElement raw -o - "$PLIST")" = "false" ]
+        [ "$(plutil -extract LSBackgroundOnly raw -o - "$PLIST")" = "false" ]
 
-      - name: Smoke-test the bundled core binary
-        run: |
-          CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
-          echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
+        [ "$(plutil -extract LSUIElement raw -o - "$PLIST")" = "false" ]
 
-      - name: Smoke-test the bundled agent CLI
-        run: |
-          CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
-          "$CLI" --help
+        '
+    - name: Smoke-test the bundled core binary
+      run: 'CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
 
-      - name: Smoke-test the bundled Whisper CLI
-        run: |
-          CLI="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
-          LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
-          DYLD_LIBRARY_PATH="$LIBS" "$CLI" --help >/dev/null
+        echo ''{"id":"ci","method":"ping","params":{}}'' | "$CORE" | grep -q ''"ok":true''
 
-      - name: Import Developer ID certificate
-        env:
-          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          cert="$RUNNER_TEMP/build_certificate.p12"
-          keychain="$RUNNER_TEMP/app-signing.keychain-db"
-          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 -D -o "$cert"
-          export KEYCHAIN_PATH="$keychain" CERTIFICATE_PATH="$cert"
-          export KEYCHAIN_PASSWORD="$KEYCHAIN_PASSWORD" P12_PASSWORD="$P12_PASSWORD"
-          python3 scripts/macos_ci_credentials.py import-certificate
-          rm -f "$cert"
-          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          security find-identity -v -p codesigning "$keychain"
+        '
+    - name: Smoke-test the bundled agent CLI
+      run: 'CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
 
-      - name: Sign Tekstitys.app
-        working-directory: pyside/dist
-        env:
-          APPLE_SIGNING_IDENTITY: "Developer ID Application: Olli Sulopuisto (LWSR8T5392)"
-        run: |
-          set -euo pipefail
-          # Hardened Runtime entitlements are scoped to the helpers that need
-          # them: whisper-cli is launched with DYLD_LIBRARY_PATH (stripped in
-          # restricted mode otherwise) and the Orukeet worker dlopens the
-          # user-downloaded NeMo-Speech runtime (rejected by default library
-          # validation otherwise). Everything else signs with no exceptions.
-          ENT_DYLD="$GITHUB_WORKSPACE/scripts/entitlements-dyld-env.plist"
-          ENT_LIBVAL="$GITHUB_WORKSPACE/scripts/entitlements-disable-library-validation.plist"
-          # Sign nested Mach-O files first (deepest paths first), then the bundle itself.
-          find Tekstitys.app -type f -print0 | while IFS= read -r -d '' f; do
-            if file -b "$f" | grep -q 'Mach-O'; then
-              printf '%s\t%s\n' "$(printf '%s' "$f" | awk -F/ '{print NF}')" "$f"
-            fi
-          done | sort -t "$(printf '\t')" -k1,1nr | cut -f2- | while IFS= read -r f; do
-            base="$(basename "$f")"
-            if [ "$base" = "whisper-cli-macos-arm64" ]; then
-              codesign --force --timestamp --options runtime --entitlements "$ENT_DYLD" --sign "$APPLE_SIGNING_IDENTITY" "$f"
-            elif [ "$base" = "orukeet-worker" ]; then
-              codesign --force --timestamp --options runtime --entitlements "$ENT_LIBVAL" --sign "$APPLE_SIGNING_IDENTITY" "$f"
-            else
-              codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" "$f"
-            fi
-          done
-          codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
-          codesign --verify --deep --strict --verbose=2 Tekstitys.app
+        "$CLI" --help
 
-      - name: Smoke-test the signed app
-        # The pre-signing smoke tests above pass even when the Hardened
-        # Runtime configuration breaks the helpers: only the signed binaries
-        # run in dyld restricted mode. Re-run them after signing so a missing
-        # entitlement fails the build instead of shipping.
-        run: |
-          set -euo pipefail
-          CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
-          echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
-          CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
-          "$CLI" --help >/dev/null
-          # whisper-cli must still find its bundled ggml dylibs when launched
-          # the way the core launches it (DYLD_LIBRARY_PATH + restricted mode).
-          WHISPER="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
-          LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
-          DYLD_LIBRARY_PATH="$LIBS" "$WHISPER" --help >/dev/null
+        '
+    - name: Smoke-test the bundled Whisper CLI
+      run: 'CLI="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
 
-      - name: Create macOS disk image
-        working-directory: pyside/dist
-        run: |
-          mkdir installer
-          ditto Tekstitys.app installer/Tekstitys.app
-          ln -s /Applications installer/Applications
-          hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
-          codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg
-          codesign --verify --verbose=2 Tekstitys-macos-arm64.dmg
+        LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
 
-      - name: Notarize and staple disk image
-        working-directory: pyside/dist
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: |
-          set -euo pipefail
-          export KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
-          export APPLE_TEAM_ID="${APPLE_TEAM_ID:-LWSR8T5392}"
-          python3 "$GITHUB_WORKSPACE/scripts/macos_ci_credentials.py" store-notary-credentials
-          xcrun notarytool submit Tekstitys-macos-arm64.dmg \
-            --keychain-profile ci-notary --keychain "$KEYCHAIN_PATH" \
-            --wait
-          xcrun stapler staple Tekstitys-macos-arm64.dmg
-          xcrun stapler validate Tekstitys-macos-arm64.dmg
+        DYLD_LIBRARY_PATH="$LIBS" "$CLI" --help >/dev/null
 
-      - name: Remove signing keychain
-        if: always()
-        run: |
-          rm -f "$RUNNER_TEMP/build_certificate.p12"
-          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
+        '
+    - name: Import Developer ID certificate
+      env:
+        BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+        P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      run: 'set -euo pipefail
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Tekstitys-macos-arm64
-          path: pyside/dist/Tekstitys-macos-arm64.dmg
+        cert="$RUNNER_TEMP/build_certificate.p12"
 
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: Tekstitys-macos-arm64
-          path: artifacts
+        keychain="$RUNNER_TEMP/app-signing.keychain-db"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: artifacts/*
-          generate_release_notes: true
-          draft: false
-          body: |
-            macOS (Apple Silicon) build, signed with a Developer ID
-            Application certificate and notarized by Apple. The notarization
-            ticket is stapled to the disk image.
+        echo -n "$BUILD_CERTIFICATE_BASE64" | base64 -D -o "$cert"
 
-            See CHANGELOG.md for what's in this release.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        export KEYCHAIN_PATH="$keychain" CERTIFICATE_PATH="$cert"
+
+        export KEYCHAIN_PASSWORD="$KEYCHAIN_PASSWORD" P12_PASSWORD="$P12_PASSWORD"
+
+        python3 scripts/macos_ci_credentials.py import-certificate
+
+        rm -f "$cert"
+
+        security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d ''"'')
+
+        security find-identity -v -p codesigning "$keychain"
+
+        '
+    - name: Sign Tekstitys.app
+      working-directory: pyside/dist
+      env:
+        APPLE_SIGNING_IDENTITY: 'Developer ID Application: Olli Sulopuisto (LWSR8T5392)'
+      run: "set -euo pipefail\n# Hardened Runtime entitlements are scoped to the helpers that need\n# them: whisper-cli is\
+        \ launched with DYLD_LIBRARY_PATH (stripped in\n# restricted mode otherwise) and the Orukeet worker dlopens the\n\
+        # user-downloaded NeMo-Speech runtime (rejected by default library\n# validation otherwise). Everything else signs\
+        \ with no exceptions.\nENT_DYLD=\"$GITHUB_WORKSPACE/scripts/entitlements-dyld-env.plist\"\nENT_LIBVAL=\"$GITHUB_WORKSPACE/scripts/entitlements-disable-library-validation.plist\"\
+        \n# Sign nested Mach-O files first (deepest paths first), then the bundle itself.\nfind Tekstitys.app -type f -print0\
+        \ | while IFS= read -r -d '' f; do\n  if file -b \"$f\" | grep -q 'Mach-O'; then\n    printf '%s\\t%s\\n' \"$(printf\
+        \ '%s' \"$f\" | awk -F/ '{print NF}')\" \"$f\"\n  fi\ndone | sort -t \"$(printf '\\t')\" -k1,1nr | cut -f2- | while\
+        \ IFS= read -r f; do\n  base=\"$(basename \"$f\")\"\n  if [ \"$base\" = \"whisper-cli-macos-arm64\" ]; then\n    codesign\
+        \ --force --timestamp --options runtime --entitlements \"$ENT_DYLD\" --sign \"$APPLE_SIGNING_IDENTITY\" \"$f\"\n \
+        \ elif [ \"$base\" = \"orukeet-worker\" ]; then\n    codesign --force --timestamp --options runtime --entitlements\
+        \ \"$ENT_LIBVAL\" --sign \"$APPLE_SIGNING_IDENTITY\" \"$f\"\n  else\n    codesign --force --timestamp --options runtime\
+        \ --sign \"$APPLE_SIGNING_IDENTITY\" \"$f\"\n  fi\ndone\ncodesign --force --timestamp --options runtime --sign \"\
+        $APPLE_SIGNING_IDENTITY\" Tekstitys.app\ncodesign --verify --deep --strict --verbose=2 Tekstitys.app\n"
+    - name: Smoke-test the signed app
+      run: 'set -euo pipefail
+
+        CORE="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/target/release/core"
+
+        echo ''{"id":"ci","method":"ping","params":{}}'' | "$CORE" | grep -q ''"ok":true''
+
+        CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
+
+        "$CLI" --help >/dev/null
+
+        # whisper-cli must still find its bundled ggml dylibs when launched
+
+        # the way the core launches it (DYLD_LIBRARY_PATH + restricted mode).
+
+        WHISPER="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
+
+        LIBS="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/lib/libinternal"
+
+        DYLD_LIBRARY_PATH="$LIBS" "$WHISPER" --help >/dev/null
+
+        '
+    - name: Create macOS disk image
+      working-directory: pyside/dist
+      run: 'mkdir installer
+
+        ditto Tekstitys.app installer/Tekstitys.app
+
+        ln -s /Applications installer/Applications
+
+        hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
+
+        codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg
+
+        codesign --verify --verbose=2 Tekstitys-macos-arm64.dmg
+
+        '
+    - name: Notarize and staple disk image
+      working-directory: pyside/dist
+      env:
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+      run: "set -euo pipefail\nexport KEYCHAIN_PATH=\"$RUNNER_TEMP/app-signing.keychain-db\"\nexport APPLE_TEAM_ID=\"${APPLE_TEAM_ID:-LWSR8T5392}\"\
+        \npython3 \"$GITHUB_WORKSPACE/scripts/macos_ci_credentials.py\" store-notary-credentials\nxcrun notarytool submit\
+        \ Tekstitys-macos-arm64.dmg \\\n  --keychain-profile ci-notary --keychain \"$KEYCHAIN_PATH\" \\\n  --wait\nxcrun stapler\
+        \ staple Tekstitys-macos-arm64.dmg\nxcrun stapler validate Tekstitys-macos-arm64.dmg\n"
+    - name: Remove signing keychain
+      if: always()
+      run: 'rm -f "$RUNNER_TEMP/build_certificate.p12"
+
+        security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
+
+        '
+    - name: Deliver verified versioned DMG directly to draft Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      working-directory: ${{ github.workspace }}
+      run: 'set -euo pipefail
+
+        VERSION=$(python3 -c ''import sys; sys.path.insert(0,"scripts"); from pathlib import Path; from bundle_version import
+        bundle_version; print(bundle_version(Path.cwd()))'')
+
+        [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]
+
+        TAG="morning-${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+        NAME="Tekstitys-${VERSION}-manual.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}-macos-arm64.dmg"
+
+        mkdir -p "$RUNNER_TEMP/morning-release"
+
+        cp "pyside/dist/Tekstitys-macos-arm64.dmg" "$RUNNER_TEMP/morning-release/$NAME"
+
+        cd "$RUNNER_TEMP/morning-release"
+
+        shasum -a 256 "$NAME" > SHA256.txt
+
+        shasum -a 256 -c SHA256.txt
+
+        cat > notes.md <<EOF
+
+        Fresh Apple Silicon build from merged main $BUILD_SHA.
+
+        App version: $VERSION. Build ID: $GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT.
+
+        Developer ID signed, notarized and stapled by the existing packaging steps.
+
+        Native feature/UI acceptance has not been performed. Draft test build, not a stable release.
+
+        No Actions artifact/cache storage and no non-Mac builds.
+
+        EOF
+
+        gh release create "$TAG" "$NAME" SHA256.txt --target "$BUILD_SHA" --draft --prerelease --latest=false --title "Tekstitys
+        $VERSION arm64 TEST $GITHUB_RUN_ID" --notes-file notes.md
+
+        '
+    timeout-minutes: 90
+    permissions:
+      contents: write
