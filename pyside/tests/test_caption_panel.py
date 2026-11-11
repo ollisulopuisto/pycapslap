@@ -381,10 +381,21 @@ class _FakeChecker:
         return ["kauppa", "kaappi"]
 
 
-def test_caption_panel_spell_spans_and_replacement(qtbot):
+def test_caption_panel_spell_spans_and_replacement(qtbot, monkeypatch):
     panel = CaptionPanelWidget()
     qtbot.addWidget(panel)
-    panel.spell_checker = _FakeChecker({"kaupppa"})
+    from app.services.proofreading import Issue
+    import app.services.proofreading_worker as worker
+
+    def check(cues, mode):
+        return tuple(
+            (Issue(8, 15, "Spelling", ("kauppa",), "spelling"),)
+            if "kaupppa" in cue.text
+            else ()
+            for cue in cues
+        )
+
+    monkeypatch.setattr(worker, "check_snapshot", check)
 
     seg = CaptionSegment(
         start_ms=0,
@@ -398,8 +409,8 @@ def test_caption_panel_spell_spans_and_replacement(qtbot):
     )
     panel.set_segments([seg])
 
-    spans = panel.spell_spans_for_row(0)
-    assert spans == [(8, 15, "kaupppa")]
+    qtbot.waitUntil(lambda: bool(panel.proofreading_for_row(0)))
+    assert panel.proofreading_for_row(0)[0].start == 8
 
     emitted = []
     panel.segments_updated.connect(emitted.append)
@@ -408,7 +419,7 @@ def test_caption_panel_spell_spans_and_replacement(qtbot):
     assert panel.segments[0].text == "Tämä on kauppa"
     assert len(emitted) == 1
     # The corrected row is re-checked, not served from the stale cache.
-    assert panel.spell_spans_for_row(0) == []
+    assert panel.proofreading_for_row(0) == ()
 
 
 def test_caption_panel_spell_check_disabled_without_voikko(qtbot):
@@ -418,13 +429,13 @@ def test_caption_panel_spell_check_disabled_without_voikko(qtbot):
     class _Unavailable:
         available = False
 
-    panel.spell_checker = _Unavailable()
+    panel.combo_proofreading.setCurrentIndex(0)
     seg = CaptionSegment(
         start_ms=0, end_ms=1000, text="kaupppa", words=[WordSpan(0, 1000, "kaupppa")]
     )
     panel.set_segments([seg])
 
-    assert panel.spell_spans_for_row(0) == []
+    assert panel.proofreading_for_row(0) == ()
 
 
 def test_caption_panel_edit_timecode_cell(qtbot):
@@ -726,3 +737,27 @@ def test_caption_panel_row_for_binary_search(qtbot):
     assert panel._row_for(CaptionSegment(2500, 2800, "gap")) == -1
     # After all
     assert panel._row_for(CaptionSegment(7000, 8000, "after")) == -1
+
+
+def test_stale_proofreading_menu_action_does_not_replace(qtbot):
+    from app.services.proofreading import Issue
+
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    panel.set_segments([CaptionSegment(0, 1000, "Changed text")])
+    panel._apply_proofreading(
+        0, Issue(0, 3, "Test", ("new",), "grammar"), "new", "Old text"
+    )
+    assert panel.segments[0].text == "Changed text"
+
+
+def test_proofreading_defaults_and_off_clear_results(qtbot):
+    from app.services.proofreading import Issue
+
+    panel = CaptionPanelWidget()
+    qtbot.addWidget(panel)
+    assert panel.combo_proofreading.currentData() == "errors"
+    panel.set_segments([CaptionSegment(0, 1000, "He ei")])
+    panel.proofreader.rows = ((Issue(3, 5, "Test", ("eivät",), "grammar"),),)
+    panel.combo_proofreading.setCurrentIndex(0)
+    assert panel.proofreading_for_row(0) == ()

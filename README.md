@@ -33,7 +33,7 @@ transcriptions before export, especially names, numbers and punctuation.
   including verbatim or edited output, and whisper.cpp with selectable models.
 - **Cue editing:** text and timecode editing, keyboard timing nudges, shifting
   words between neighbouring cues, syllable repair and orphan-line cleanup.
-  Optional libvoikko support adds Finnish spelling suggestions.
+  Local Punakynä/Voikko proofreading adds Finnish spelling and grammar suggestions; style advice is opt-in.
 - **Preview and placement:** drag captions on the video, adjust their vertical
   anchor, view platform safe areas and use activity-based Auto Dodge placement.
   The preview uses the core's caption layout instead of separate line breaking.
@@ -91,7 +91,7 @@ The helper installs/copies FFmpeg and ffprobe into `rust/bin/`. The application
 finds the Rust core at `rust/target/release/core`. Model
 installation is still a separate step in Transcription Settings.
 
-Optional Finnish spell checking:
+For Finnish proofreading when running from source:
 
 ```sh
 brew install libvoikko

@@ -7,6 +7,16 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 
 ## [Unreleased]
 
+### Added
+- Finnish proofreading now uses Punakynä locally: red spelling, amber grammar,
+  and optional blue style advice in the caption table. Right-click a finding
+  to see its explanation and apply a suggestion. Errors are on by default;
+  choose Off or Errors + style in the caption panel. Checks use neighbouring
+  cues as context without changing timing or applying corrections automatically.
+- Mac packaging includes Voikko and the Finnish dictionary, licence notices,
+  and corresponding source archives. No separate Homebrew/server setup is needed
+  in packaged builds. Distribution licensing remains a release gate.
+
 ## [v26.11.09.1] - 2026-11-09
 
 ### Fixed
