@@ -108,6 +108,11 @@ def _use_installed_default_font(app: QApplication) -> None:
 
 
 def main():
+    if sys.argv[1:] == ["--proofreading-smoke"]:
+        from app.services.proofreading_smoke import smoke
+
+        smoke()
+        return
     ensure_macos_app_name()
 
     app = QApplication(sys.argv)

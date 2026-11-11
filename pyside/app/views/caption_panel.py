@@ -43,7 +43,8 @@ from app.models.captions import (
     timing_flag,
 )
 from app.services.preset_manager import PresetManager
-from app.services.spellcheck import get_shared_checker
+from app.services.proofreading import Cue
+from app.services.proofreading_worker import Proofreader
 from app.views.tile_buttons import SMALL_QSS, tile
 from app.views.wrapped_text import WrappedText
 
@@ -102,7 +103,7 @@ class SpellCheckDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
         if index.column() != COL_TEXT:
             return
-        spans = self.panel.spell_spans_for_row(index.row())
+        spans = self.panel.proofreading_for_row(index.row())
         if not spans:
             return
 
@@ -119,7 +120,21 @@ class SpellCheckDelegate(QStyledItemDelegate):
         pen.setWidthF(1.4)
         painter.setPen(pen)
         painter.setRenderHint(painter.RenderHint.Antialiasing, True)
-        for start, end, _word in spans:
+        for issue in spans:
+            color = {
+                "spelling": SPELL_ERROR_COLOR,
+                "grammar": "#fbbf24",
+                "style": "#60a5fa",
+            }[issue.category]
+            pen.setColor(QColor(color))
+            pen.setStyle(
+                Qt.PenStyle.DotLine
+                if issue.category == "style"
+                else Qt.PenStyle.SolidLine
+            )
+            painter.setPen(pen)
+            start = len(text[: issue.start].encode("utf-16-le")) // 2
+            end = len(text[: issue.end].encode("utf-16-le")) // 2
             for x1, x2, baseline in wrapped.underlines(start, end):
                 if x1 >= rect.width():
                     continue
@@ -180,8 +195,8 @@ class CaptionPanelWidget(QWidget):
             self.preset_manager.get_default_style() or CaptionStyle()
         )
         self._block_signals: bool = False
-        self.spell_checker = get_shared_checker()
-        self._spell_cache: dict[int, list[tuple[int, int, str]]] = {}
+        self.proofreader = Proofreader(self)
+        self.proofreader.changed.connect(self._proofreading_changed)
         # id(segment) -> row, so the playhead can find its cue without a scan
         # of the whole transcript on every position tick.
         self._row_of: dict[int, int] = {}
@@ -202,6 +217,24 @@ class CaptionPanelWidget(QWidget):
             "font-weight: bold; font-size: 14px; color: #f4f4f5;"
         )
         header_layout.addWidget(self.lbl_title, 0, 0, 1, 3)
+        self.combo_proofreading = QComboBox()
+        for label, mode in (
+            ("Off", "off"),
+            ("Errors", "errors"),
+            ("Errors + style", "style"),
+        ):
+            self.combo_proofreading.addItem(label, mode)
+        self.combo_proofreading.setCurrentIndex(1)
+        self.combo_proofreading.setAccessibleName("Finnish proofreading")
+        self.combo_proofreading.setToolTip(
+            "Local Finnish proofreading: red spelling, amber grammar, blue style. Suggestions only, never automatic changes."
+        )
+        self.combo_proofreading.currentIndexChanged.connect(self._request_proofreading)
+        header_layout.addWidget(QLabel("Finnish proofreading"), 5, 0)
+        header_layout.addWidget(self.combo_proofreading, 5, 1, 1, 2)
+        self.proofreading_status = QLabel()
+        self.proofreading_status.setWordWrap(True)
+        header_layout.addWidget(self.proofreading_status, 6, 0, 1, 3)
 
         self.btn_add_cue = tile("Add", "plus", compact=True)
         self.btn_add_cue.setToolTip(
@@ -918,21 +951,26 @@ class CaptionPanelWidget(QWidget):
             self.cue_table.selectRow(row)
             self.segments_updated.emit(self.segments)
 
-    def spell_spans_for_row(self, row: int) -> list[tuple[int, int, str]]:
-        """Misspelled (start, end, word) spans of a row, cached per repaint."""
-        if not self.spell_checker.available or not (0 <= row < len(self.segments)):
-            return []
-        cached = self._spell_cache.get(row)
-        if cached is None:
-            cached = self.spell_checker.misspelled_spans(self.segments[row])
-            self._spell_cache[row] = cached
-        return cached
+    def proofreading_for_row(self, row):
+        return (
+            self.proofreader.rows[row] if 0 <= row < len(self.proofreader.rows) else ()
+        )
 
-    def _invalidate_spell_cache(self, row: int | None = None) -> None:
-        if row is None:
-            self._spell_cache.clear()
-        else:
-            self._spell_cache.pop(row, None)
+    def _request_proofreading(self, *_args):
+        cues = tuple(
+            Cue(seg.text, bool(seg.words and seg.words[0].glue_to_previous))
+            for seg in self.segments
+        )
+        self.proofreader.request(cues, self.combo_proofreading.currentData())
+
+    def _proofreading_changed(self):
+        self.proofreading_status.setText(self.proofreader.error)
+        self.cue_table.viewport().update()
+
+    def _invalidate_spell_cache(self, row=None):
+        # Neighbours supply grammatical context, so an edit invalidates all
+        # visible results immediately. The worker retains a bounded text cache.
+        self._request_proofreading()
 
     def _char_under(self, row: int, pos: QPoint) -> int | None:
         """The character boundary under a viewport point in a text cell."""
@@ -943,19 +981,6 @@ class CaptionPanelWidget(QWidget):
         wrapped = WrappedText(item.text(), self.cue_table.font(), rect.width())
         top = rect.top() + (rect.height() - wrapped.height) / 2
         return wrapped.char_at(pos.x() - rect.left(), pos.y() - top)
-
-    def _spell_span_at(self, row: int, pos: QPoint) -> tuple[int, int, str] | None:
-        """The misspelled word under a viewport point, if any."""
-        spans = self.spell_spans_for_row(row)
-        if not spans:
-            return None
-        char = self._char_under(row, pos)
-        if char is None:
-            return None
-        for start, end, word in spans:
-            if start < char <= end:
-                return (start, end, word)
-        return None
 
     def _token_under(self, row: int, pos: QPoint) -> int | None:
         """Index of the word at or just after a viewport point in a text cell."""
@@ -974,21 +999,30 @@ class CaptionPanelWidget(QWidget):
         row = index.row()
         menu = QMenu(self)
 
-        span = self._spell_span_at(row, pos)
-        if span:
-            start, end, word = span
-            suggestions = self.spell_checker.suggest(word)[:6]
-            if suggestions:
-                for suggestion in suggestions:
+        self.commit_active_editor()
+        char = self._char_under(row, pos)
+        if char is not None:
+            # QTextLayout uses UTF-16 cursor units, the engine uses code points.
+            text = self.segments[row].text
+            char = len(
+                text.encode("utf-16-le")[: char * 2].decode(
+                    "utf-16-le", errors="ignore"
+                )
+            )
+            for issue in self.proofreading_for_row(row):
+                if not issue.start <= char < issue.end:
+                    continue
+                label = menu.addAction(f"{issue.category.title()}: {issue.message}")
+                label.setEnabled(False)
+                for suggestion in issue.replacements:
                     action = menu.addAction(suggestion)
                     action.triggered.connect(
-                        lambda _checked=False, s=suggestion: self._replace_word(
-                            row, start, end, s
+                        lambda _checked=False, i=issue, s=suggestion, original=text: (
+                            self._apply_proofreading(row, i, s, original)
                         )
                     )
-            else:
-                no_hits = menu.addAction(f"No suggestions for “{word}”")
-                no_hits.setEnabled(False)
+                if not issue.replacements:
+                    menu.addAction("No replacement suggestions").setEnabled(False)
 
         token = self._token_under(row, pos)
         words = self.segments[row].text.split()
@@ -1012,6 +1046,11 @@ class CaptionPanelWidget(QWidget):
         self.set_segments(self.segments)
         self.cue_table.selectRow(row)
         self.segments_updated.emit(self.segments)
+
+    def _apply_proofreading(self, row, issue, replacement, original):
+        # QMenu has a nested event loop. Reject stale actions after any edit.
+        if 0 <= row < len(self.segments) and self.segments[row].text == original:
+            self._replace_word(row, issue.start, issue.end, replacement)
 
     def _replace_word(self, row: int, start: int, end: int, replacement: str) -> None:
         if not (0 <= row < len(self.segments)):

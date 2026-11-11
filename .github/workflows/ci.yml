@@ -138,6 +138,19 @@ jobs:
       - name: Install Python dependencies
         run: uv sync
 
+      - name: Bundle and smoke-test native Finnish proofreading
+        run: |
+          brew install libvoikko
+          uv run python scripts/voikko/ci_collect_macos.py
+          uv run --with pyinstaller pyinstaller --noconfirm --onedir \
+            --name proofreading-smoke --paths pyside \
+            --distpath /tmp/proofreading-dist --workpath /tmp/proofreading-build \
+            --specpath /tmp \
+            --add-binary 'scripts/voikko/bundle/native/macos/lib/*.dylib:voikko/lib' \
+            --add-data 'scripts/voikko/bundle/native/dict:voikko/voikko' \
+            scripts/proofreading_ci_smoke.py
+          /tmp/proofreading-dist/proofreading-smoke/proofreading-smoke
+
       - name: pytest
         run: uv run python -m pytest
         env:

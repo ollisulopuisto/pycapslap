@@ -63,6 +63,11 @@ jobs:
       - name: Install Python dependencies
         run: uv sync
 
+      - name: Bundle Finnish proofreading and corresponding sources
+        run: |
+          brew install libvoikko
+          uv run python scripts/voikko/ci_collect_macos.py
+
       - name: Build Tekstitys.app
         working-directory: pyside
         run: uv run --with pyinstaller pyinstaller tekstitys.spec --noconfirm
@@ -156,6 +161,9 @@ jobs:
           echo '{"id":"ci","method":"ping","params":{}}' | "$CORE" | grep -q '"ok":true'
           CLI="pyside/dist/Tekstitys.app/Contents/MacOS/TekstitysCLI"
           "$CLI" --help >/dev/null
+          # Exercise the actual signed GUI executable's embedded Python and
+          # ctypes engine, not the source checkout or a Homebrew interpreter.
+          pyside/dist/Tekstitys.app/Contents/MacOS/Tekstitys --proofreading-smoke
           # whisper-cli must still find its bundled ggml dylibs when launched
           # the way the core launches it (DYLD_LIBRARY_PATH + restricted mode).
           WHISPER="pyside/dist/Tekstitys.app/Contents/Frameworks/rust/bin/whisper-cli-macos-arm64"
@@ -167,6 +175,8 @@ jobs:
         run: |
           mkdir installer
           ditto Tekstitys.app installer/Tekstitys.app
+          # Ship corresponding sources with every DMG, not just a source URL.
+          tar -czf installer/proofreading-corresponding-sources.tar.gz -C ../../.. dist/corresponding-sources scripts/voikko/ci_collect_macos.py scripts/voikko/bundle_native.py scripts/voikko/LICENSE scripts/voikko/README.md pyside/punakyna
           ln -s /Applications installer/Applications
           hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
           codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg

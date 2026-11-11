@@ -72,6 +72,21 @@ if bin_dir.exists():
             # symlink pointing at a path that won't exist elsewhere.
             binaries.append((str(entry.resolve()), "rust/bin"))
 
+# Voikko ctypes loads are not visible to PyInstaller's import analysis.
+voikko_bundle = repo_root / "scripts" / "voikko" / "bundle"
+if sys.platform == "darwin":
+    voikko_libs = voikko_bundle / "native" / "macos" / "lib"
+    if not (voikko_libs / "libvoikko.1.dylib").is_file():
+        raise SystemExit("Run scripts/voikko/ci_collect_macos.py before packaging")
+    for library in voikko_libs.glob("*.dylib"):
+        binaries.append((str(library), "voikko/lib"))
+    datas.extend([
+        (str(voikko_bundle / "native" / "dict"), "voikko/voikko"),
+        (str(voikko_bundle / "licenses"), "voikko/licenses"),
+        (str(pyside_dir / "punakyna" / "LICENSE"), "voikko/licenses/punakyna"),
+        (str(pyside_dir / "punakyna" / "UPSTREAM_COMMIT"), "voikko/licenses/punakyna"),
+    ])
+
 a = Analysis(
     [str(pyside_dir / "app" / "main.py")],
     pathex=[str(pyside_dir)],

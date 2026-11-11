@@ -35,3 +35,8 @@ __pycache__/
 *.pyc
 Näyttökuva*.png
 portal/data/
+
+# Native proofreading packaging outputs
+scripts/voikko/.ci-staging/
+scripts/voikko/bundle/
+dist/corresponding-sources/

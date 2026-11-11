@@ -12,8 +12,12 @@ testpaths = ["pyside/tests"]
 timeout = 120
 
 [tool.ruff]
+extend-exclude = ["pyside/punakyna", "scripts/voikko"]
 src = ["pyside"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 ignore = ["E402"]
+
+[tool.ruff.format]
+exclude = ["pyside/punakyna/**", "scripts/voikko/**"]
