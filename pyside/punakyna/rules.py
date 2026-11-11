@@ -184,8 +184,10 @@ def check_negation(sent_text, offset, words, voikko, cache):
 def check_negation_agreement(sent_text, offset, words):
     out = []
     for prev, cur in zip(words, words[1:]):
-        want = _PRON_KIELTO.get(prev.lower)
-        if want and cur.lower in _KIELTO and cur.lower != want:
+        want = _PRON_KIELTO.get(_fold(prev.lower))
+        current = _fold(cur.lower)
+        if want and current in _KIELTO and current != want:
+            want = {"eivat": "eivät"}.get(want, want)
             out.append(Suggestion(
                 rule='NEG_NUMBER', category='grammar', severity='error',
                 start=offset + cur.start, end=offset + cur.end,

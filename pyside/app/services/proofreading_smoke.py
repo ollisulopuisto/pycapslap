@@ -8,7 +8,9 @@ def smoke():
     assert any(
         i.category == "spelling" and "kauppa" in i.replacements for i in rows[0]
     ), rows
-    assert any(i.category == "grammar" for i in rows[1]), rows
+    assert any(
+        i.category == "grammar" and "eivät" in i.replacements for i in rows[1]
+    ), rows
     import punakyna.backend_voikko as backend
     from punakyna.voikko_gc import _resolve_libfile
     import os

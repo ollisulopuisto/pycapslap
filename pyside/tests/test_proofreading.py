@@ -123,3 +123,36 @@ def test_native_engine_when_available():
     from app.services.proofreading_smoke import smoke
 
     smoke()
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("He ei", "eivät"),
+        ("Minä eivät", "en"),
+        ("Sinä eivät", "et"),
+        ("Hän eivät", "ei"),
+    ],
+)
+def test_negation_replacements_preserve_finnish_letters(text, expected):
+    from punakyna.rules import _Tok, check_negation_agreement
+
+    words = text.split()
+    tokens = [
+        _Tok(words[0], 0, len(words[0]), None),
+        _Tok(words[1], len(words[0]) + 1, len(text), None),
+    ]
+    findings = check_negation_agreement(text, 0, tokens)
+    assert len(findings) == 1
+    assert findings[0].replacements == [expected]
+
+
+def test_correct_accented_negation_is_not_an_error():
+    from punakyna.rules import _Tok, check_negation_agreement
+
+    assert (
+        check_negation_agreement(
+            "He eivät", 0, [_Tok("He", 0, 2, None), _Tok("eivät", 3, 8, None)]
+        )
+        == []
+    )

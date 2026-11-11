@@ -176,7 +176,7 @@ jobs:
           mkdir installer
           ditto Tekstitys.app installer/Tekstitys.app
           # Ship corresponding sources with every DMG, not just a source URL.
-          tar -czf installer/proofreading-corresponding-sources.tar.gz -C ../../.. dist/corresponding-sources scripts/voikko/ci_collect_macos.py scripts/voikko/bundle_native.py scripts/voikko/LICENSE scripts/voikko/README.md pyside/punakyna
+          tar --exclude='__pycache__' -czf installer/proofreading-corresponding-sources.tar.gz -C ../../.. dist/corresponding-sources scripts/voikko/ci_collect_macos.py scripts/voikko/bundle_native.py scripts/voikko/LICENSE scripts/voikko/README.md pyside/punakyna
           ln -s /Applications installer/Applications
           hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
           codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg
