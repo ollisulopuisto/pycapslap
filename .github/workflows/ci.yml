@@ -60,6 +60,7 @@ jobs:
               - 'review/**'
               - '.github/workflows/**'
             python_lint:
+              - 'packaging/**/*.py'
               - 'pyside/**/*.py'
               - 'portal/**/*.py'
               - 'scripts/**/*.py'
