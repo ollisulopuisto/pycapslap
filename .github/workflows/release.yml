@@ -169,6 +169,7 @@ jobs:
           ditto Tekstitys.app installer/Tekstitys.app
           ln -s /Applications installer/Applications
           hdiutil create -volname "Tekstitys" -srcfolder installer -ov -format UDZO Tekstitys-macos-arm64.dmg
+          python3 ../../packaging/dmg/restyle.py Tekstitys-macos-arm64.dmg "Tekstitys.app" ../../packaging/dmg/welcome-tekstitys.png
           codesign --force --timestamp --sign "Developer ID Application: Olli Sulopuisto (LWSR8T5392)" Tekstitys-macos-arm64.dmg
           codesign --verify --verbose=2 Tekstitys-macos-arm64.dmg
 
