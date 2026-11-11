@@ -16,6 +16,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
+      dmg: ${{ steps.filter.outputs.dmg }}
       rust: ${{ steps.filter.outputs.rust }}
       pyside: ${{ steps.filter.outputs.pyside }}
       review: ${{ steps.filter.outputs.review }}
@@ -59,7 +60,11 @@ jobs:
               - 'portal/**'
               - 'review/**'
               - '.github/workflows/**'
+            dmg:
+              - 'packaging/dmg/**'
+              - '.github/workflows/**'
             python_lint:
+              - 'packaging/**/*.py'
               - 'pyside/**/*.py'
               - 'portal/**/*.py'
               - 'scripts/**/*.py'
@@ -70,6 +75,15 @@ jobs:
               - 'portal/pyproject.toml'
               - 'portal/uv.lock'
               - '.github/workflows/**'
+
+  dmg-layout:
+    needs: changes
+    if: needs.changes.outputs.dmg == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: DMG window contract tests
+        run: python3 packaging/dmg/test_layout.py
 
   rust:
     needs: changes
