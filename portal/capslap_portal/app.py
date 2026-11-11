@@ -153,6 +153,11 @@ def create_app(settings: Settings) -> FastAPI:
         # Prevent clickjacking: stop malicious sites from embedding the portal
         # in an iframe to trick clients or editors into taking unauthorized actions.
         response.headers["X-Frame-Options"] = "DENY"
+        # Sensitive data protection: prevent caching of private series tokens,
+        # draft videos, client feedback, and admin API data on non-static routes.
+        if not request.url.path.startswith("/static"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Pragma"] = "no-cache"
         # Content Security Policy: enforce defense-in-depth resource restrictions
         # (blocking unauthorized external scripts, plugin objects, and frame embeds).
         if request.url.path.startswith("/review"):
