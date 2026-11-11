@@ -62,6 +62,7 @@ jobs:
               - '.github/workflows/**'
             dmg:
               - 'packaging/dmg/**'
+              - '.github/workflows/**'
             python_lint:
               - 'packaging/**/*.py'
               - 'pyside/**/*.py'
