@@ -514,6 +514,59 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
     window.close()
 
 
+def test_prefetch_block_binary_search(qtbot):
+    """Verify O(log N) bisect prefetch queues exactly the matching block cues."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    cues = [
+        {
+            "startMs": i * 200,
+            "endMs": (i + 1) * 200,
+            "groupStartMs": (i // 4) * 800,
+            "groupEndMs": ((i // 4) + 1) * 800,
+        }
+        for i in range(20)
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    queued_cues = []
+    window._queue_caption_layer = lambda cue: queued_cues.append(cue)
+    window._pump_layer_queue = lambda: None
+
+    # Test prefetching middle block (index 8..11, group 1600..2400)
+    window._prefetch_block(cues[9])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[8:12]
+
+    # Test prefetching first block (0..3, group 0..800)
+    queued_cues.clear()
+    window._prefetch_block(cues[0])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[0:4]
+
+    # Test prefetching last block (16..19, group 3200..4000)
+    queued_cues.clear()
+    window._prefetch_block(cues[19])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[16:20]
+
+    # Test missing / sentinel block
+    queued_cues.clear()
+    window._prefetch_block({"groupStartMs": -1, "groupEndMs": -1})
+    assert len(queued_cues) == 0
+
+    # Test fallback path when _preview_cue_starts is empty/mismatched
+    window._preview_cue_starts = []
+    queued_cues.clear()
+    window._prefetch_block(cues[5])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[4:8]
+
+    window.close()
+
+
 def _karaoke_block(n):
     return [
         {

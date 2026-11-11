@@ -901,13 +901,28 @@ class MainWindow(QMainWindow):
         )
         if group == (-1, -1):
             return
-        for other in self._preview_cues:
-            same_block = (
-                int(other.get("groupStartMs", -2)),
-                int(other.get("groupEndMs", -2)),
-            ) == group
-            if same_block:
-                self._queue_caption_layer(other)
+        # Cues are chronologically sorted; bisect jumps directly to the block's
+        # starting index and breaks early once past the block's end.
+        if self._preview_cue_starts and len(self._preview_cue_starts) == len(
+            self._preview_cues
+        ):
+            start_idx = bisect.bisect_left(self._preview_cue_starts, group[0])
+            for i in range(start_idx, len(self._preview_cues)):
+                other = self._preview_cues[i]
+                if int(other.get("startMs", 0)) >= group[1]:
+                    break
+                if (
+                    int(other.get("groupStartMs", -2)),
+                    int(other.get("groupEndMs", -2)),
+                ) == group:
+                    self._queue_caption_layer(other)
+        else:
+            for other in self._preview_cues:
+                if (
+                    int(other.get("groupStartMs", -2)),
+                    int(other.get("groupEndMs", -2)),
+                ) == group:
+                    self._queue_caption_layer(other)
         self._pump_layer_queue()
 
     def _render_wanted_layer(self) -> None:
