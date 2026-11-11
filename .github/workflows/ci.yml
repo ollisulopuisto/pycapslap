@@ -146,8 +146,8 @@ jobs:
             --name proofreading-smoke --paths pyside \
             --distpath /tmp/proofreading-dist --workpath /tmp/proofreading-build \
             --specpath /tmp \
-            --add-binary 'scripts/voikko/bundle/native/macos/lib/*.dylib:voikko/lib' \
-            --add-data 'scripts/voikko/bundle/native/dict:voikko/voikko' \
+            --add-binary "$PWD/scripts/voikko/bundle/native/macos/lib/*.dylib:voikko/lib" \
+            --add-data "$PWD/scripts/voikko/bundle/native/dict:voikko/voikko" \
             scripts/proofreading_ci_smoke.py
           /tmp/proofreading-dist/proofreading-smoke/proofreading-smoke
 
