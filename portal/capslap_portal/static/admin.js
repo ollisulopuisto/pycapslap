@@ -138,7 +138,19 @@ async function showSeries(id) {
       'div',
       { class: 'linkbox' },
       linkField,
-      h('button', { onclick: () => navigator.clipboard.writeText(link) }, 'Copy'),
+      h(
+        'button',
+        {
+          type: 'button',
+          'aria-live': 'polite',
+          onclick: async (e) => {
+            await navigator.clipboard.writeText(link)
+            e.target.textContent = 'Copied!'
+            setTimeout(() => (e.target.textContent = 'Copy'), 1500)
+          },
+        },
+        'Copy'
+      ),
       h('a', { class: 'button', href: s.link, target: '_blank', rel: 'noopener' }, 'Open'),
       h(
         'button',
