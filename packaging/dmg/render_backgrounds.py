@@ -35,6 +35,9 @@ def draw(name, color):
         (388, 221), "→", font=ImageFont.truetype(FONT, 54), fill="#bfc8d2", anchor="mt"
     )
     d.text((55, 396), COPY["open"], font=ImageFont.truetype(FONT, 16), fill="#bdc4ce")
+    # Third light well for the whitelisted corresponding-sources tarball;
+    # its Finder label stays black, so it needs the same light background.
+    d.rounded_rectangle((270, 480, 505, 680), 24, fill="#eef0ed")
     return im
 
 

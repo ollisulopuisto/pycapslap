@@ -22,7 +22,7 @@ APPLESCRIPT = """on run argv
         set current view of w to icon view
         set toolbar visible of w to false
         set statusbar visible of w to false
-        set bounds of w to {80, 80, 855, 620}
+        set bounds of w to {80, 80, 855, 840}
         set opts to icon view options of w
         set arrangement of opts to not arranged
         set icon size of opts to 128
@@ -38,7 +38,7 @@ APPLESCRIPT = """on run argv
         close w
         open rootFolder
         delay 2
-        set bounds of container window of rootFolder to {80, 80, 855, 620}
+        set bounds of container window of rootFolder to {80, 80, 855, 840}
         update rootFolder without registering applications
         delay 3
         close container window of rootFolder

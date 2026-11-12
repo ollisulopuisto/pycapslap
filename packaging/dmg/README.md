@@ -11,9 +11,9 @@ and atomically replaces the image. App contents are not edited. No extra Python
 packages, downloaded executables, runner jobs, cache or artifact retention.
 
 `welcome*.png` is 4096 x 2160 at 72 dpi. The approved 775-point composition is
-anchored top-left; extra space is flat #171a20. Standard initial Finder bounds are 775 x 540
+anchored top-left; extra space is flat #171a20. Standard initial Finder bounds are 775 x 760
 including window chrome. Icon positions are (199,247) and (576,247), size 128,
-label size 16. The bottom 59 points of the 480-point composition are expendable.
+label size 16.
 A matching background colour is set before the picture, but Finder may ignore
 that fallback. Resize coverage beyond the 4096-point canvas is not promised.
 
@@ -46,11 +46,11 @@ are not visual acceptance. This opt-in is ignored outside GitHub Actions.
 Artwork source: `render_backgrounds.py`, Pillow and DejaVu Sans (development-only).
 The committed PNGs require no image library at packaging time. The standard layout expects only the app and Applications at the visible root.
 Unexpected extra files fail closed rather than hiding their content or leaving
-black labels on dark art. Solmu is the one exception, and only in its own repo:
-its restyle.py explicitly whitelists and positions a visible Documentation
-folder of shipped notices, with a third light well below the install pair and a
-taller initial window. This repo's restyle.py has no such exception; a
-Documentation folder here would fail closed like any other extra file.
+black labels on dark art. The one whitelisted exception here is
+proofreading-corresponding-sources.tar.gz, declared with --extra and positioned
+at (388,560) inside a third light well at (270,480)-(505,680) below the install
+pair, under the taller 775 x 760 initial window - the same pattern Solmu uses
+for its Documentation folder.
 
 The owner requested Finnish + English together on 11 November 2026.
 Finnish instructions use natural imperative wording; key senses checked against
