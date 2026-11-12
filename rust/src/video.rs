@@ -427,7 +427,7 @@ pub fn build_fitpad_filter_with_format(
 
 /// The `ass` filter clause for a subtitle file, pointed at our bundled fonts
 /// when we can find them.
-fn ass_filter(subtitle_path: &str) -> String {
+pub(crate) fn ass_filter(subtitle_path: &str) -> String {
     let escaped_path = escape_subtitle_path(subtitle_path);
 
     match _get_fonts_dir() {

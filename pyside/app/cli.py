@@ -324,6 +324,83 @@ def cmd_render(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_render_alpha(args: argparse.Namespace) -> int:
+    """Render a captions sidecar alone as an alpha movie/sequence (no video)."""
+    sidecar = Path(args.captions).expanduser().resolve()
+    if not sidecar.is_file():
+        err = f"Captions sidecar not found: {sidecar}"
+        if args.json:
+            _emit_json({"error": err, "ok": False})
+        else:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    try:
+        width, height = (int(part) for part in args.size.lower().split("x"))
+    except ValueError:
+        err = f"Invalid --size {args.size!r}: expected WIDTHxHEIGHT, e.g. 1080x1920"
+        if args.json:
+            _emit_json({"error": err, "ok": False})
+        else:
+            print(f"Error: {err}", file=sys.stderr)
+        return 1
+
+    try:
+        captions = load_captions(sidecar)
+        if args.preset:
+            edit_captions(captions, preset=args.preset)
+        if args.style_json:
+            edit_captions(captions, style_overrides=json.loads(args.style_json))
+        if args.position is not None:
+            edit_captions(captions, position_pct=float(args.position))
+        duration_ms = round(args.duration * 1000) if args.duration else None
+
+        def progress_cb(status: str, prog: float) -> None:
+            if args.json_events:
+                _emit_event("progress", status=status, percent=round(prog * 100, 1))
+            elif not args.json:
+                print(f"[{round(prog * 100):3d}%] {status}", flush=True)
+
+        with CapSlapSession() as session:
+            if args.json_events:
+                _emit_event(
+                    "status",
+                    status="starting_alpha_render",
+                    size=f"{width}x{height}",
+                    codec=args.codec,
+                )
+            rendered = session.render_alpha(
+                captions=captions,
+                width=width,
+                height=height,
+                fps=args.fps,
+                duration_ms=duration_ms,
+                output=args.out,
+                codec=args.codec,
+                progress_callback=progress_cb,
+            )
+            result = {
+                "ok": True,
+                "captions": str(sidecar),
+                "rendered": rendered,
+            }
+            if args.json_events:
+                _emit_event("complete", **result)
+            elif args.json:
+                _emit_json(result)
+            else:
+                print(f"Rendered [{rendered.get('codec')}]: {rendered.get('output')}")
+            return 0
+    except Exception as exc:
+        if args.json_events:
+            _emit_event("error", error=str(exc))
+        elif args.json:
+            _emit_json({"error": str(exc), "ok": False})
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def cmd_workflow(args: argparse.Namespace) -> int:
     """Run an end-to-end composite workflow: transcribe -> style/edit -> render."""
     video_path = Path(args.video).expanduser().resolve()
@@ -597,6 +674,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Stream NDJSON progress and status events",
     )
 
+    # render-alpha
+    p_alpha = subparsers.add_parser(
+        "render-alpha",
+        help="Render captions alone (no video) as an alpha movie or PNG sequence",
+    )
+    p_alpha.add_argument("--captions", required=True, help="Path to .capslap.json sidecar")
+    p_alpha.add_argument("--size", required=True, help="Canvas as WIDTHxHEIGHT, e.g. 1080x1920")
+    p_alpha.add_argument("--fps", type=float, default=25.0, help="Frames per second (default: 25)")
+    p_alpha.add_argument("--duration", type=float, help="Length in seconds (default: last cue end)")
+    p_alpha.add_argument(
+        "--codec",
+        choices=["prores", "png"],
+        default="prores",
+        help="prores = ProRes 4444 .mov, png = RGBA frame sequence (default: prores)",
+    )
+    p_alpha.add_argument("--out", required=True, help="Output .mov, or directory/%%05d-pattern for png")
+    p_alpha.add_argument("--preset", choices=list(STYLE_PRESETS.keys()), help="Apply a style preset first")
+    p_alpha.add_argument("--style-json", help="Style overrides as JSON")
+    p_alpha.add_argument("--position", help="Anchor position percent from top of frame")
+    p_alpha.add_argument("--json", action="store_true", help="Output result as JSON")
+    p_alpha.add_argument(
+        "--json-events",
+        action="store_true",
+        help="Stream NDJSON progress and status events",
+    )
+
     return parser
 
 
@@ -612,6 +715,8 @@ def run_cli(argv: list[str]) -> int:
         return cmd_edit(args)
     elif args.command == "render":
         return cmd_render(args)
+    elif args.command == "render-alpha":
+        return cmd_render_alpha(args)
     elif args.command == "workflow":
         return cmd_workflow(args)
     else:

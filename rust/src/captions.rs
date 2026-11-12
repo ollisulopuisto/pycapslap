@@ -549,6 +549,317 @@ pub fn load_captions(params: LoadCaptionsParams) -> Result<LoadCaptionsResult> {
     }
 }
 
+/// Recover one straight-alpha RGBA pixel from the black/white passes.
+///
+/// For a pixel where the caption covers a fraction `a` of the area, the
+/// two passes are `k = c*a` and `w = c*a + 255*(1-a)`, so the difference
+/// recovers the coverage and dividing it out of `k` recovers the colour.
+/// Shared by the editor's single-frame preview and the alpha export.
+pub(crate) fn combine_caption_passes(b_px: &[u8], w_px: &[u8], out_px: &mut [u8]) {
+    let diff0 = w_px[0].saturating_sub(b_px[0]);
+    let diff1 = w_px[1].saturating_sub(b_px[1]);
+    let diff2 = w_px[2].saturating_sub(b_px[2]);
+    let showing_through = diff0.max(diff1).max(diff2);
+    let alpha = 255 - showing_through;
+
+    if alpha > 0 {
+        let inv_a = 255.0 / alpha as f32;
+        out_px[0] = ((b_px[0] as f32 * inv_a).min(255.0)) as u8;
+        out_px[1] = ((b_px[1] as f32 * inv_a).min(255.0)) as u8;
+        out_px[2] = ((b_px[2] as f32 * inv_a).min(255.0)) as u8;
+        out_px[3] = alpha;
+    } else {
+        out_px.fill(0);
+    }
+}
+
+
+/// Frame rate as an ffmpeg rate string: integers stay integers, NTSC-style
+/// decimals become n/1001 so the frame grid stays exact.
+pub(crate) fn alpha_fps_rational(fps: f64) -> String {
+    let rounded = fps.round();
+    if (fps - rounded).abs() < 1e-9 {
+        return format!("{}", rounded as u64);
+    }
+    format!("{}", (fps * 1001.0).round() as u64) + "/1001"
+}
+
+/// Frames in `duration_ms` at `fps`, rounding up so the movie never ends
+/// before the last cue does.
+pub(crate) fn alpha_frame_count(duration_ms: u64, fps: f64) -> u64 {
+    (duration_ms as f64 / 1000.0 * fps).ceil() as u64
+}
+
+/// Export length: explicit `duration_ms`, otherwise the last cue's end.
+/// `None` when there is nothing to time the movie by.
+pub(crate) fn alpha_duration_ms(
+    segments: &[CaptionSegment],
+    duration_ms: Option<u64>,
+) -> Option<u64> {
+    duration_ms.or_else(|| segments.iter().map(|s| s.end_ms).max())
+}
+
+/// PNG sequence output: an existing `%0Nd` pattern passes through, a plain
+/// path becomes a directory of `frame_00001.png` files.
+pub(crate) fn alpha_png_pattern(output: &str) -> String {
+    if output.contains('%') {
+        return output.to_string();
+    }
+    let trimmed = output.trim_end_matches(['/', '\\']);
+    format!("{trimmed}/frame_%05d.png")
+}
+
+/// Render the captions alone — no input video — as a straight-alpha movie
+/// (ProRes 4444) or an RGBA PNG sequence, for titles and credits that get
+/// composited downstream (Autoraffkat's Package lane, Final Cut).
+///
+/// libass leaves the alpha channel alone, so the captions are drawn twice,
+/// on black and on white, and each output frame is recovered per pixel with
+/// [`combine_caption_passes`] — the same trick as the editor's preview
+/// layer, streamed through the whole clip instead of one frame at a time.
+pub async fn render_alpha(
+    id: &str,
+    params: crate::types::RenderAlphaParams,
+    emit: &mut (dyn FnMut(RpcEvent) + Send),
+) -> Result<crate::types::RenderAlphaResult> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let duration_ms = alpha_duration_ms(&params.segments, params.duration_ms)
+        .ok_or_else(|| anyhow!("renderAlpha needs at least one segment or an explicit durationMs"))?;
+    if params.width < 2 || params.height < 2 {
+        return Err(anyhow!(
+            "renderAlpha canvas must be at least 2x2, got {}x{}",
+            params.width,
+            params.height
+        ));
+    }
+    if params.fps <= 0.0 {
+        return Err(anyhow!("renderAlpha fps must be positive, got {}", params.fps));
+    }
+    let frames = alpha_frame_count(duration_ms, params.fps);
+    if frames == 0 {
+        return Err(anyhow!("renderAlpha would produce zero frames"));
+    }
+    let codec = params.codec.as_deref().unwrap_or("prores");
+    if codec != "prores" && codec != "png" {
+        return Err(anyhow!("renderAlpha codec must be prores or png, got {codec}"));
+    }
+
+    let temp_dir = std::env::temp_dir().join(format!("capslap_alpha_{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)?;
+
+    let result = async {
+        let style = default_ass_style(
+            params.width,
+            params.height,
+            params.font_name.as_deref(),
+            params.text_color.as_deref(),
+            params.highlight_word_color.as_deref(),
+            params.outline_color.as_deref(),
+            params.outline_width,
+            params.background_box,
+            params.glow_effect,
+            params.position.as_deref(),
+            params.font_size,
+        );
+        let ass_doc = build_ass_document(
+            params.width,
+            params.height,
+            &style,
+            &params.segments,
+            params.karaoke,
+            params.multiline,
+            params.justify_lines,
+            params.glow_effect,
+            &params.position_overrides,
+            &params.blocked_bands,
+        )?;
+        let ass_path = temp_dir.join("alpha.ass");
+        fs::write(&ass_path, &ass_doc)?;
+
+        let ffmpeg = crate::video::get_ffmpeg_path_sync();
+        let ass = crate::video::ass_filter(&ass_path.to_string_lossy());
+        let rate = alpha_fps_rational(params.fps);
+        // Whole frames only: the movie is exactly `frames` long, so the two
+        // passes and the encoder agree on the length by construction.
+        let seconds = frames as f64 / params.fps;
+        let (w, h) = (params.width, params.height);
+        let pass_frame_bytes = (w as usize) * (h as usize) * 3;
+
+        let mut passes = Vec::new();
+        for colour in ["black", "white"] {
+            let child = TokioCommand::new(&ffmpeg)
+                .arg("-hide_banner")
+                .arg("-loglevel")
+                .arg("error")
+                .arg("-f")
+                .arg("lavfi")
+                .arg("-i")
+                .arg(format!(
+                    "color=c={colour}:s={w}x{h}:d={seconds:.6}:r={rate}"
+                ))
+                .arg("-vf")
+                .arg(&ass)
+                .arg("-f")
+                .arg("rawvideo")
+                .arg("-pix_fmt")
+                .arg("rgb24")
+                .arg("-")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| anyhow!("Failed to spawn ffmpeg caption pass: {e}"))?;
+            passes.push(child);
+        }
+
+        let output = if codec == "png" {
+            if !params.output.contains('%') {
+                fs::create_dir_all(&params.output)?;
+            }
+            alpha_png_pattern(&params.output)
+        } else {
+            params.output.clone()
+        };
+
+        let mut encoder_args: Vec<String> = vec![
+            "-y".into(),
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-f".into(),
+            "rawvideo".into(),
+            "-pix_fmt".into(),
+            "rgba".into(),
+            "-s".into(),
+            format!("{w}x{h}"),
+            "-r".into(),
+            rate.clone(),
+            "-i".into(),
+            "-".into(),
+        ];
+        if codec == "prores" {
+            for arg in [
+                "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
+                "-vendor", "apl0", "-frames:v",
+            ] {
+                encoder_args.push(arg.into());
+            }
+            encoder_args.push(frames.to_string());
+        } else {
+            encoder_args.push("-c:v".into());
+            encoder_args.push("png".into());
+        }
+        encoder_args.push(output.clone());
+
+        let mut encoder = TokioCommand::new(&ffmpeg)
+            .args(&encoder_args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| anyhow!("Failed to spawn ffmpeg alpha encoder: {e}"))?;
+
+        // Drain stderr of all three processes so a chatty failure cannot
+        // deadlock on a full pipe; kept for the error message.
+        fn drain_stderr(child: &mut tokio::process::Child) -> tokio::task::JoinHandle<String> {
+            let mut stderr = child.stderr.take().expect("stderr piped");
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let _ = stderr.read_to_end(&mut buf).await;
+                String::from_utf8_lossy(&buf).trim().chars().take(2000).collect()
+            })
+        }
+        let pass_stderr = passes.iter_mut().map(drain_stderr).collect::<Vec<_>>();
+        let encoder_stderr = drain_stderr(&mut encoder);
+
+        let mut black = passes.remove(0);
+        let mut white = passes.remove(0);
+        let mut black_out = black.stdout.take().expect("stdout piped");
+        let mut white_out = white.stdout.take().expect("stdout piped");
+        let mut enc_in = encoder.stdin.take().expect("stdin piped");
+
+        let mut black_buf = vec![0u8; pass_frame_bytes];
+        let mut white_buf = vec![0u8; pass_frame_bytes];
+        let mut rgba = vec![0u8; pass_frame_bytes / 3 * 4];
+        let progress_marks: std::collections::HashSet<u64> = (1..10)
+            .map(|n| frames * n / 10)
+            .collect();
+
+        let mut write_error: Option<anyhow::Error> = None;
+        for frame in 0..frames {
+            let read_black = black_out.read_exact(&mut black_buf);
+            let read_white = white_out.read_exact(&mut white_buf);
+            if let Err(e) = read_black.await.and(read_white.await) {
+                write_error = Some(anyhow!("caption pass ended early at frame {frame}: {e}"));
+                break;
+            }
+            for (out_px, (b_px, w_px)) in rgba
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(black_buf.as_chunks::<3>().0.iter().zip(white_buf.as_chunks::<3>().0.iter()))
+            {
+                combine_caption_passes(b_px, w_px, out_px);
+            }
+            if let Err(e) = enc_in.write_all(&rgba).await {
+                write_error = Some(anyhow!("alpha encoder stopped taking frames at {frame}: {e}"));
+                break;
+            }
+            if progress_marks.contains(&(frame + 1)) {
+                emit(RpcEvent::Progress {
+                    id: id.to_string(),
+                    status: format!("Rendering alpha ({}/{frames})", frame + 1),
+                    progress: (frame + 1) as f32 / frames as f32,
+                });
+            }
+        }
+        drop(enc_in);
+        drop(black_out);
+        drop(white_out);
+
+        let enc_status = encoder.wait().await?;
+        let enc_err = encoder_stderr.await.unwrap_or_default();
+        for child in [&mut black, &mut white] {
+            let _ = child.kill().await;
+        }
+        let pass_errs: Vec<String> = {
+            let mut out = Vec::new();
+            for handle in pass_stderr {
+                out.push(handle.await.unwrap_or_default());
+            }
+            out
+        };
+
+        if let Some(e) = write_error {
+            return Err(e.context(format!(
+                "ffmpeg stderr: {}; {}",
+                pass_errs.join(" | "),
+                enc_err
+            )));
+        }
+        if !enc_status.success() {
+            return Err(anyhow!(
+                "ffmpeg alpha encoder failed ({enc_status}): {enc_err}"
+            ));
+        }
+
+        Ok(crate::types::RenderAlphaResult {
+            output,
+            codec: codec.to_string(),
+            frames,
+            width: w,
+            height: h,
+            fps: params.fps,
+            duration_ms,
+        })
+    }
+    .await;
+
+    cleanup_temp_dir(&temp_dir);
+    result
+}
+
 /// Render the captions alone as an RGBA PNG the editor can drag over a
 /// caption-free frame.
 ///
@@ -624,19 +935,7 @@ async fn render_caption_layer(
             .iter()
             .zip(white_slice.as_chunks::<3>().0.iter()),
     ) {
-        let diff0 = w_px[0].saturating_sub(b_px[0]);
-        let diff1 = w_px[1].saturating_sub(b_px[1]);
-        let diff2 = w_px[2].saturating_sub(b_px[2]);
-        let showing_through = diff0.max(diff1).max(diff2);
-        let alpha = 255 - showing_through;
-
-        if alpha > 0 {
-            let inv_a = 255.0 / alpha as f32;
-            out_px[0] = ((b_px[0] as f32 * inv_a).min(255.0)) as u8;
-            out_px[1] = ((b_px[1] as f32 * inv_a).min(255.0)) as u8;
-            out_px[2] = ((b_px[2] as f32 * inv_a).min(255.0)) as u8;
-            out_px[3] = alpha;
-        }
+        combine_caption_passes(b_px, w_px, out_px);
     }
 
     let layer = image::RgbaImage::from_raw(w, h, out_buffer)
@@ -3675,5 +3974,189 @@ mod tests_proof_copy {
         with["proofShortSide"] = serde_json::json!(720);
         let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
         assert_eq!(with.proof_short_side, Some(720));
+    }
+}
+
+#[cfg(test)]
+mod tests_alpha {
+    use super::*;
+
+    #[test]
+    fn combine_passes_recovers_alpha_and_colour() {
+        // No coverage: black and white passes are the background itself.
+        let mut out = [0u8; 4];
+        combine_caption_passes(&[0, 0, 0], &[255, 255, 255], &mut out);
+        assert_eq!(out, [0, 0, 0, 0]);
+
+        // Full coverage: colour is the black pass, alpha opaque.
+        combine_caption_passes(&[255, 0, 0], &[255, 0, 0], &mut out);
+        assert_eq!(out, [255, 0, 0, 255]);
+
+        // Half coverage of pure red: k = c*a, w = c*a + 255*(1-a).
+        let a = 128u8;
+        let k = [(255u32 * a as u32 / 255) as u8, 0, 0];
+        let w = [
+            (255u32 * a as u32 / 255 + (255 - a as u32)) as u8,
+            (255 - a as u32) as u8,
+            (255 - a as u32) as u8,
+        ];
+        combine_caption_passes(&k, &w, &mut out);
+        assert_eq!(out[3], a);
+        assert!((out[0] as i32 - 255).abs() <= 2, "colour recovered: {out:?}");
+        assert!(out[1] <= 2 && out[2] <= 2, "colour recovered: {out:?}");
+    }
+
+    #[test]
+    fn fps_rational_keeps_integers_and_splits_ntsc() {
+        assert_eq!(alpha_fps_rational(25.0), "25");
+        assert_eq!(alpha_fps_rational(24.0), "24");
+        assert_eq!(alpha_fps_rational(29.97), "30000/1001");
+        assert_eq!(alpha_fps_rational(23.976), "24000/1001");
+    }
+
+    #[test]
+    fn frame_count_rounds_up_partial_frames() {
+        assert_eq!(alpha_frame_count(1000, 25.0), 25);
+        assert_eq!(alpha_frame_count(1001, 25.0), 26);
+        assert_eq!(alpha_frame_count(0, 25.0), 0);
+    }
+
+    #[test]
+    fn duration_defaults_to_last_cue_end() {
+        let segments = vec![
+            CaptionSegment { start_ms: 0, end_ms: 1500, text: "a".into(), words: vec![] },
+            CaptionSegment { start_ms: 2000, end_ms: 4200, text: "b".into(), words: vec![] },
+        ];
+        assert_eq!(alpha_duration_ms(&segments, None), Some(4200));
+        assert_eq!(alpha_duration_ms(&segments, Some(8000)), Some(8000));
+        assert_eq!(alpha_duration_ms(&[], None), None);
+    }
+
+    #[test]
+    fn png_output_pattern_appends_frame_template() {
+        assert_eq!(alpha_png_pattern("/tmp/titles"), "/tmp/titles/frame_%05d.png");
+        assert_eq!(alpha_png_pattern("/tmp/titles/"), "/tmp/titles/frame_%05d.png");
+        assert_eq!(
+            alpha_png_pattern("/tmp/titles/card_%03d.png"),
+            "/tmp/titles/card_%03d.png"
+        );
+    }
+
+    fn ffmpeg_with_ass() -> Option<String> {
+        let ffmpeg = crate::video::get_ffmpeg_path_sync();
+        let out = std::process::Command::new(&ffmpeg)
+            .arg("-hide_banner")
+            .arg("-filters")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        text.lines()
+            .any(|l| l.split_whitespace().nth(1) == Some("ass"))
+            .then_some(ffmpeg)
+    }
+
+    #[tokio::test]
+    async fn render_alpha_writes_prores_with_alpha() -> Result<()> {
+        let Some(_ffmpeg) = ffmpeg_with_ass() else {
+            eprintln!("skipping: ffmpeg lacks the ass filter");
+            return Ok(());
+        };
+        let dir = tempfile::tempdir()?;
+        let out = dir.path().join("title.mov");
+        let params = crate::types::RenderAlphaParams {
+            segments: vec![CaptionSegment {
+                start_ms: 0,
+                end_ms: 900,
+                text: "TEST".into(),
+                words: vec![],
+            }],
+            karaoke: false,
+            multiline: false,
+            justify_lines: false,
+            font_name: None,
+            font_size: Some(48),
+            text_color: None,
+            highlight_word_color: None,
+            outline_color: None,
+            outline_width: None,
+            background_box: false,
+            glow_effect: false,
+            position: None,
+            position_overrides: vec![],
+            blocked_bands: vec![],
+            width: 160,
+            height: 90,
+            fps: 10.0,
+            duration_ms: Some(1000),
+            output: out.to_string_lossy().to_string(),
+            codec: None,
+        };
+        let result = render_alpha("test_alpha", params, &mut |_| {}).await?;
+        assert_eq!(result.frames, 10);
+        assert!(std::path::Path::new(&result.output).is_file());
+        // The movie must carry an alpha plane: prores 4444 in yuva444p10le.
+        let probe = std::process::Command::new(crate::video::get_ffmpeg_path_sync())
+            .args(["-hide_banner", "-i", &result.output])
+            .output()?;
+        let info = String::from_utf8_lossy(&probe.stderr);
+        assert!(info.contains("prores"), "codec in: {info}");
+        // yuva444p10le or yuva444p12le depending on the ffmpeg build — what
+        // matters is the alpha plane (the 'a' in yuva).
+        assert!(info.contains("yuva444p"), "alpha pix fmt in: {info}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn render_alpha_writes_png_sequence_with_transparency() -> Result<()> {
+        if ffmpeg_with_ass().is_none() {
+            eprintln!("skipping: ffmpeg lacks the ass filter");
+            return Ok(());
+        }
+        let dir = tempfile::tempdir()?;
+        let out_dir = dir.path().join("cards");
+        let params = crate::types::RenderAlphaParams {
+            segments: vec![CaptionSegment {
+                start_ms: 0,
+                end_ms: 500,
+                text: "KORTTI".into(),
+                words: vec![],
+            }],
+            karaoke: false,
+            multiline: false,
+            justify_lines: false,
+            font_name: None,
+            font_size: Some(40),
+            text_color: None,
+            highlight_word_color: None,
+            outline_color: None,
+            outline_width: None,
+            background_box: false,
+            glow_effect: false,
+            position: None,
+            position_overrides: vec![],
+            blocked_bands: vec![],
+            width: 160,
+            height: 90,
+            fps: 10.0,
+            duration_ms: Some(1000),
+            output: out_dir.to_string_lossy().to_string(),
+            codec: Some("png".into()),
+        };
+        let result = render_alpha("test_alpha_png", params, &mut |_| {}).await?;
+        assert_eq!(result.frames, 10);
+        // First frame has the cue: some opaque pixels and transparent corners.
+        // result.output is the frame pattern; the files live in out_dir.
+        let first = out_dir.join("frame_00001.png");
+        assert!(first.is_file(), "frame written: {first:?}");
+        let img = image::open(&first)?.to_rgba8();
+        let corner = img.get_pixel(0, 0);
+        assert_eq!(corner[3], 0, "corner transparent");
+        let opaque = img.pixels().filter(|p| p[3] > 200).count();
+        assert!(opaque > 0, "text pixels present");
+        // After the cue ends the frame is fully transparent.
+        let last = out_dir.join("frame_00010.png");
+        let img = image::open(last)?.to_rgba8();
+        assert!(img.pixels().all(|p| p[3] == 0), "empty after cue");
+        Ok(())
     }
 }

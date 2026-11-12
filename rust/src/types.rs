@@ -242,6 +242,65 @@ pub struct BurnCaptionsParams {
     pub blocked_bands: Vec<(f32, f32)>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderAlphaParams {
+    pub segments: Vec<CaptionSegment>, // The cues to draw, styled like a burn
+    #[serde(default)]
+    pub karaoke: bool,
+    #[serde(default)]
+    pub multiline: bool,
+    #[serde(default)]
+    pub justify_lines: bool,
+    pub font_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub font_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub highlight_word_color: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outline_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width: Option<u32>,
+    #[serde(default)]
+    pub background_box: bool,
+    #[serde(default)]
+    pub glow_effect: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<String>,
+    #[serde(default)]
+    pub position_overrides: Vec<PositionOverride>,
+    #[serde(default)]
+    pub blocked_bands: Vec<(f32, f32)>,
+    /// Canvas size in pixels. There is no input video to inherit them from.
+    pub width: u32,
+    pub height: u32,
+    /// Frames per second of the output movie/sequence.
+    pub fps: f64,
+    /// Total length; defaults to the end of the last cue.
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    /// Output path: a .mov file for prores, a directory or a `frame_%05d.png`
+    /// pattern for png.
+    pub output: String,
+    /// "prores" (default, ProRes 4444 with alpha) or "png" (RGBA sequence).
+    #[serde(default)]
+    pub codec: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderAlphaResult {
+    pub output: String,
+    pub codec: String,
+    pub frames: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: f64,
+    pub duration_ms: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WatermarkParams {

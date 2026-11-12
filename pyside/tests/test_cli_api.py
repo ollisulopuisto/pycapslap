@@ -153,3 +153,85 @@ def test_render_with_cli(tmp_path: Path, capsys):
     assert out_video and Path(out_video).is_file()
     # Clean up generated file
     Path(out_video).unlink(missing_ok=True)
+
+
+# --- render-alpha: captions-only alpha movies/sequences --------------------
+
+import shutil
+import subprocess
+
+import pytest
+
+
+def _ffmpeg_has(*, filt: str | None = None, encoder: str | None = None) -> bool:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return False
+    try:
+        if filt:
+            out = subprocess.run(
+                [ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30
+            ).stdout
+            return any(line.split()[1:2] == [filt] for line in out.splitlines())
+        out = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30
+        ).stdout
+        return any(line.split()[1:2] == [encoder] for line in out.splitlines())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+needs_alpha_stack = pytest.mark.skipif(
+    not (_ffmpeg_has(filt="ass") and _ffmpeg_has(encoder="prores_ks")),
+    reason="needs ffmpeg with the ass filter and the prores_ks encoder",
+)
+
+
+def _alpha_sidecar(tmp_path: Path) -> Path:
+    seg = CaptionSegment(start_ms=0, end_ms=900, text="Title card")
+    seg.update_text("Title card")
+    sidecar = tmp_path / "title.capslap.json"
+    save_captions(CaptionsFile(segments=[seg]), sidecar)
+    return sidecar
+
+
+@needs_alpha_stack
+def test_render_alpha_cli_prores(tmp_path: Path, capsys):
+    sidecar = _alpha_sidecar(tmp_path)
+    out = tmp_path / "title.mov"
+    status = run_cli([
+        "render-alpha", "--captions", str(sidecar), "--size", "160x90",
+        "--fps", "10", "--duration", "1.0", "--out", str(out), "--json",
+    ])
+    assert status == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is True
+    assert data["rendered"]["frames"] == 10
+    assert data["rendered"]["codec"] == "prores"
+    assert out.is_file() and out.stat().st_size > 0
+
+
+@needs_alpha_stack
+def test_render_alpha_cli_png_sequence(tmp_path: Path, capsys):
+    sidecar = _alpha_sidecar(tmp_path)
+    out_dir = tmp_path / "cards"
+    status = run_cli([
+        "render-alpha", "--captions", str(sidecar), "--size", "160x90",
+        "--fps", "10", "--duration", "1.0", "--codec", "png",
+        "--out", str(out_dir), "--json",
+    ])
+    assert status == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is True
+    frames = sorted(out_dir.glob("frame_*.png"))
+    assert len(frames) == 10
+
+
+def test_render_alpha_cli_requires_sidecar(tmp_path: Path, capsys):
+    status = run_cli([
+        "render-alpha", "--captions", str(tmp_path / "none.capslap.json"),
+        "--size", "160x90", "--out", str(tmp_path / "x.mov"), "--json",
+    ])
+    assert status == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is False

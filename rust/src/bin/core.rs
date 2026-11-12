@@ -272,6 +272,24 @@ async fn handle_request(r: RpcRequest, cancel_map: CancelMap) {
             }
             Err(e) => write_err(&id, format!("Invalid params for burn: {}", e)),
         },
+        "renderAlpha" => {
+            match serde_json::from_value::<core::types::RenderAlphaParams>(r.params) {
+                Ok(p) => {
+                    tokio::select! {
+                        res = captions::render_alpha(&id, p, &mut emit) => {
+                            match res {
+                                Ok(v) => write_ok(&id, &v),
+                                Err(e) => write_err(&id, e.to_string()),
+                            }
+                        }
+                        _ = rx.recv() => {
+                            write_err(&id, "Cancelled".to_string());
+                        }
+                    }
+                }
+                Err(e) => write_err(&id, format!("Invalid params for renderAlpha: {e}")),
+            }
+        }
         "previewLayout" => {
             match serde_json::from_value::<core::types::PreviewLayoutParams>(r.params) {
                 Ok(p) => match captions::generate_preview_layout(p) {
