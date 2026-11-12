@@ -149,6 +149,9 @@ jobs:
           done
           codesign --force --timestamp --options runtime --sign "$APPLE_SIGNING_IDENTITY" Tekstitys.app
           codesign --verify --deep --strict --verbose=2 Tekstitys.app
+          # Guard: usage strings in Info.plist need matching signed entitlements.
+          python3 "$GITHUB_WORKSPACE/scripts/ci/test_verify_entitlements.py"
+          python3 "$GITHUB_WORKSPACE/scripts/ci/verify_entitlements.py" Tekstitys.app
 
       - name: Smoke-test the signed app
         # The pre-signing smoke tests above pass even when the Hardened
