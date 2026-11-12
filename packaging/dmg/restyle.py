@@ -22,7 +22,7 @@ APPLESCRIPT = """on run argv
         set current view of w to icon view
         set toolbar visible of w to false
         set statusbar visible of w to false
-        set bounds of w to {80, 80, 855, 620}
+        set bounds of w to {80, 80, 855, 840}
         set opts to icon view options of w
         set arrangement of opts to not arranged
         set icon size of opts to 128
@@ -34,10 +34,11 @@ APPLESCRIPT = """on run argv
         set background picture of opts to POSIX file picturePath
         set position of item appName of rootFolder to {199, 247}
         set position of item "Applications" of rootFolder to {576, 247}
+        -- __EXTRA_POSITIONS__
         close w
         open rootFolder
         delay 2
-        set bounds of container window of rootFolder to {80, 80, 855, 620}
+        set bounds of container window of rootFolder to {80, 80, 855, 840}
         update rootFolder without registering applications
         delay 3
         close container window of rootFolder
@@ -57,7 +58,12 @@ def run(*args: str) -> bytes:
     return subprocess.check_output(command, stderr=subprocess.STDOUT, timeout=600)  # noqa: S603
 
 
-def restyle(image: Path, app_name: str, background: Path) -> None:
+def restyle(
+    image: Path,
+    app_name: str,
+    background: Path,
+    extras: dict[str, tuple[int, int]] | None = None,
+) -> None:
     if sys.platform != "darwin":
         raise RuntimeError("Finder DMG styling requires macOS; no image was changed")
     image = image.resolve(strict=True)
@@ -109,16 +115,38 @@ def restyle(image: Path, app_name: str, background: Path) -> None:
                 )
             else:
                 applications.symlink_to("/Applications")
-            extras = [
+            declared = extras or {}
+            for name, (x, y) in declared.items():
+                if (
+                    '"' in name
+                    or name.startswith(".")
+                    or name in (app_name, "Applications")
+                ):
+                    raise ValueError(f"Bad layout payload name: {name!r}")
+                if not (0 <= x <= 2000 and 0 <= y <= 2000):
+                    raise ValueError(f"Layout position out of range for {name!r}")
+            visible = [
                 p.name
                 for p in mounted.iterdir()
                 if not p.name.startswith(".")
                 and p.name not in (app_name, "Applications")
             ]
-            if extras:
+            unknown = [name for name in visible if name not in declared]
+            if unknown:
                 raise RuntimeError(
-                    f"Unexpected visible payload files need an explicit layout: {extras}"
+                    f"Unexpected visible payload files need an explicit layout: {unknown}"
                 )
+            missing = [name for name in declared if name not in visible]
+            if missing:
+                raise RuntimeError(
+                    f"Layout-declared payload files missing from image: {missing}"
+                )
+            for name in declared:
+                payload = mounted / name
+                if payload.is_symlink() or not payload.is_file():
+                    raise RuntimeError(
+                        f"Refusing a non-file or symlinked payload: {name}"
+                    )
             bg_dir = mounted / ".background"
             if bg_dir.is_symlink():
                 raise RuntimeError("Refusing a symlinked background directory")
@@ -127,8 +155,14 @@ def restyle(image: Path, app_name: str, background: Path) -> None:
             if picture.is_symlink():
                 raise RuntimeError("Refusing a symlinked background image")
             shutil.copyfile(background, picture)
+            extra_lines = "".join(
+                f'        set position of item "{name}" of rootFolder to {{{x}, {y}}}\n'
+                for name, (x, y) in declared.items()
+            )
             script = work / "layout.applescript"
-            script.write_text(APPLESCRIPT)
+            script.write_text(
+                APPLESCRIPT.replace("        -- __EXTRA_POSITIONS__\n", extra_lines)
+            )
             print(run("osascript", str(script), str(mounted), app_name).decode())
             ds_store = mounted / ".DS_Store"
             if not ds_store.is_file() or ds_store.stat().st_size == 0:
@@ -175,9 +209,27 @@ def main() -> None:
     parser.add_argument("image", type=Path)
     parser.add_argument("app_name")
     parser.add_argument("background", type=Path)
+    parser.add_argument(
+        "--extra",
+        action="append",
+        default=[],
+        metavar="NAME=X,Y",
+        help="Visible payload file with an explicit layout position; "
+        "undeclared extras still fail closed.",
+    )
     args = parser.parse_args()
+    extras: dict[str, tuple[int, int]] = {}
+    for spec in args.extra:
+        name, sep, coords = spec.partition("=")
+        try:
+            x_text, y_text = coords.split(",")
+            extras[name] = (int(x_text), int(y_text))
+        except ValueError:
+            parser.error(f"--extra expects NAME=X,Y, got {spec!r}")
+        if not sep or not name:
+            parser.error(f"--extra expects NAME=X,Y, got {spec!r}")
     try:
-        restyle(args.image, args.app_name, args.background)
+        restyle(args.image, args.app_name, args.background, extras)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         if isinstance(exc, subprocess.CalledProcessError):
             print(exc.output.decode(errors="replace"), file=sys.stderr)

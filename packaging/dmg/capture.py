@@ -18,7 +18,8 @@ def capture(mount: Path, directory: Path) -> None:
     script_path = directory / "capture.applescript"
     try:
         for label, bounds in [
-            ("initial", "{80, 80, 855, 620}"),
+            # Match the layout window saved by restyle.APPLESCRIPT.
+            ("initial", "{80, 80, 855, 840}"),
             ("enlarged", "{20, 20, 1300, 920}"),
         ]:
             script = """on run argv
