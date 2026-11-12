@@ -906,7 +906,16 @@ class MainWindow(QMainWindow):
         if self._preview_cue_starts and len(self._preview_cue_starts) == len(
             self._preview_cues
         ):
-            start_idx = bisect.bisect_left(self._preview_cue_starts, group[0])
+            # Preview cue starts are centisecond-aligned (generate_preview_layout
+            # floors each window start via ms_to_cs) while the group bounds keep
+            # the raw millisecond timestamp. Bisecting at the raw group start
+            # would skip the block's first window whenever that timestamp is not
+            # divisible by ten, so search from the same centisecond units. The
+            # group equality check below still rejects same-start cues belonging
+            # to a neighbouring block.
+            start_idx = bisect.bisect_left(
+                self._preview_cue_starts, (group[0] // 10) * 10
+            )
             for i in range(start_idx, len(self._preview_cues)):
                 other = self._preview_cues[i]
                 if int(other.get("startMs", 0)) >= group[1]:
