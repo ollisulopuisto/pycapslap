@@ -514,6 +514,136 @@ def test_block_prefetch_renders_every_karaoke_window_once(qtbot):
     window.close()
 
 
+def test_prefetch_block_binary_search(qtbot):
+    """Verify O(log N) bisect prefetch queues exactly the matching block cues."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    cues = [
+        {
+            "startMs": i * 200,
+            "endMs": (i + 1) * 200,
+            "groupStartMs": (i // 4) * 800,
+            "groupEndMs": ((i // 4) + 1) * 800,
+        }
+        for i in range(20)
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    queued_cues = []
+    window._queue_caption_layer = lambda cue: queued_cues.append(cue)
+    window._pump_layer_queue = lambda: None
+
+    # Test prefetching middle block (index 8..11, group 1600..2400)
+    window._prefetch_block(cues[9])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[8:12]
+
+    # Test prefetching first block (0..3, group 0..800)
+    queued_cues.clear()
+    window._prefetch_block(cues[0])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[0:4]
+
+    # Test prefetching last block (16..19, group 3200..4000)
+    queued_cues.clear()
+    window._prefetch_block(cues[19])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[16:20]
+
+    # Test missing / sentinel block
+    queued_cues.clear()
+    window._prefetch_block({"groupStartMs": -1, "groupEndMs": -1})
+    assert len(queued_cues) == 0
+
+    # Test fallback path when _preview_cue_starts is empty/mismatched
+    window._preview_cue_starts = []
+    queued_cues.clear()
+    window._prefetch_block(cues[5])
+    assert len(queued_cues) == 4
+    assert queued_cues == cues[4:8]
+
+    window.close()
+
+
+def test_prefetch_block_unaligned_karaoke_group_start(qtbot):
+    """Karaoke window starts are floored to centiseconds by
+    generate_preview_layout while the group bounds keep the raw millisecond
+    timestamp. Bisecting at the raw group start (e.g. 1005 ms) must still
+    find the block's first window (1000 ms)."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    cues = [
+        # Previous block's last window ends where the new block begins.
+        {"startMs": 990, "endMs": 1000, "groupStartMs": 500, "groupEndMs": 1005},
+        # The block on screen: windows at 1000 and 1200, raw start 1005.
+        {"startMs": 1000, "endMs": 1200, "groupStartMs": 1005, "groupEndMs": 1407},
+        {"startMs": 1200, "endMs": 1400, "groupStartMs": 1005, "groupEndMs": 1407},
+        # Next block, also unaligned.
+        {"startMs": 1400, "endMs": 1600, "groupStartMs": 1407, "groupEndMs": 1600},
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    queued_cues = []
+    window._queue_caption_layer = lambda cue: queued_cues.append(cue)
+    window._pump_layer_queue = lambda: None
+
+    window._prefetch_block(cues[1])
+    assert queued_cues == cues[1:3]
+
+    window.close()
+
+
+def test_prefetch_block_single_window_unaligned_karaoke_block(qtbot):
+    """A karaoke block whose only window starts at 1000 ms with a raw group
+    start of 1005 ms must still queue that window."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    cues = [
+        {"startMs": 1000, "endMs": 1200, "groupStartMs": 1005, "groupEndMs": 1200},
+        {"startMs": 5000, "endMs": 5200, "groupStartMs": 5000, "groupEndMs": 5200},
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    queued_cues = []
+    window._queue_caption_layer = lambda cue: queued_cues.append(cue)
+    window._pump_layer_queue = lambda: None
+
+    window._prefetch_block(cues[0])
+    assert queued_cues == cues[0:1]
+
+    window.close()
+
+
+def test_prefetch_block_unaligned_non_karaoke_group_start(qtbot):
+    """Non-karaoke cues keep their raw millisecond start, so an unaligned
+    block start (1005 ms) matches its cue exactly; the prefetch must queue
+    it and only it."""
+    window = MainWindow()
+    qtbot.addWidget(window)
+
+    cues = [
+        {"startMs": 1005, "endMs": 2407, "groupStartMs": 1005, "groupEndMs": 2407},
+        {"startMs": 2407, "endMs": 3000, "groupStartMs": 2407, "groupEndMs": 3000},
+    ]
+    window._preview_cues = cues
+    window._preview_cue_starts = [int(c["startMs"]) for c in cues]
+
+    queued_cues = []
+    window._queue_caption_layer = lambda cue: queued_cues.append(cue)
+    window._pump_layer_queue = lambda: None
+
+    window._prefetch_block(cues[0])
+    assert queued_cues == cues[0:1]
+
+    window.close()
+
+
 def _karaoke_block(n):
     return [
         {
