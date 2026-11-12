@@ -1,5 +1,10 @@
 # Sentinel's Journal
 
+## 2026-11-11 - Enforce Cache-Control Restrictions on Private Portal Endpoints
+**Vulnerability:** Private review portal routes (including series token links, client episode reviews, caption data, video streams, feedback entries, and administrative endpoints) were served without cache directives. Browsers and intermediary network caches could retain sensitive unreleased footage, transcripts, secret tokens, and review comments in shared caches or on local disk.
+**Learning:** Security controls like `Referrer-Policy: no-referrer` and unguessable tokens protect credentials in transit between origins, but do not stop client-side disk caches or proxy caches from persisting confidential media and API payloads unless caching headers explicitly forbid it.
+**Prevention:** Enforce `Cache-Control: no-store` and `Pragma: no-cache` headers across all non-static authenticated and secret-token-protected endpoints while permitting caching on publicly static asset bundles.
+
 ## 2026-11-08 - Enforce Comprehensive Content-Security-Policy on Portal Endpoints
 **Vulnerability:** Review portal endpoints and admin interfaces served Content-Security-Policy headers containing only `frame-ancestors 'none'`. Without resource-level restrictions, endpoints lacked defense-in-depth against malicious script execution, plug-in embedding, or unauthorized outbound resource loading.
 **Learning:** Framing protections alone leave other browser capabilities unrestricted. Applying least-privilege resource policies (`default-src`, `img-src`, `media-src`, `object-src`, `base-uri`) prevents untrusted script injection or rogue media embeds while maintaining compatibility with necessary local media blobs and inline data URIs.

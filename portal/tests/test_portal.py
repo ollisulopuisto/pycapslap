@@ -270,6 +270,30 @@ def test_pages_keep_the_link_out_of_referrers_and_search(client):
     assert "frame-ancestors 'none'" in review_csp
 
 
+def test_sensitive_endpoints_prevent_caching(client):
+    out = publish(client)
+    token = out["seriesLink"].split("/")[-1]
+    vid = out["video"]["id"]
+
+    for path, headers in [
+        ("/", {}),
+        (f"/s/{token}", {}),
+        (f"/api/s/{token}", {}),
+        (f"/api/s/{token}/videos/{vid}/file", {}),
+        (f"/api/s/{token}/videos/{vid}/captions", {}),
+        ("/admin", {}),
+        ("/api/admin/series", AUTH),
+    ]:
+        res = client.get(path, headers=headers)
+        assert res.headers.get("cache-control") == "no-store", f"Failed on {path}"
+        assert res.headers.get("pragma") == "no-cache", f"Failed on {path}"
+
+    # Static assets can still be cached normally
+    static_res = client.get("/static/portal.css")
+    assert static_res.status_code == 200
+    assert "no-store" not in (static_res.headers.get("cache-control") or "")
+
+
 def test_post_texts_are_edited_approved_and_reapproved_after_a_change(client):
     out = publish(client)
     token = out["seriesLink"].split("/")[-1]
