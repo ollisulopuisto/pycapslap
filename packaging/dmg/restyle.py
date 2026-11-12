@@ -144,7 +144,9 @@ def restyle(
             for name in declared:
                 payload = mounted / name
                 if payload.is_symlink() or not payload.is_file():
-                    raise RuntimeError(f"Refusing a non-file or symlinked payload: {name}")
+                    raise RuntimeError(
+                        f"Refusing a non-file or symlinked payload: {name}"
+                    )
             bg_dir = mounted / ".background"
             if bg_dir.is_symlink():
                 raise RuntimeError("Refusing a symlinked background directory")
