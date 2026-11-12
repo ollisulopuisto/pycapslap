@@ -236,6 +236,7 @@ pub async fn burn_captions_with_segments(
     }
     .await;
 
+    cleanup_temp_dir(&temp_dir);
     result
 }
 
@@ -4023,6 +4024,46 @@ mod tests_proof_copy {
         with["outroVideo"] = serde_json::json!("/clips/outro.mp4");
         let with: BurnCaptionsParams = serde_json::from_value(with).unwrap();
         assert_eq!(with.outro_video.as_deref(), Some("/clips/outro.mp4"));
+    }
+
+    #[tokio::test]
+    async fn burn_cleans_up_its_temp_dir() {
+        // Regressio: burn-polun väliaikaishakemisto (ASS + käyttäjän
+        // videon välienkoodaukset) siistiytyy aina — myös virheeseen.
+        let ffmpeg = crate::video::get_ffmpeg_path_sync();
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("in.mp4");
+        let made = std::process::Command::new(&ffmpeg)
+            .args([
+                "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc=duration=0.5:size=160x90:rate=10",
+                "-f", "lavfi", "-i", "sine=frequency=440:duration=0.5",
+                "-c:v", "mpeg4", "-c:a", "aac", "-shortest", "-y",
+            ])
+            .arg(&input)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !made {
+            eprintln!("skipping: ffmpeg cannot make the fixture video");
+            return;
+        }
+        let id = "test_burn_cleanup";
+        let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{id}"));
+        let params: BurnCaptionsParams = serde_json::from_value(serde_json::json!({
+            "inputVideo": input.to_string_lossy(),
+            "segments": [{"startMs": 0, "endMs": 400, "text": "Hi"}],
+            "exportFormats": ["16:9"],
+            "karaoke": false,
+            "fontName": null
+        }))
+        .unwrap();
+        // Tulos saa olla virhe (kooderipuute yms.) — siivous kuuluu silti.
+        let _ = burn_captions_with_segments(id, params, &mut |_| {}).await;
+        assert!(
+            !temp_dir.exists(),
+            "burn left its temp dir behind: {temp_dir:?}"
+        );
     }
 
     #[test]
