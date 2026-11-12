@@ -13,16 +13,25 @@ class Guard(unittest.TestCase):
         info = {"NSAppleEventsUsageDescription": "x"}
         self.assertEqual(
             v.missing(info, {"com.apple.security.network.client": True}),
-            [("NSAppleEventsUsageDescription", "com.apple.security.automation.apple-events")],
+            [
+                (
+                    "NSAppleEventsUsageDescription",
+                    "com.apple.security.automation.apple-events",
+                )
+            ],
         )
 
     def test_present_entitlement_passes(self):
         info = {"NSMicrophoneUsageDescription": "x"}
-        self.assertEqual(v.missing(info, {"com.apple.security.device.audio-input": True}), [])
+        self.assertEqual(
+            v.missing(info, {"com.apple.security.device.audio-input": True}), []
+        )
 
     def test_false_value_fails(self):
         info = {"NSCameraUsageDescription": "x"}
-        self.assertEqual(len(v.missing(info, {"com.apple.security.device.camera": False})), 1)
+        self.assertEqual(
+            len(v.missing(info, {"com.apple.security.device.camera": False})), 1
+        )
 
     def test_no_usage_strings_passes(self):
         self.assertEqual(v.missing({}, {}), [])
@@ -31,12 +40,18 @@ class Guard(unittest.TestCase):
         self.assertEqual(len(v.missing({"NSMicrophoneUsageDescription": ""}, {})), 1)
 
     def test_modern_calendar_and_photo_keys(self):
-        for k in ("NSCalendarsWriteOnlyAccessUsageDescription", "NSPhotoLibraryAddUsageDescription"):
+        for k in (
+            "NSCalendarsWriteOnlyAccessUsageDescription",
+            "NSPhotoLibraryAddUsageDescription",
+        ):
             self.assertEqual(len(v.missing({k: "x"}, {})), 1)
 
     def test_reminders_need_the_reminders_entitlement_too(self):
         cal = {v.CAL: True}
-        for k in ("NSRemindersUsageDescription", "NSRemindersFullAccessUsageDescription"):
+        for k in (
+            "NSRemindersUsageDescription",
+            "NSRemindersFullAccessUsageDescription",
+        ):
             self.assertEqual(v.missing({k: "x"}, cal), [(k, v.REM)])
             self.assertEqual(v.missing({k: "x"}, {**cal, v.REM: True}), [])
             self.assertEqual(len(v.missing({k: "x"}, {})), 2)
@@ -47,10 +62,17 @@ class Guard(unittest.TestCase):
             os.makedirs(lp)
             with open(os.path.join(lp, "InfoPlist.strings"), "w") as f:
                 f.write('"NSMicrophoneUsageDescription" = "Mic";\n')
-            self.assertEqual(v.localized_keys(os.path.join(d, "A.app")), {"NSMicrophoneUsageDescription": ""})
+            self.assertEqual(
+                v.localized_keys(os.path.join(d, "A.app")),
+                {"NSMicrophoneUsageDescription": ""},
+            )
             with open(os.path.join(lp, "InfoPlist.strings"), "wb") as f:
-                plistlib.dump({"NSCameraUsageDescription": "Cam"}, f, fmt=plistlib.FMT_BINARY)
-            self.assertIn("NSCameraUsageDescription", v.localized_keys(os.path.join(d, "A.app")))
+                plistlib.dump(
+                    {"NSCameraUsageDescription": "Cam"}, f, fmt=plistlib.FMT_BINARY
+                )
+            self.assertIn(
+                "NSCameraUsageDescription", v.localized_keys(os.path.join(d, "A.app"))
+            )
 
     def test_strings_comments_are_ignored(self):
         text = (
@@ -74,7 +96,9 @@ class Guard(unittest.TestCase):
             os.makedirs(lp)
             with open(os.path.join(lp, "InfoPlist.strings"), "wb") as f:
                 f.write(b'\xef\xbb\xbfNSCameraUsageDescription = "x";\n')
-            self.assertIn("NSCameraUsageDescription", v.localized_keys(os.path.join(d, "A.app")))
+            self.assertIn(
+                "NSCameraUsageDescription", v.localized_keys(os.path.join(d, "A.app"))
+            )
 
     def test_cli_source_mode(self):
         with tempfile.TemporaryDirectory() as d:

@@ -8,6 +8,7 @@ Usage:
   verify_entitlements.py path/to/App.app          # packaged app (needs codesign)
   verify_entitlements.py --info Info.plist --entitlements App.entitlements   # source check
 """
+
 import argparse
 import glob
 import plistlib
@@ -73,7 +74,10 @@ def localized_keys(app):
         try:
             parsed = plistlib.loads(data)
         except Exception:
-            text = data.decode("utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig", "replace")
+            text = data.decode(
+                "utf-16" if data[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig",
+                "replace",
+            )
             parsed = dict.fromkeys(strings_keys(text), "")
         keys.update({k: v for k, v in parsed.items() if k in REQUIRED})
     return keys
@@ -85,7 +89,8 @@ def load_app(app):
     info = {**localized_keys(app), **info}
     raw = subprocess.run(
         ["codesign", "-d", "--entitlements", ":-", app],
-        capture_output=True, check=False,
+        capture_output=True,
+        check=False,
     ).stdout
     ents = plistlib.loads(raw) if raw.strip() else {}
     return info, ents
