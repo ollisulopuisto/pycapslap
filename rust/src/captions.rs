@@ -236,7 +236,6 @@ pub async fn burn_captions_with_segments(
     }
     .await;
 
-    cleanup_temp_dir(&temp_dir);
     result
 }
 
@@ -633,6 +632,16 @@ pub async fn render_alpha(
             params.height
         ));
     }
+    if params.width % 2 == 1 || params.height % 2 == 1 {
+        // ffmpeg:n color-lähde pyöristää parittomat mitat alas, jolloin
+        // caption-passit tuottaisivat pyydettyä pienemmät ruudut ja
+        // lukeminen katkeaisi kesken. Hylätään ennemmin kuin arvaillaan.
+        return Err(anyhow!(
+            "renderAlpha canvas must be even-sized, got {}x{}",
+            params.width,
+            params.height
+        ));
+    }
     if params.fps <= 0.0 {
         return Err(anyhow!("renderAlpha fps must be positive, got {}", params.fps));
     }
@@ -645,8 +654,9 @@ pub async fn render_alpha(
         return Err(anyhow!("renderAlpha codec must be prores or png, got {codec}"));
     }
 
-    let temp_dir = std::env::temp_dir().join(format!("capslap_alpha_{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir)?;
+    // TempDir siistiytyy Drop:ssa myös kun tulevaisuus hylätään
+    // peruutuksen myötä — käsin tehty siivous jäisi silloin ajamatta.
+    let temp_dir = tempfile::tempdir()?;
 
     let result = async {
         let style = default_ass_style(
@@ -673,8 +683,9 @@ pub async fn render_alpha(
             params.glow_effect,
             &params.position_overrides,
             &params.blocked_bands,
+            true,
         )?;
-        let ass_path = temp_dir.join("alpha.ass");
+        let ass_path = temp_dir.path().join("alpha.ass");
         fs::write(&ass_path, &ass_doc)?;
 
         let ffmpeg = crate::video::get_ffmpeg_path_sync();
@@ -689,6 +700,9 @@ pub async fn render_alpha(
         let mut passes = Vec::new();
         for colour in ["black", "white"] {
             let child = TokioCommand::new(&ffmpeg)
+                // Peruutus hylkää tulevaisuuden; ilman tätä lapset
+                // jäisivät päälle estämään putkia.
+                .kill_on_drop(true)
                 .arg("-hide_banner")
                 .arg("-loglevel")
                 .arg("error")
@@ -713,13 +727,25 @@ pub async fn render_alpha(
             passes.push(child);
         }
 
+        // ProRes koodataan viereiseen .partial-tiedostoon ja korvataan
+        // vasta onnistuneena: epäonnistunut uusinta ei tuhoa aiempaa
+        // vientiä (burn-polku käyttää unique_output_pathia samaan).
+        let partial_output = if codec == "prores" {
+            // Pidä .mov-pääte: ffmpeg päättelee muodon nimestä.
+            match params.output.strip_suffix(".mov") {
+                Some(stem) => format!("{stem}.partial.mov"),
+                None => format!("{}.partial.mov", params.output),
+            }
+        } else {
+            params.output.clone()
+        };
         let output = if codec == "png" {
             if !params.output.contains('%') {
                 fs::create_dir_all(&params.output)?;
             }
             alpha_png_pattern(&params.output)
         } else {
-            params.output.clone()
+            partial_output.clone()
         };
 
         let mut encoder_args: Vec<String> = vec![
@@ -753,6 +779,7 @@ pub async fn render_alpha(
         encoder_args.push(output.clone());
 
         let mut encoder = TokioCommand::new(&ffmpeg)
+            .kill_on_drop(true)
             .args(&encoder_args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -844,8 +871,15 @@ pub async fn render_alpha(
             ));
         }
 
+        if codec == "prores" && partial_output != params.output {
+            fs::rename(&partial_output, &params.output)?;
+        }
+        if codec == "png" {
+            remove_stale_png_frames(&output, frames);
+        }
+
         Ok(crate::types::RenderAlphaResult {
-            output,
+            output: params.output.clone(),
             codec: codec.to_string(),
             frames,
             width: w,
@@ -856,8 +890,34 @@ pub async fn render_alpha(
     }
     .await;
 
-    cleanup_temp_dir(&temp_dir);
     result
+}
+
+/// Poistaa aiemman, pidemmän PNG-sarjan jäänteet: kuluttaja joka lukee
+/// hakemiston näkisi muuten vanhoja tekstitysruutuja uuden loppuun.
+/// Paras yritys — yksittäinen epäonnistuminen ei kaada vientiä.
+fn remove_stale_png_frames(pattern: &str, keep: u64) {
+    let Some(pct) = pattern.find('%') else { return };
+    let Some(d) = pattern[pct..].find('d') else { return };
+    let prefix = &pattern[..pct];
+    let suffix = &pattern[pct + d + 1..];
+    let Some(dir) = std::path::Path::new(prefix).parent().map(|p| p.to_path_buf()) else {
+        return;
+    };
+    let name_prefix = std::path::Path::new(prefix)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Ok(entries) = fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(rest) = name.strip_prefix(&name_prefix) else { continue };
+        let Some(digits) = rest.strip_suffix(suffix) else { continue };
+        let Ok(index) = digits.parse::<u64>() else { continue };
+        if index > keep {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Render the captions alone as an RGBA PNG the editor can drag over a
@@ -1018,6 +1078,7 @@ pub async fn generate_preview_frame(
                 params.glow_effect,
                 &params.position_overrides,
                 &params.blocked_bands,
+                false,
             )?;
 
             let ass_path = temp_dir.join("preview.ass");
@@ -1489,6 +1550,7 @@ async fn optimized_multi_format_encode(
             glow_effect,
             position_overrides,
             blocked_bands,
+            false,
         )?;
         emit(RpcEvent::Log {
             id: id.into(),
@@ -3101,8 +3163,9 @@ fn build_ass_document(
     glow_effect: bool,
     position_overrides: &[PositionOverride],
     blocked_bands: &[(f32, f32)],
+    allow_empty: bool,
 ) -> Result<String> {
-    if segments.is_empty() {
+    if segments.is_empty() && !allow_empty {
         return Err(anyhow!("No caption segments"));
     }
     crate::debug_log!(
@@ -3573,6 +3636,7 @@ mod tests {
             false,
             &[],
             &[],
+            false,
         )
         .expect("document builds");
         // Where each window breaks its lines, as the words before each \N.
@@ -3678,6 +3742,7 @@ mod tests {
             false, // glow
             &[],
             &[],
+            false,
         )
         .expect("document builds");
 
@@ -3757,6 +3822,7 @@ mod tests {
             false,
             &[],
             &[],
+            false,
         )
         .expect("document builds");
 
@@ -4157,6 +4223,97 @@ mod tests_alpha {
         let last = out_dir.join("frame_00010.png");
         let img = image::open(last)?.to_rgba8();
         assert!(img.pixels().all(|p| p[3] == 0), "empty after cue");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn render_alpha_rejects_odd_canvas() -> Result<()> {
+        // color-lähde pyöristäisi parittoman koon alas ja passit
+        // katkeaisivat kesken — hylkää ennemmin.
+        let params = crate::types::RenderAlphaParams {
+            segments: vec![],
+            karaoke: false,
+            multiline: false,
+            justify_lines: false,
+            font_name: None,
+            font_size: None,
+            text_color: None,
+            highlight_word_color: None,
+            outline_color: None,
+            outline_width: None,
+            background_box: false,
+            glow_effect: false,
+            position: None,
+            position_overrides: vec![],
+            blocked_bands: vec![],
+            width: 161,
+            height: 91,
+            fps: 10.0,
+            duration_ms: Some(1000),
+            output: "/tmp/x.mov".into(),
+            codec: None,
+        };
+        let err = render_alpha("test_odd", params, &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("even-sized"), "{err}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn render_alpha_blank_sequence_for_empty_segments() -> Result<()> {
+        // Tyhjä sidecar + eksplisiittinen kesto: täysin läpinäkyvä sarja,
+        // ei virhettä (build_ass_document sallii tyhjän vain täällä).
+        if ffmpeg_with_ass().is_none() {
+            eprintln!("skipping: ffmpeg lacks the ass filter");
+            return Ok(());
+        }
+        let dir = tempfile::tempdir()?;
+        let out_dir = dir.path().join("blank");
+        let params = crate::types::RenderAlphaParams {
+            segments: vec![],
+            karaoke: false,
+            multiline: false,
+            justify_lines: false,
+            font_name: None,
+            font_size: None,
+            text_color: None,
+            highlight_word_color: None,
+            outline_color: None,
+            outline_width: None,
+            background_box: false,
+            glow_effect: false,
+            position: None,
+            position_overrides: vec![],
+            blocked_bands: vec![],
+            width: 160,
+            height: 90,
+            fps: 10.0,
+            duration_ms: Some(500),
+            output: out_dir.to_string_lossy().to_string(),
+            codec: Some("png".into()),
+        };
+        let result = render_alpha("test_blank", params, &mut |_| {}).await?;
+        assert_eq!(result.frames, 5);
+        let img = image::open(out_dir.join("frame_00001.png"))?.to_rgba8();
+        assert!(img.pixels().all(|p| p[3] == 0), "blank is transparent");
+        Ok(())
+    }
+
+    #[test]
+    fn remove_stale_png_frames_drops_old_tail() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let pattern = dir.path().join("frame_%05d.png").to_string_lossy().to_string();
+        for i in 1..=8 {
+            fs::write(dir.path().join(format!("frame_{i:05}.png")), b"x")?;
+        }
+        remove_stale_png_frames(&pattern, 5);
+        for i in 1..=5 {
+            assert!(dir.path().join(format!("frame_{i:05}.png")).is_file());
+        }
+        for i in 6..=8 {
+            assert!(!dir.path().join(format!("frame_{i:05}.png")).exists());
+        }
         Ok(())
     }
 }

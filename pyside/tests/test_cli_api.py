@@ -235,3 +235,58 @@ def test_render_alpha_cli_requires_sidecar(tmp_path: Path, capsys):
     assert status == 1
     data = json.loads(capsys.readouterr().out)
     assert data.get("ok") is False
+
+
+def test_render_alpha_sends_anchor_and_glow(tmp_path: Path):
+    """Tallennettu ankkuri ja hehku välittyvät renderAlpha-pyyntöön:
+    ilman käsin tehtyjä ohituksia ankkuri menee yleisenä ohituksena,
+    ja glowEffect ei putoa pyynnöstä."""
+    seg = CaptionSegment(start_ms=0, end_ms=900, text="Kortti")
+    seg.update_text("Kortti")
+    cf = CaptionsFile(segments=[seg])
+    cf.style.anchor_pct = 62.5
+    cf.style.glow_effect = True
+
+    captured: dict = {}
+
+    class _Fut:
+        def result(self, timeout=None):
+            return {"ok": True}
+
+    class _Client:
+        def call(self, method, params):
+            captured["method"] = method
+            captured["params"] = params
+            return _Fut()
+
+    session = CapSlapSession(_Client())
+    session.render_alpha(
+        cf, 160, 90, fps=10.0, duration_ms=1000, output=tmp_path / "a.mov"
+    )
+    params = captured["params"]
+    assert captured["method"] == "renderAlpha"
+    assert params["glowEffect"] is True
+    (override,) = params["positionOverrides"]
+    assert override["yPct"] == 62.5
+    assert override["startMs"] == 0
+
+
+def test_render_alpha_json_events_reports_early_errors(tmp_path: Path, capsys):
+    """--json-events: myös varhaiset virheet (puuttuva sidecar, rikkinäinen
+    --size) tulevat error-tapahtumina, ei pelkkinä tulosteina."""
+    status = run_cli([
+        "render-alpha", "--captions", str(tmp_path / "none.capslap.json"),
+        "--size", "160x90", "--out", str(tmp_path / "x.mov"), "--json-events",
+    ])
+    assert status == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(e.get("event") == "error" for e in events)
+
+    sidecar = _alpha_sidecar(tmp_path)
+    status = run_cli([
+        "render-alpha", "--captions", str(sidecar), "--size", "leveä",
+        "--out", str(tmp_path / "x.mov"), "--json-events",
+    ])
+    assert status == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(e.get("event") == "error" for e in events)

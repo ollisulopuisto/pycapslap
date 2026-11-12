@@ -329,7 +329,9 @@ def cmd_render_alpha(args: argparse.Namespace) -> int:
     sidecar = Path(args.captions).expanduser().resolve()
     if not sidecar.is_file():
         err = f"Captions sidecar not found: {sidecar}"
-        if args.json:
+        if args.json_events:
+            _emit_event("error", error=err)
+        elif args.json:
             _emit_json({"error": err, "ok": False})
         else:
             print(f"Error: {err}", file=sys.stderr)
@@ -339,7 +341,9 @@ def cmd_render_alpha(args: argparse.Namespace) -> int:
         width, height = (int(part) for part in args.size.lower().split("x"))
     except ValueError:
         err = f"Invalid --size {args.size!r}: expected WIDTHxHEIGHT, e.g. 1080x1920"
-        if args.json:
+        if args.json_events:
+            _emit_event("error", error=err)
+        elif args.json:
             _emit_json({"error": err, "ok": False})
         else:
             print(f"Error: {err}", file=sys.stderr)
