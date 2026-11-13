@@ -904,11 +904,26 @@ pub async fn render_alpha(
 /// hakemiston näkisi muuten vanhoja tekstitysruutuja uuden loppuun.
 /// Paras yritys — yksittäinen epäonnistuminen ei kaada vientiä.
 ///
-/// Koskee vain viennin omaa muotoa `%05d`: poistettavan tiedoston nimessä
-/// on tasan viisi numeroa, joten esimerkiksi `frame_2026.png` jää rauhaan.
+/// Koskee vain ffmpegin numeromuotoa `%d` tai `%0Nd` (N 1-9): poistettavan
+/// tiedoston numero on täsmälleen sellainen kuin ffmpeg sen kirjoittaisi
+/// (täytetty N:ään, pidempi vain jos luku ei mahdu), joten esimerkiksi
+/// `frame_2026.png` jää rauhaan kun kuviona on `frame_%05d.png`.
 fn remove_stale_png_frames(pattern: &str, keep: u64) {
     let Some(pct) = pattern.find('%') else { return };
-    let Some(after) = pattern[pct..].strip_prefix("%05d") else { return };
+    let spec = &pattern[pct + 1..];
+    let (width, after) = if let Some(rest) = spec.strip_prefix('d') {
+        (1usize, rest)
+    } else if let Some(rest) = spec.strip_prefix('0') {
+        match rest.chars().next() {
+            Some(c) if c.is_ascii_digit() && c != '0' => {
+                let Some(after) = rest[1..].strip_prefix('d') else { return };
+                (c.to_digit(10).unwrap() as usize, after)
+            }
+            _ => return,
+        }
+    } else {
+        return;
+    };
     let prefix = &pattern[..pct];
     let suffix = after;
     let Some(dir) = std::path::Path::new(prefix).parent().map(|p| p.to_path_buf()) else {
@@ -923,7 +938,10 @@ fn remove_stale_png_frames(pattern: &str, keep: u64) {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(rest) = name.strip_prefix(&name_prefix) else { continue };
         let Some(digits) = rest.strip_suffix(suffix) else { continue };
-        if digits.len() != 5 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        let ffmpeg_shaped = digits.len() >= width
+            && digits.bytes().all(|b| b.is_ascii_digit())
+            && (digits.len() == width || !digits.starts_with('0'));
+        if !ffmpeg_shaped {
             continue;
         }
         let Ok(index) = digits.parse::<u64>() else { continue };
@@ -4399,14 +4417,44 @@ mod tests_alpha {
     }
 
     #[test]
+    fn remove_stale_png_frames_honours_custom_widths() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let pattern = dir.path().join("card_%03d.png").to_string_lossy().to_string();
+        let names = [
+            "card_001.png",
+            "card_005.png",
+            "card_006.png",
+            "card_1000.png",
+            "card_01.png",
+            "card_0006.png",
+        ];
+        for name in names {
+            fs::write(dir.path().join(name), b"x")?;
+        }
+        remove_stale_png_frames(&pattern, 5);
+        assert!(dir.path().join("card_001.png").is_file());
+        assert!(dir.path().join("card_005.png").is_file());
+        assert!(!dir.path().join("card_006.png").exists());
+        assert!(
+            !dir.path().join("card_1000.png").exists(),
+            "4 digits is what ffmpeg writes past 999"
+        );
+        assert!(dir.path().join("card_01.png").is_file(), "too narrow for %03d");
+        assert!(
+            dir.path().join("card_0006.png").is_file(),
+            "padded wider than ffmpeg would"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn remove_stale_png_frames_leaves_other_numbered_files_alone() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let pattern = dir.path().join("frame_%05d.png").to_string_lossy().to_string();
-        // Not in the generated format: wrong digit count, extra text, other
+        // Not in the generated format: too few digits, extra text, other
         // prefix or suffix. None of these belong to the export.
         let others = [
             "frame_2026.png",
-            "frame_123456.png",
             "frame_00009_final.png",
             "frame_00009.jpg",
             "other_00009.png",
@@ -4421,7 +4469,7 @@ mod tests_alpha {
         for name in others {
             assert!(dir.path().join(name).is_file(), "{name} must survive");
         }
-        // A pattern that is not %05d never deletes anything.
+        // `%d` writes unpadded numbers, so zero-padded names are not ours.
         let odd = dir.path().join("frame_%d.png").to_string_lossy().to_string();
         fs::write(dir.path().join("frame_00010.png"), b"keep")?;
         remove_stale_png_frames(&odd, 5);
