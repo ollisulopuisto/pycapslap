@@ -683,18 +683,32 @@ def build_parser() -> argparse.ArgumentParser:
         "render-alpha",
         help="Render captions alone (no video) as an alpha movie or PNG sequence",
     )
-    p_alpha.add_argument("--captions", required=True, help="Path to .capslap.json sidecar")
-    p_alpha.add_argument("--size", required=True, help="Canvas as WIDTHxHEIGHT, e.g. 1080x1920")
-    p_alpha.add_argument("--fps", type=float, default=25.0, help="Frames per second (default: 25)")
-    p_alpha.add_argument("--duration", type=float, help="Length in seconds (default: last cue end)")
+    p_alpha.add_argument(
+        "--captions", required=True, help="Path to .capslap.json sidecar"
+    )
+    p_alpha.add_argument(
+        "--size", required=True, help="Canvas as WIDTHxHEIGHT, e.g. 1080x1920"
+    )
+    p_alpha.add_argument(
+        "--fps", type=float, default=25.0, help="Frames per second (default: 25)"
+    )
+    p_alpha.add_argument(
+        "--duration", type=float, help="Length in seconds (default: last cue end)"
+    )
     p_alpha.add_argument(
         "--codec",
         choices=["prores", "png"],
         default="prores",
         help="prores = ProRes 4444 .mov, png = RGBA frame sequence (default: prores)",
     )
-    p_alpha.add_argument("--out", required=True, help="Output .mov, or directory/%%05d-pattern for png")
-    p_alpha.add_argument("--preset", choices=list(STYLE_PRESETS.keys()), help="Apply a style preset first")
+    p_alpha.add_argument(
+        "--out", required=True, help="Output .mov, or directory/%%05d-pattern for png"
+    )
+    p_alpha.add_argument(
+        "--preset",
+        choices=list(STYLE_PRESETS.keys()),
+        help="Apply a style preset first",
+    )
     p_alpha.add_argument("--style-json", help="Style overrides as JSON")
     p_alpha.add_argument("--position", help="Anchor position percent from top of frame")
     p_alpha.add_argument("--json", action="store_true", help="Output result as JSON")

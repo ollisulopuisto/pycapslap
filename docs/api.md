@@ -162,7 +162,7 @@ pixel, so the output is a real straight-alpha movie: ProRes 4444
 - `--fps <n>`: frames per second (default: 25).
 - `--duration <s>`: length in seconds (default: end of the last cue).
 - `--codec [prores|png]`: ProRes 4444 .mov, or an RGBA PNG sequence (default: prores).
-- `--out <path>`: output .mov; for png, a directory (frames land in `frame_00001.png`…) or an explicit `card_%05d.png` pattern.
+- `--out <path>`: output .mov; for png, a directory (frames land in `frame_00001.png`…) or an explicit `card_%05d.png` pattern. The result's `output` for png is the frame pattern, for example `<dir>/frame_%05d.png`.
 - `--preset <preset>`, `--style-json <json>`, `--position <pct>`: optional style edits applied before rendering, like `edit`.
 - `--json`: Output final render info as JSON.
 - `--json-events`: Stream NDJSON progress events.

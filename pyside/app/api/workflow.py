@@ -220,7 +220,6 @@ class CapSlapSession:
 
         return res if isinstance(res, list) else [res]
 
-
     def render_alpha(
         self,
         captions: CaptionsFile,
@@ -255,7 +254,11 @@ class CapSlapSession:
                 o.to_dict()
                 for o in (
                     captions.position_overrides
-                    or [PositionOverride(start_ms=0, end_ms=10**9, y_pct=style.anchor_pct)]
+                    or [
+                        PositionOverride(
+                            start_ms=0, end_ms=10**9, y_pct=style.anchor_pct
+                        )
+                    ]
                 )
             ],
             "glowEffect": style.glow_effect,

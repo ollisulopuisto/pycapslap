@@ -170,11 +170,17 @@ def _ffmpeg_has(*, filt: str | None = None, encoder: str | None = None) -> bool:
     try:
         if filt:
             out = subprocess.run(
-                [ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True, timeout=30
+                [ffmpeg, "-hide_banner", "-filters"],
+                capture_output=True,
+                text=True,
+                timeout=30,
             ).stdout
             return any(line.split()[1:2] == [filt] for line in out.splitlines())
         out = subprocess.run(
-            [ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=30,
         ).stdout
         return any(line.split()[1:2] == [encoder] for line in out.splitlines())
     except (OSError, subprocess.SubprocessError):
@@ -199,10 +205,22 @@ def _alpha_sidecar(tmp_path: Path) -> Path:
 def test_render_alpha_cli_prores(tmp_path: Path, capsys):
     sidecar = _alpha_sidecar(tmp_path)
     out = tmp_path / "title.mov"
-    status = run_cli([
-        "render-alpha", "--captions", str(sidecar), "--size", "160x90",
-        "--fps", "10", "--duration", "1.0", "--out", str(out), "--json",
-    ])
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "160x90",
+            "--fps",
+            "10",
+            "--duration",
+            "1.0",
+            "--out",
+            str(out),
+            "--json",
+        ]
+    )
     assert status == 0
     data = json.loads(capsys.readouterr().out)
     assert data.get("ok") is True
@@ -215,11 +233,24 @@ def test_render_alpha_cli_prores(tmp_path: Path, capsys):
 def test_render_alpha_cli_png_sequence(tmp_path: Path, capsys):
     sidecar = _alpha_sidecar(tmp_path)
     out_dir = tmp_path / "cards"
-    status = run_cli([
-        "render-alpha", "--captions", str(sidecar), "--size", "160x90",
-        "--fps", "10", "--duration", "1.0", "--codec", "png",
-        "--out", str(out_dir), "--json",
-    ])
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "160x90",
+            "--fps",
+            "10",
+            "--duration",
+            "1.0",
+            "--codec",
+            "png",
+            "--out",
+            str(out_dir),
+            "--json",
+        ]
+    )
     assert status == 0
     data = json.loads(capsys.readouterr().out)
     assert data.get("ok") is True
@@ -228,10 +259,18 @@ def test_render_alpha_cli_png_sequence(tmp_path: Path, capsys):
 
 
 def test_render_alpha_cli_requires_sidecar(tmp_path: Path, capsys):
-    status = run_cli([
-        "render-alpha", "--captions", str(tmp_path / "none.capslap.json"),
-        "--size", "160x90", "--out", str(tmp_path / "x.mov"), "--json",
-    ])
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(tmp_path / "none.capslap.json"),
+            "--size",
+            "160x90",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json",
+        ]
+    )
     assert status == 1
     data = json.loads(capsys.readouterr().out)
     assert data.get("ok") is False
@@ -274,19 +313,35 @@ def test_render_alpha_sends_anchor_and_glow(tmp_path: Path):
 def test_render_alpha_json_events_reports_early_errors(tmp_path: Path, capsys):
     """--json-events: myös varhaiset virheet (puuttuva sidecar, rikkinäinen
     --size) tulevat error-tapahtumina, ei pelkkinä tulosteina."""
-    status = run_cli([
-        "render-alpha", "--captions", str(tmp_path / "none.capslap.json"),
-        "--size", "160x90", "--out", str(tmp_path / "x.mov"), "--json-events",
-    ])
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(tmp_path / "none.capslap.json"),
+            "--size",
+            "160x90",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json-events",
+        ]
+    )
     assert status == 1
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert any(e.get("event") == "error" for e in events)
 
     sidecar = _alpha_sidecar(tmp_path)
-    status = run_cli([
-        "render-alpha", "--captions", str(sidecar), "--size", "leveä",
-        "--out", str(tmp_path / "x.mov"), "--json-events",
-    ])
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "leveä",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json-events",
+        ]
+    )
     assert status == 1
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert any(e.get("event") == "error" for e in events)

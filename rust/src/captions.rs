@@ -880,7 +880,13 @@ pub async fn render_alpha(
         }
 
         Ok(crate::types::RenderAlphaResult {
-            output: params.output.clone(),
+            // A PNG export returns the frame pattern so a consumer can find
+            // the sequence; ProRes returns the movie path.
+            output: if codec == "png" {
+                output.clone()
+            } else {
+                params.output.clone()
+            },
             codec: codec.to_string(),
             frames,
             width: w,
@@ -897,11 +903,14 @@ pub async fn render_alpha(
 /// Poistaa aiemman, pidemmän PNG-sarjan jäänteet: kuluttaja joka lukee
 /// hakemiston näkisi muuten vanhoja tekstitysruutuja uuden loppuun.
 /// Paras yritys — yksittäinen epäonnistuminen ei kaada vientiä.
+///
+/// Koskee vain viennin omaa muotoa `%05d`: poistettavan tiedoston nimessä
+/// on tasan viisi numeroa, joten esimerkiksi `frame_2026.png` jää rauhaan.
 fn remove_stale_png_frames(pattern: &str, keep: u64) {
     let Some(pct) = pattern.find('%') else { return };
-    let Some(d) = pattern[pct..].find('d') else { return };
+    let Some(after) = pattern[pct..].strip_prefix("%05d") else { return };
     let prefix = &pattern[..pct];
-    let suffix = &pattern[pct + d + 1..];
+    let suffix = after;
     let Some(dir) = std::path::Path::new(prefix).parent().map(|p| p.to_path_buf()) else {
         return;
     };
@@ -914,6 +923,9 @@ fn remove_stale_png_frames(pattern: &str, keep: u64) {
         let name = entry.file_name().to_string_lossy().into_owned();
         let Some(rest) = name.strip_prefix(&name_prefix) else { continue };
         let Some(digits) = rest.strip_suffix(suffix) else { continue };
+        if digits.len() != 5 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
         let Ok(index) = digits.parse::<u64>() else { continue };
         if index > keep {
             let _ = fs::remove_file(entry.path());
@@ -4066,6 +4078,29 @@ mod tests_proof_copy {
         );
     }
 
+    #[tokio::test]
+    async fn burn_cleans_up_its_temp_dir_when_probing_fails() {
+        // Deterministic failure path: the input does not exist, so the burn
+        // fails right after the temp dir is made. The dir must still go, and
+        // the call must report the error. Needs no ffmpeg fixture.
+        let id = "test_burn_cleanup_probe_fails";
+        let temp_dir = std::env::temp_dir().join(format!("capslap_captions_{id}"));
+        let params: BurnCaptionsParams = serde_json::from_value(serde_json::json!({
+            "inputVideo": "/nonexistent/tekstitys-test-input.mp4",
+            "segments": [{"startMs": 0, "endMs": 400, "text": "Hi"}],
+            "exportFormats": ["16:9"],
+            "karaoke": false,
+            "fontName": null
+        }))
+        .unwrap();
+        let result = burn_captions_with_segments(id, params, &mut |_| {}).await;
+        assert!(result.is_err(), "a missing input must fail the burn");
+        assert!(
+            !temp_dir.exists(),
+            "failed burn left its temp dir behind: {temp_dir:?}"
+        );
+    }
+
     #[test]
     fn proof_copy_is_optional_in_burn_params() {
         let base = serde_json::json!({
@@ -4251,6 +4286,11 @@ mod tests_alpha {
         };
         let result = render_alpha("test_alpha_png", params, &mut |_| {}).await?;
         assert_eq!(result.frames, 10);
+        assert_eq!(
+            result.output,
+            out_dir.join("frame_%05d.png").to_string_lossy(),
+            "a PNG export returns the frame pattern"
+        );
         // First frame has the cue: some opaque pixels and transparent corners.
         // result.output is the frame pattern; the files live in out_dir.
         let first = out_dir.join("frame_00001.png");
@@ -4355,6 +4395,37 @@ mod tests_alpha {
         for i in 6..=8 {
             assert!(!dir.path().join(format!("frame_{i:05}.png")).exists());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn remove_stale_png_frames_leaves_other_numbered_files_alone() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let pattern = dir.path().join("frame_%05d.png").to_string_lossy().to_string();
+        // Not in the generated format: wrong digit count, extra text, other
+        // prefix or suffix. None of these belong to the export.
+        let others = [
+            "frame_2026.png",
+            "frame_123456.png",
+            "frame_00009_final.png",
+            "frame_00009.jpg",
+            "other_00009.png",
+            "frame_000a9.png",
+        ];
+        for name in others {
+            fs::write(dir.path().join(name), b"keep")?;
+        }
+        fs::write(dir.path().join("frame_00009.png"), b"stale")?;
+        remove_stale_png_frames(&pattern, 5);
+        assert!(!dir.path().join("frame_00009.png").exists());
+        for name in others {
+            assert!(dir.path().join(name).is_file(), "{name} must survive");
+        }
+        // A pattern that is not %05d never deletes anything.
+        let odd = dir.path().join("frame_%d.png").to_string_lossy().to_string();
+        fs::write(dir.path().join("frame_00010.png"), b"keep")?;
+        remove_stale_png_frames(&odd, 5);
+        assert!(dir.path().join("frame_00010.png").is_file());
         Ok(())
     }
 }
