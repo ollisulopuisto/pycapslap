@@ -220,6 +220,77 @@ class CapSlapSession:
 
         return res if isinstance(res, list) else [res]
 
+    def render_alpha(
+        self,
+        captions: CaptionsFile,
+        width: int,
+        height: int,
+        fps: float = 25.0,
+        duration_ms: int | None = None,
+        output: str | Path = "alpha.mov",
+        codec: str = "prores",
+        progress_callback: Callable[[str, float], None] | None = None,
+        timeout: float = 1200.0,
+    ) -> dict[str, Any]:
+        """Render captions alone — no input video — as an alpha movie/sequence.
+
+        ProRes 4444 (.mov) or an RGBA PNG sequence, for titles and credits
+        composited downstream (Autoraffkat, Final Cut).
+        """
+        style = captions.style
+        params: dict[str, Any] = {
+            "segments": [s.to_dict() for s in captions.segments],
+            "karaoke": style.karaoke,
+            "multiline": style.multiline,
+            "justifyLines": style.justify_lines,
+            "fontName": style.font_name,
+            "fontSize": style.font_size,
+            "textColor": style.text_color,
+            "highlightWordColor": style.highlight_color,
+            "outlineColor": style.outline_color,
+            "outlineWidth": style.outline_width,
+            "backgroundBox": style.background_box,
+            "positionOverrides": [
+                o.to_dict()
+                for o in (
+                    captions.position_overrides
+                    or [
+                        PositionOverride(
+                            start_ms=0, end_ms=10**9, y_pct=style.anchor_pct
+                        )
+                    ]
+                )
+            ],
+            "glowEffect": style.glow_effect,
+            "width": int(width),
+            "height": int(height),
+            "fps": float(fps),
+            "durationMs": duration_ms,
+            "output": str(Path(output).expanduser().resolve()),
+            "codec": codec,
+        }
+
+        prog_slot = None
+        if progress_callback:
+
+            def _on_progress(_req_id: str, status: str, progress: float) -> None:
+                progress_callback(status, progress)
+
+            prog_slot = _on_progress
+            self.client.progress.connect(prog_slot)
+
+        try:
+            fut = self.client.call("renderAlpha", params)
+            res = fut.result(timeout=timeout)
+        finally:
+            if prog_slot:
+                try:
+                    self.client.progress.disconnect(prog_slot)
+                except Exception:
+                    pass
+
+        return res if isinstance(res, dict) else {}
+
 
 def load_captions(path_or_video: str | Path) -> CaptionsFile:
     """Load CaptionsFile from a .capslap.json file or a video path with sidecar."""

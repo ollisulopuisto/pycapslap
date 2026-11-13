@@ -153,3 +153,195 @@ def test_render_with_cli(tmp_path: Path, capsys):
     assert out_video and Path(out_video).is_file()
     # Clean up generated file
     Path(out_video).unlink(missing_ok=True)
+
+
+# --- render-alpha: captions-only alpha movies/sequences --------------------
+
+import shutil
+import subprocess
+
+import pytest
+
+
+def _ffmpeg_has(*, filt: str | None = None, encoder: str | None = None) -> bool:
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return False
+    try:
+        if filt:
+            out = subprocess.run(
+                [ffmpeg, "-hide_banner", "-filters"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            ).stdout
+            return any(line.split()[1:2] == [filt] for line in out.splitlines())
+        out = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        ).stdout
+        return any(line.split()[1:2] == [encoder] for line in out.splitlines())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+needs_alpha_stack = pytest.mark.skipif(
+    not (_ffmpeg_has(filt="ass") and _ffmpeg_has(encoder="prores_ks")),
+    reason="needs ffmpeg with the ass filter and the prores_ks encoder",
+)
+
+
+def _alpha_sidecar(tmp_path: Path) -> Path:
+    seg = CaptionSegment(start_ms=0, end_ms=900, text="Title card")
+    seg.update_text("Title card")
+    sidecar = tmp_path / "title.capslap.json"
+    save_captions(CaptionsFile(segments=[seg]), sidecar)
+    return sidecar
+
+
+@needs_alpha_stack
+def test_render_alpha_cli_prores(tmp_path: Path, capsys):
+    sidecar = _alpha_sidecar(tmp_path)
+    out = tmp_path / "title.mov"
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "160x90",
+            "--fps",
+            "10",
+            "--duration",
+            "1.0",
+            "--out",
+            str(out),
+            "--json",
+        ]
+    )
+    assert status == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is True
+    assert data["rendered"]["frames"] == 10
+    assert data["rendered"]["codec"] == "prores"
+    assert out.is_file() and out.stat().st_size > 0
+
+
+@needs_alpha_stack
+def test_render_alpha_cli_png_sequence(tmp_path: Path, capsys):
+    sidecar = _alpha_sidecar(tmp_path)
+    out_dir = tmp_path / "cards"
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "160x90",
+            "--fps",
+            "10",
+            "--duration",
+            "1.0",
+            "--codec",
+            "png",
+            "--out",
+            str(out_dir),
+            "--json",
+        ]
+    )
+    assert status == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is True
+    frames = sorted(out_dir.glob("frame_*.png"))
+    assert len(frames) == 10
+
+
+def test_render_alpha_cli_requires_sidecar(tmp_path: Path, capsys):
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(tmp_path / "none.capslap.json"),
+            "--size",
+            "160x90",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json",
+        ]
+    )
+    assert status == 1
+    data = json.loads(capsys.readouterr().out)
+    assert data.get("ok") is False
+
+
+def test_render_alpha_sends_anchor_and_glow(tmp_path: Path):
+    """Tallennettu ankkuri ja hehku välittyvät renderAlpha-pyyntöön:
+    ilman käsin tehtyjä ohituksia ankkuri menee yleisenä ohituksena,
+    ja glowEffect ei putoa pyynnöstä."""
+    seg = CaptionSegment(start_ms=0, end_ms=900, text="Kortti")
+    seg.update_text("Kortti")
+    cf = CaptionsFile(segments=[seg])
+    cf.style.anchor_pct = 62.5
+    cf.style.glow_effect = True
+
+    captured: dict = {}
+
+    class _Fut:
+        def result(self, timeout=None):
+            return {"ok": True}
+
+    class _Client:
+        def call(self, method, params):
+            captured["method"] = method
+            captured["params"] = params
+            return _Fut()
+
+    session = CapSlapSession(_Client())
+    session.render_alpha(
+        cf, 160, 90, fps=10.0, duration_ms=1000, output=tmp_path / "a.mov"
+    )
+    params = captured["params"]
+    assert captured["method"] == "renderAlpha"
+    assert params["glowEffect"] is True
+    (override,) = params["positionOverrides"]
+    assert override["yPct"] == 62.5
+    assert override["startMs"] == 0
+
+
+def test_render_alpha_json_events_reports_early_errors(tmp_path: Path, capsys):
+    """--json-events: myös varhaiset virheet (puuttuva sidecar, rikkinäinen
+    --size) tulevat error-tapahtumina, ei pelkkinä tulosteina."""
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(tmp_path / "none.capslap.json"),
+            "--size",
+            "160x90",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json-events",
+        ]
+    )
+    assert status == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(e.get("event") == "error" for e in events)
+
+    sidecar = _alpha_sidecar(tmp_path)
+    status = run_cli(
+        [
+            "render-alpha",
+            "--captions",
+            str(sidecar),
+            "--size",
+            "leveä",
+            "--out",
+            str(tmp_path / "x.mov"),
+            "--json-events",
+        ]
+    )
+    assert status == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert any(e.get("event") == "error" for e in events)

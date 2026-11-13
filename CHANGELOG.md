@@ -8,6 +8,14 @@ and this project adheres to [Calendar Versioning](https://calver.org/) (`vYY.MM.
 ## [Unreleased]
 
 ### Added
+- Captions-only alpha export: `tekstitys render-alpha` (CLI), the `renderAlpha`
+  core method, and `CapSlapSession.render_alpha` (Python API) render a caption
+  sidecar without any input video into a straight-alpha ProRes 4444 movie or
+  an RGBA PNG sequence, for titles and credits composited downstream
+  (Autoraffkat's Package lane, Final Cut). Same styling as a burn; alpha is
+  recovered per pixel from black/white libass passes.
+
+### Added
 - Finnish proofreading now uses Punakynä locally: red spelling, amber grammar,
   and optional blue style advice in the caption table. Right-click a finding
   to see its explanation and apply a suggestion. Errors are on by default;
